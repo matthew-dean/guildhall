@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { Task } from '@guildhall/core'
-import { validateProductBriefGrounding, validateSpecCompletionBoundary, validateSpecGrounding } from '../spec-quality.js'
+import {
+  ownerSpecRevisionRequirements,
+  validateProductBriefGrounding,
+  validateSpecCompletionBoundary,
+  validateSpecGrounding,
+} from '../spec-quality.js'
 
 const baseTask = {
   title: 'Build broad-genre drafting model proof',
@@ -28,6 +33,38 @@ const sourceCapabilityTask = {
 }
 
 describe('validateSpecGrounding', () => {
+  it('uses only the active spec revision command while retaining earlier revision instructions', () => {
+    const requirements = ownerSpecRevisionRequirements({
+      notes: [{
+        agentId: 'human',
+        role: 'human',
+        content: 'First run `pnpm test:old`.',
+        timestamp: '2026-08-08T10:00:00.000Z',
+        structured: {
+          event: 'document_revision_requested',
+          target: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:old'],
+        },
+      }, {
+        agentId: 'human',
+        role: 'human',
+        content: 'Replace that proof with `pnpm test:new`.',
+        timestamp: '2026-08-08T11:00:00.000Z',
+        structured: {
+          event: 'document_revision_requested',
+          target: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:new'],
+        },
+      }],
+    }, null)
+
+    expect(requirements.instructions).toEqual([
+      'First run `pnpm test:old`.',
+      'Replace that proof with `pnpm test:new`.',
+    ])
+    expect(requirements.requiredAcceptanceCommands).toEqual(['pnpm test:new'])
+  })
+
   it('rejects plausible commands, paths, and model choices that were not visible', () => {
     const result = validateSpecGrounding({
       ...baseTask,
@@ -97,6 +134,59 @@ describe('validateSpecGrounding', () => {
 
     expect(lyrical).toEqual(terse)
     expect(lyrical).toEqual({ ok: true, errors: [] })
+  })
+
+  it('allows a new command only when a typed owner revision explicitly names it', () => {
+    const structuredSpec = {
+      whatThisIs: 'A bounded desktop proof contract.',
+      problemContext: 'The owner requested a reproducible sidecar check.',
+      goals: ['Prove the sidecar contract.'],
+      nonGoals: ['Do not build the full desktop UI.'],
+      proposedDesign: 'Add the focused proof entry requested by the owner.',
+      keyDecisions: ['Keep the command typed.'],
+      acceptanceCriteria: [{
+        scenario: 'Given the desktop sidecar',
+        expectation: 'Then its typed contract passes.',
+        verificationMode: 'automated' as const,
+        command: 'pnpm test:desktop-sidecar',
+      }],
+      verification: ['Run the typed acceptance command.'],
+      completionBoundary: {
+        productOutcome: 'The sidecar contract is proven.',
+        whatGuildhallCanCompleteInCode: 'Add and run the focused proof.',
+        externalDependencies: 'None known.',
+        ownerOnlySetup: 'None known.',
+        verificationEnvironment: 'The registered project.',
+        whatCountsAsDone: 'The focused proof passes.',
+        whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+      },
+    }
+
+    const unsupported = validateSpecGrounding({ ...baseTask, structuredSpec })
+    const ownerDirected = validateSpecGrounding(
+      { ...baseTask, structuredSpec },
+      {
+        ownerRevisionInstructions: ['Add the exact command pnpm test:desktop-sidecar.'],
+        requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+      },
+    )
+    const omittedOwnerCommand = validateSpecGrounding(
+      { ...baseTask, structuredSpec: {
+        ...structuredSpec,
+        acceptanceCriteria: structuredSpec.acceptanceCriteria.map(criterion => ({ ...criterion, command: undefined })),
+      } },
+      {
+        ownerRevisionInstructions: ['Add the exact command pnpm test:desktop-sidecar.'],
+        requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+      },
+    )
+
+    expect(unsupported.ok).toBe(false)
+    expect(unsupported.errors.join(' ')).toContain('not present in the visible task/source context')
+    expect(ownerDirected).toEqual({ ok: true, errors: [] })
+    expect(omittedOwnerCommand.errors).toContain(
+      'Structured spec omits owner-required acceptance commands: pnpm test:desktop-sidecar.',
+    )
   })
 })
 

@@ -44,6 +44,7 @@
     projectStartBlockerMessage?: string | null
     contextDebug?: ContextDebugRecord[]
     workProgress?: TaskWorkProgressDisplay | null
+    canApproveSpec?: boolean
     onApproveBrief: () => void
     onApproveSpec: () => void
     onRunTask: () => void
@@ -65,6 +66,7 @@
     projectStartBlockerMessage = null,
     contextDebug = [],
     workProgress = null,
+    canApproveSpec = true,
     onApproveBrief,
     onApproveSpec,
     onRunTask,
@@ -142,7 +144,7 @@
       turn.liveAgent?.lastEventKind === 'provider_wait' &&
       (turn.liveAgent.silentMs ?? 0) >= 60_000
     ) {
-      return 'Local model is still loading or generating.'
+      return 'The model is still loading or generating.'
     }
     if (turn.liveAgent?.name === 'spec-agent') {
       if (turn.importedDraft) return 'The task brief for this imported note is being drafted now.'
@@ -470,7 +472,7 @@
             </Row>
           </Stack>
         </Card>
-      {:else if turn.kind === 'spec_review'}
+      {:else if turn.kind === 'spec_review' && canApproveSpec}
         <Card title="Needs your approval" tone="accent">
           <Stack gap="3">
             <StateSummary
@@ -572,7 +574,7 @@
                   disabled={busy}
                   onclick={() => onOpenEscalationAction(turn.escalationId, 'resolve')}
                 >
-                  I handled this...
+                  Mark blocker resolved...
                 </Button>
               {:else}
                 <Button

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
@@ -167,6 +167,33 @@ export function getProjectSystemStatePath(projectRoot: string, relativePath: str
   return join(getProjectSystemStateDir(projectRoot), relativePath)
 }
 
+/**
+ * Resolve the workspace that owns a system-state handle. A task may execute
+ * inside a nested repository, but its TASKS handle belongs to the registered
+ * workspace and all task evidence must stay with that workspace.
+ */
+export function inferProjectRootFromSystemStatePath(
+  systemStatePath: string,
+  fallbackProjectRoot?: string,
+): string {
+  const stateDir = dirname(resolve(systemStatePath))
+  if (basename(stateDir) === 'project-state') {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dirname(stateDir), 'allocation-manifest.json'), 'utf8')) as {
+        workspaceRoot?: unknown
+      }
+      if (typeof manifest.workspaceRoot === 'string' && isAbsolute(manifest.workspaceRoot)) {
+        return resolve(manifest.workspaceRoot)
+      }
+    } catch {
+      // Older state handles predate allocation manifests; use their supplied
+      // compatibility root below rather than guessing from the cache path.
+    }
+  }
+  if (fallbackProjectRoot && isAbsolute(fallbackProjectRoot)) return resolve(fallbackProjectRoot)
+  return inferProjectRootFromMemoryDir(stateDir)
+}
+
 export function inferProjectRootFromMemoryDir(memoryDir: string): string {
   const resolved = resolve(memoryDir)
   return basename(resolved) === 'memory' || basename(resolved) === '.guildhall' ? dirname(resolved) : resolved
@@ -176,6 +203,18 @@ export function getProjectSystemStatePathFromMemoryDir(memoryDir: string, relati
   const resolved = resolve(memoryDir)
   if (basename(resolved) === 'project-state') return join(resolved, relativePath)
   return getProjectSystemStatePath(inferProjectRootFromMemoryDir(resolved), relativePath)
+}
+
+/**
+ * Resolve a project-scoped state file from either a project-state handle or a
+ * standalone directory used by compatibility callers and tests.
+ */
+export function projectScopedStatePath(memoryDir: string, relativePath: string): string {
+  const resolved = resolve(memoryDir)
+  const base = basename(resolved)
+  return base === '.guildhall' || base === 'memory' || base === 'project-state'
+    ? getProjectSystemStatePathFromMemoryDir(resolved, relativePath)
+    : join(resolved, relativePath)
 }
 
 export function getProjectTranscriptPath(

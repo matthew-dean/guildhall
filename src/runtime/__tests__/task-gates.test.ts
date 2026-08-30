@@ -6,6 +6,7 @@ import {
   resolveEffectiveTaskBootstrapBlock,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
+  findAutomatedAcceptanceCriteriaMissingCommands,
   findInvalidAutomatedAcceptanceCommands,
   resolveEffectiveTaskProjectPath,
   normalizeAutomatedAcceptanceCriterionCommands,
@@ -162,6 +163,20 @@ describe('resolveEffectiveTaskProjectPath', () => {
         },
       ),
     ).toBe(loomaPath)
+  })
+})
+
+describe('findAutomatedAcceptanceCriteriaMissingCommands', () => {
+  it('identifies only automated criteria without an executable command', () => {
+    expect(findAutomatedAcceptanceCriteriaMissingCommands({
+      acceptanceCriteria: [
+        { id: 'ac-build', description: 'Build passes.', verifiedBy: 'automated', met: false },
+        { id: 'ac-test', description: 'Tests pass.', verifiedBy: 'automated', command: 'pnpm test', met: false },
+        { id: 'ac-review', description: 'Review approves.', verifiedBy: 'review', met: false },
+      ],
+    } as any)).toEqual([
+      { criterionId: 'ac-build', description: 'Build passes.' },
+    ])
   })
 })
 
@@ -687,6 +702,27 @@ describe('resolveEffectiveTaskSuccessGates', () => {
       command: 'pnpm run proof-missing',
       reason: 'The PNPM script `proof-missing` is not present in the registered project package contract.',
     }])
+  })
+
+  it('allows an implementation task to create its approved package script before review', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ scripts: { test: 'vitest' } }),
+      'utf8',
+    )
+
+    expect(findInvalidAutomatedAcceptanceCommands({
+      projectPath: tmpDir,
+      allowMissingPackageScripts: true,
+      task: {
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'the new focused proof command runs',
+          verifiedBy: 'automated',
+          command: 'pnpm test:desktop-sidecar',
+        }],
+      } as any,
+    })).toEqual([])
   })
 
   it('rewrites pnpm test -- <file> vitest commands into direct single-file runs', async () => {

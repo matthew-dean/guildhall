@@ -4,6 +4,7 @@ import {
   applyRuntimeExecutionToProjectDecision,
   buildProjectDecisionProjection,
   projectDecisionInFlight,
+  projectDecisionStartReadiness,
   reconcileRegisteredProjectStateObservation,
   resolveRegisteredProjectStateClaimSet,
   reconcileProjectStateObservation,
@@ -12,6 +13,97 @@ import {
 } from '../project-decision-projection.js'
 
 describe('project decision projection', () => {
+  it('normalizes focused brief cleanup as owner input before action routing', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-08T01:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: 'Review the current brief.',
+        focusTaskId: 'task-086',
+        focusTaskTitle: 'Prove packaged Tauri sidecar',
+        focusKind: 'brief_cleanup',
+      },
+      release: { scopeMode: 'unreleased', state: 'active', release: null, blockers: [] },
+    })
+
+    expect(projectDecisionStartReadiness(decision)).toMatchObject({
+      code: 'owner_input_required',
+      focusTaskId: 'task-086',
+      focusKind: 'brief_cleanup',
+    })
+  })
+
+  it('keeps live work ahead of a planning-only drafted-brief state', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-30T08:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: 'Review the drafted brief before work continues.',
+        focusTaskId: 'task-004',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'brief_cleanup',
+      },
+      release: { scopeMode: 'unreleased', state: 'active', release: null, blockers: [] },
+    })
+
+    const refreshed = applyRuntimeExecutionToProjectDecision(decision, {
+      status: 'running',
+      activeTaskId: 'task-004',
+      activeTaskTitle: 'Open supported documents as TypeScript',
+    })
+
+    expect(refreshed.execution).toMatchObject({
+      state: 'running',
+      code: 'running',
+      focusTaskId: 'task-004',
+    })
+    expect(projectDecisionStartReadiness(refreshed)).toMatchObject({
+      canStart: true,
+      code: 'running',
+      focusTaskId: 'task-004',
+    })
+    expect(refreshed.primaryAction).toEqual({
+      kind: 'open_work',
+      targetId: 'task-004',
+      reasonCode: 'running',
+    })
+  })
+
+  it('keeps a concrete owner handoff ahead of concurrent runner liveness', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-30T08:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Answer the selected question before work continues.',
+        focusTaskId: 'task-004',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'brief_cleanup',
+      },
+      ownerInput: { openCount: 1, next: { id: 'question-task-004' } },
+      release: { scopeMode: 'unreleased', state: 'active', release: null, blockers: [] },
+    })
+
+    const refreshed = applyRuntimeExecutionToProjectDecision(decision, {
+      status: 'running',
+      activeTaskId: 'task-004',
+      activeTaskTitle: 'Open supported documents as TypeScript',
+    })
+
+    expect(refreshed.execution).toMatchObject({
+      state: 'blocked',
+      code: 'owner_input_required',
+      focusTaskId: 'task-004',
+    })
+    expect(refreshed.primaryAction).toEqual({
+      kind: 'answer_owner_input',
+      targetId: 'question-task-004',
+      reasonCode: 'owner_input_required',
+    })
+  })
+
   it('does not invent a release-review action after the selected release shipped', () => {
     const decision = buildProjectDecisionProjection({
       generatedAt: '2026-08-08T01:00:00.000Z',
@@ -36,6 +128,28 @@ describe('project decision projection', () => {
     expect(decision.primaryAction).toEqual({
       kind: 'none',
       reasonCode: 'release_shipped',
+    })
+  })
+
+  it('does not invent a release-review action for completed work without a selected release', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-30T17:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Current work has no runnable work remaining.',
+      },
+      release: {
+        scopeMode: 'unreleased',
+        release: null,
+        state: 'ready',
+        blockers: [],
+      },
+    })
+
+    expect(decision.primaryAction).toEqual({
+      kind: 'none',
+      reasonCode: 'all_terminal',
     })
   })
 
@@ -83,6 +197,37 @@ describe('project decision projection', () => {
       taskId: 'task-stale',
       code: 'ready_work',
     }).primaryAction).toEqual({ kind: 'none', reasonCode: 'release_shipped' })
+  })
+
+  it('aligns execution focus with the shared start action', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-12T20:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        focusTaskId: 'downstream-task',
+        focusTaskTitle: 'Downstream task',
+        focusKind: 'blocked_work',
+        message: 'Downstream work is waiting.',
+      },
+      release: { scopeMode: 'named_release', release: { id: 'release-1' }, state: 'active', blockers: [] },
+    })
+
+    expect(applyProjectActionModelPrimaryAction(decision, {
+      source: 'start_readiness',
+      taskId: 'review-task',
+      code: 'ready_work',
+      label: 'Continue review',
+      taskLabel: 'Review the current contract before dependent work.',
+      detail: 'Continue the review task before its dependent work.',
+    }).execution).toMatchObject({
+      state: 'runnable',
+      code: 'ready_work',
+      focusTaskId: 'review-task',
+      focusTaskTitle: 'Review the current contract before dependent work.',
+      focus: { taskId: 'review-task', displayTitle: 'Review the current contract before dependent work.' },
+      message: 'Continue the review task before its dependent work.',
+    })
   })
 
   it('attaches a focus title only from the canonical task in the captured snapshot', () => {
@@ -169,6 +314,75 @@ describe('project decision projection', () => {
         focusKind: 'active_work',
       },
       primaryAction: { kind: 'open_work', targetId: 'task-live', reasonCode: 'running' },
+    })
+  })
+
+  it('keeps the planned focus while a live supervisor has not written its task identity yet', () => {
+    const planned = buildProjectDecisionProjection({
+      projectRevision: 42,
+      generatedAt: '2026-08-30T20:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-004',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'review_work',
+        message: 'Saved changes are ready for automated review.',
+      },
+      release: { scopeMode: 'unreleased', release: null, state: 'active', blockers: [] },
+    })
+
+    const running = applyRuntimeExecutionToProjectDecision(planned, { status: 'running' })
+
+    expect(running.execution).toMatchObject({
+      state: 'running',
+      code: 'running',
+      focusTaskId: 'task-004',
+      focusTaskTitle: 'Open supported documents as TypeScript',
+      focusKind: 'active_work',
+    })
+    expect(running.primaryAction).toEqual({
+      kind: 'open_work',
+      targetId: 'task-004',
+      reasonCode: 'running',
+    })
+    expect(projectDecisionStartReadiness(running)).toMatchObject({
+      code: 'running',
+      focusTaskId: 'task-004',
+      focusTaskTitle: 'Open supported documents as TypeScript',
+    })
+  })
+
+  it('keeps an executable automated-review retry runnable through the shared decision packet', () => {
+    const decision = buildProjectDecisionProjection({
+      projectRevision: 42,
+      generatedAt: '2026-08-30T20:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'review_retry',
+        focusTaskId: 'task-004',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'review_retry',
+        message: 'Guildhall could not complete the automated review.',
+      },
+      release: { scopeMode: 'unreleased', release: null, state: 'active', blockers: [] },
+    })
+
+    expect(decision.execution).toMatchObject({
+      state: 'runnable',
+      code: 'review_retry',
+      focusTaskId: 'task-004',
+      focusKind: 'review_retry',
+    })
+    expect(projectDecisionStartReadiness(decision)).toMatchObject({
+      canStart: true,
+      code: 'review_retry',
+      focusTaskId: 'task-004',
+    })
+    expect(decision.primaryAction).toEqual({
+      kind: 'open_work',
+      targetId: 'task-004',
+      reasonCode: 'review_retry',
     })
   })
 

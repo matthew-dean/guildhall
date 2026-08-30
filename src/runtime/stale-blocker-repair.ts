@@ -12,8 +12,15 @@ import {
 import type { Task, TaskQueue } from '@guildhall/core'
 import { AcceptanceCriteria, TaskQueue as TaskQueueSchema } from '@guildhall/core'
 import { buildEffectiveTask } from './effective-task.js'
-import { readProjectTaskQueueForMutationSync, writeProjectTaskQueue } from './project-state-boundary.js'
-import { reconcileAcceptanceCriteriaFromCompletionProof } from './proof-health.js'
+import {
+  preserveRuntimeOverlayOnTaskQueueParse,
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueForRichMutation,
+  writeProjectTaskQueue,
+  writeProjectTaskQueueAtCurrentStateBoundary,
+} from './project-state-boundary.js'
+import { reconcileAcceptanceCriteriaFromCompletionProof, reviewAcceptanceCriteriaMissingApprovalIds } from './proof-health.js'
+import { transitionTaskStatus } from './task-transition.js'
 
 export interface StaleBlockerRepair {
   taskId: string
@@ -112,6 +119,17 @@ function isDirtyWorkerTimeoutBlocker(task: Task): boolean {
   )
 }
 
+function hasReopenedReviewAfterSkippedLanding(task: Task): boolean {
+  return task.status === 'blocked' &&
+    task.recoveryCode === undefined &&
+    task.mergeRecord?.result === 'skipped' &&
+    unresolvedEscalationCount(task) === 0 &&
+    (
+      reviewAcceptanceCriteriaMissingApprovalIds(task).length > 0 ||
+      task.doneSummaryBundle?.status === 'reopened'
+    )
+}
+
 export function repairStaleBlockersInQueue(
   queue: TaskQueue,
   now = new Date().toISOString(),
@@ -120,6 +138,41 @@ export function repairStaleBlockersInQueue(
   const repairs: StaleBlockerRepair[] = []
 
   for (const task of queue.tasks) {
+    if (hasReopenedReviewAfterSkippedLanding(task)) {
+      const missingReviewCriteria = reviewAcceptanceCriteriaMissingApprovalIds(task)
+      const previousStatus = task.status
+      transitionTaskStatus({
+        task,
+        event: 'recover_to_review',
+        actor: 'landing-review-recovery',
+        evidenceRefs: missingReviewCriteria.length > 0
+          ? missingReviewCriteria.map(criterionId => `criterion:${criterionId}`)
+          : ['completion:reopened'],
+        now,
+      })
+      task.assignedTo = 'reviewer-agent'
+      task.blockReason = undefined
+      task.notes = Array.isArray(task.notes) ? task.notes : []
+      task.notes.push({
+        agentId: 'system',
+        role: 'state-repair',
+        content:
+          missingReviewCriteria.length > 0
+            ? `Guildhall found saved implementation after a skipped landing attempt, but review still needs to approve ${missingReviewCriteria.join(', ')}. ` +
+              'Returned the task to review instead of leaving a recovery blocker with no action.'
+            : 'Guildhall found saved implementation after a skipped landing attempt, but its current completion was reopened. ' +
+              'Returned the task to review instead of leaving a recovery blocker with no action.',
+        timestamp: now,
+      })
+      task.updatedAt = now
+      repairs.push({
+        taskId: task.id,
+        previousStatus,
+        nextStatus: 'review',
+        reason: 'missing_review_after_skipped_landing',
+      })
+      continue
+    }
     const researchSpikeApproval = isResearchSpikeStuckInSpecReview(task)
     if (!researchSpikeApproval && !isHighConfidenceInternalBlocker(task)) continue
     const hasTypedRecovery = task.recoveryCode !== undefined ||
@@ -250,7 +303,17 @@ export async function repairCompletionProofCriteriaForProjectWithEvidence(projec
 }
 
 export async function repairStaleBlockersForProjectWithRuntime(projectPath: string): Promise<StaleBlockerRepairResult> {
-  const result = repairStaleBlockersForProject(projectPath)
+  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
+  const rawQueue = await readProjectTaskQueueForRichMutation(projectPath)
+  // Top-level task arrays predate the current queue envelope and are repaired
+  // only by the explicit project migration. Refresh must not promote or
+  // rewrite that legacy source as a side effect.
+  if (Array.isArray(rawQueue)) return { changed: false, repairs: [] }
+  const queue = preserveRuntimeOverlayOnTaskQueueParse(rawQueue, TaskQueueSchema.parse(rawQueue))
+  const result = repairStaleBlockersInQueue(queue)
+  if (result.changed) {
+    await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, { projectRoot: projectPath })
+  }
   const now = new Date().toISOString()
   for (const repair of result.repairs) {
     const assignedTo = expectedAssigneeForStatus(repair.nextStatus as Task['status'])

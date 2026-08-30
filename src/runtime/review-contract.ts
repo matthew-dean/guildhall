@@ -59,7 +59,11 @@ export function validateStructuredReviewResultTargets(
     !result.proofEvidenceIds.every(id => satisfiedEvidence.has(id))) return null
 
   const hasUnsatisfiedFinding = result.findings.some(finding => finding.disposition === 'unsatisfied')
+  const hasIncompleteWorkerInstruction = result.findings.some(
+    finding => finding.disposition === 'unsatisfied' && !finding.workerInstruction,
+  )
   if ((result.verdict === 'revise' && !hasUnsatisfiedFinding) ||
+    (result.verdict === 'revise' && hasIncompleteWorkerInstruction) ||
     (result.verdict === 'approve' && hasUnsatisfiedFinding)) return null
   return result
 }

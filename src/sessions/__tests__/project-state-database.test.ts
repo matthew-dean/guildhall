@@ -491,6 +491,53 @@ describe('project-state database', () => {
     })
   })
 
+  it('adds dependency read-model columns when opening a schema 36 database', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-legacy-scope', title: 'Legacy scope', status: 'ready' }] },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+      scopeRows: [{
+        taskId: 'task-legacy-scope',
+        scope: 'included',
+        eligibilityReason: 'selected',
+        hierarchyRole: 'leaf',
+        handoffState: 'ready',
+        blocksStart: false,
+        blocksRelease: false,
+        humanBlocking: false,
+        dependencyBlocked: true,
+        dependencyTaskIds: ['task-prerequisite'],
+        sourceRefs: [],
+      }],
+    })
+
+    const databasePath = projectStateDatabasePath(projectRoot)
+    const legacyDatabase = new DatabaseSync(databasePath)
+    legacyDatabase.exec(`
+      ALTER TABLE work_scope DROP COLUMN dependency_task_ids_json;
+      ALTER TABLE work_scope DROP COLUMN dependency_blocked;
+      UPDATE project_meta SET schema_version = 36;
+    `)
+    legacyDatabase.close()
+
+    expect(readProjectStateDatabaseTaskPoint(tasksPath, 'task-legacy-scope')?.scopeRow).toMatchObject({
+      dependencyBlocked: false,
+    })
+    expect(readProjectStateDatabaseProjectionState(tasksPath)?.scopeRows).toEqual([
+      expect.objectContaining({ taskId: 'task-legacy-scope', dependencyBlocked: false }),
+    ])
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: { generatedAt: '2026-07-14T00:01:00.000Z', freshness: 'current' },
+    })
+    expect(readProjectStateDatabaseMetadata(projectRoot)).toMatchObject({ schemaVersion: 37 })
+    const upgradedDatabase = new DatabaseSync(databasePath, { readOnly: true })
+    const columns = upgradedDatabase.prepare('PRAGMA table_info(work_scope)').all() as Array<{ name: string }>
+    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'dependency_blocked',
+      'dependency_task_ids_json',
+    ]))
+    upgradedDatabase.close()
+  })
+
   it('stores normalized work rows and one compact summary atomically', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: {
@@ -1039,6 +1086,52 @@ describe('project-state database', () => {
     databaseAfter.close()
   })
 
+  it('persists dependency-only scope changes during a release selection mutation', () => {
+    const releases = [
+      { id: 'release-1', label: 'First', kind: 'release', state: 'active', nodeIds: ['task-1', 'task-2'], deferredNodeIds: [] },
+    ]
+    const baseScopeRows = [
+      { taskId: 'task-1', scope: 'included', eligibilityReason: 'selected release', hierarchyRole: 'leaf', handoffState: 'ready', blocksStart: false, blocksRelease: false, humanBlocking: false, sourceRefs: [] as string[] },
+      { taskId: 'task-2', scope: 'included', eligibilityReason: 'selected release', hierarchyRole: 'leaf', handoffState: 'ready', blocksStart: false, blocksRelease: false, humanBlocking: false, sourceRefs: [] as string[] },
+    ] as const
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        lastUpdated: '2026-07-14T00:00:00.000Z',
+        selectedReleaseId: 'release-1',
+        releases,
+        tasks: [
+          { id: 'task-1', title: 'Blocked task', status: 'ready', releaseIds: ['release-1'] },
+          { id: 'task-2', title: 'Dependency', status: 'ready', releaseIds: ['release-1'] },
+        ],
+      },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current', counts: { total: 2 } },
+      scopeRows: [...baseScopeRows],
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const queueRevision = readProjectStateDatabaseQueueRevision(tasksPath)!
+
+    writeProjectStateDatabaseReleaseSelectionMutation(tasksPath, {
+      releases,
+      selectedReleaseId: 'release-1',
+      expectedQueueRevision: queueRevision,
+      expectedProjectRevision: readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!,
+      lastUpdated: '2026-07-15T00:00:00.000Z',
+      summary: { generatedAt: '2026-07-15T00:00:00.000Z', freshness: 'current', counts: { total: 2 } },
+      scopeRows: [{
+        ...baseScopeRows[0],
+        countInProjectTotals: false,
+        dependencyBlocked: true,
+        dependencyTaskIds: ['task-2'],
+      }, baseScopeRows[1]],
+    })
+
+    expect(readProjectStateDatabaseInventory(tasksPath)?.tasks.find(task => task.id === 'task-1')?.scopeRow).toMatchObject({
+      countInProjectTotals: false,
+      dependencyBlocked: true,
+      dependencyTaskIds: ['task-2'],
+    })
+  })
+
   it('commits a structural task delta without rewriting untouched detail payloads', () => {
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: {
@@ -1084,6 +1177,56 @@ describe('project-state database', () => {
     expect(Buffer.from(untouchedAfter.payload_gzip)).toEqual(Buffer.from(untouchedBefore.payload_gzip))
     expect(databaseAfter.prepare('SELECT COUNT(*) AS count FROM work_item_detail WHERE revision = ?').get(committed)).toMatchObject({ count: 2 })
     databaseAfter.close()
+  })
+
+  it('upserts only supplied structural overlays and projects post-mutation task summaries', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        lastUpdated: '2026-07-14T00:00:00.000Z',
+        tasks: [
+          { id: 'task-1', title: 'First', status: 'ready' },
+          { id: 'task-2', title: 'Second', status: 'ready' },
+        ],
+      },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current', counts: { total: 2 } },
+      taskRuntimes: [
+        { taskId: 'task-1', updatedAt: '2026-07-14T00:00:00.000Z', payload: { taskId: 'task-1', assignedTo: 'old-1' } },
+        { taskId: 'task-2', updatedAt: '2026-07-14T00:00:00.000Z', payload: { taskId: 'task-2', assignedTo: 'keep-2' } },
+      ],
+      taskWorkspaces: [
+        { taskId: 'task-2', updatedAt: '2026-07-14T00:00:00.000Z', payload: { taskId: 'task-2', worktreePath: '/keep/task-2' } },
+      ],
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    writeProjectStateDatabaseTaskBatchMutation(tasksPath, {
+      tasks: [],
+      expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath)!,
+      expectedProjectRevision: readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!,
+      lastUpdated: '2026-07-15T00:00:00.000Z',
+      summary: { generatedAt: '2026-07-15T00:00:00.000Z', freshness: 'current', counts: { total: 2 } },
+      taskRuntimes: [{
+        taskId: 'task-1',
+        updatedAt: '2026-07-15T00:00:00.000Z',
+        payload: { taskId: 'task-1', assignedTo: 'new-1' },
+      }],
+      taskSummaries: [{ taskId: 'task-1', summary: { currentProof: { state: 'proven' } } }],
+    })
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(database.prepare('SELECT payload_json FROM task_execution WHERE task_id = ?').get('task-1')).toMatchObject({
+      payload_json: expect.stringContaining('new-1'),
+    })
+    expect(database.prepare('SELECT payload_json FROM task_execution WHERE task_id = ?').get('task-2')).toMatchObject({
+      payload_json: expect.stringContaining('keep-2'),
+    })
+    expect(database.prepare('SELECT payload_json FROM task_workspace WHERE task_id = ?').get('task-2')).toMatchObject({
+      payload_json: expect.stringContaining('/keep/task-2'),
+    })
+    expect(JSON.parse((database.prepare('SELECT summary_json FROM work_items WHERE id = ?').get('task-1') as { summary_json: string }).summary_json)).toMatchObject({
+      currentProof: { state: 'proven' },
+    })
+    database.close()
   })
 
   it('commits relationship and planning-envelope changes with the same structural delta', () => {
@@ -1198,6 +1341,13 @@ describe('project-state database', () => {
       expectedProjectRevision: projectRevision,
       task: { id: 'task-current', title: 'Current', status: 'done', releaseIds: ['release-current'] },
       summary: { generatedAt: '2026-07-15T00:00:00.000Z', freshness: 'current' },
+    })
+
+    writeProjectStateDatabaseTaskMutation(tasksPath, {
+      expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath)!,
+      expectedProjectRevision: readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!,
+      task: { id: 'task-later', title: 'Later', status: 'blocked', releaseIds: ['release-current'] },
+      summary: { generatedAt: '2026-07-15T00:00:30.000Z', freshness: 'current' },
     })
 
     const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
@@ -1638,6 +1788,8 @@ describe('project-state database', () => {
         blocksStart: false,
         blocksRelease: true,
         humanBlocking: false,
+        dependencyBlocked: true,
+        dependencyTaskIds: ['task-parent'],
         sourceRefs: ['docs/mvp.md'],
       }],
     })
@@ -1650,6 +1802,10 @@ describe('project-state database', () => {
     expect(readProjectStateDatabaseTaskPoint(tasksPath, 'task-child')?.definition).toMatchObject({
       id: 'task-child',
       spec: child.spec,
+    })
+    expect(readProjectStateDatabaseTaskPoint(tasksPath, 'task-child')?.scopeRow).toMatchObject({
+      dependencyBlocked: true,
+      dependencyTaskIds: ['task-parent'],
     })
     expect(readProjectStateDatabaseTask(tasksPath, 'task-child')?.definition).toMatchObject({ spec: child.spec })
     expect(readProjectStateDatabaseQueue(tasksPath)?.tasks).toEqual(expect.arrayContaining([
@@ -2590,6 +2746,47 @@ describe('project-state database', () => {
       'reviewer',
       'worker',
     ])
+  })
+
+  it('keeps a typed owner contract when a later steering note comes from the same source', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'One', status: 'exploring' }] },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+    upsertProjectStateDatabaseTaskProof(projectRoot, {
+      taskId: 'task-1',
+      kind: 'note',
+      recordedAt: '2026-07-14T00:01:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Revise the proof contract.',
+        structured: {
+          event: 'document_revision_requested',
+          source: 'human',
+          revisionTarget: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+        },
+      },
+    })
+    upsertProjectStateDatabaseTaskProof(projectRoot, {
+      taskId: 'task-1',
+      kind: 'note',
+      recordedAt: '2026-07-14T00:02:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Use the typed schema and save now.',
+      },
+    })
+
+    const current = readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-1')
+    expect(current?.byKind.note).toHaveLength(2)
+    expect(current?.byKind.note?.[0]?.payload.content).toBe('Use the typed schema and save now.')
+    expect(current?.byKind.note?.[1]?.payload.structured).toMatchObject({
+      event: 'document_revision_requested',
+      requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+    })
   })
 
   it('collapses oversized current evidence without touching the historical source', () => {

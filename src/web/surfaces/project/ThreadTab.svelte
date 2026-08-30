@@ -47,7 +47,15 @@
   import { escalationPrimaryAction, escalationUserGuidance } from '../../lib/escalation-labels.js'
   import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
   import { nav, path } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
+  import {
+    currentProjectHref,
+    currentProjectId,
+    currentTaskHref,
+    isRequiredProjectMigrationError,
+    projectActionHref,
+    projectFetch,
+    projectTaskRepairHref,
+  } from '../../lib/project-routes.js'
   import {
     hasIncompleteTaskChecklist,
     isImportedDraftShaping,
@@ -58,11 +66,13 @@
   import { taskStagePresentation } from '../../lib/task-presentation.js'
   import { project } from '../../lib/project.svelte.js'
   import { humanizeRuntimeText } from '../../lib/identifier-labels.js'
-  import type { Escalation, GitStorySnapshot, ProjectDetail, ProjectRuntimeSummary, TaskRoutingContext } from '../../lib/types.js'
+  import type { Escalation, GitStorySnapshot, ProjectActionOperation, ProjectDetail, ProjectRuntimeSummary, TaskRoutingContext } from '../../lib/types.js'
   import { toast } from '../../lib/toast.svelte.js'
 
   interface Props {
     projectId?: string | null
+    onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
+    busy?: boolean
   }
 
   const props = $props<Props>()
@@ -230,6 +240,8 @@
     kind: 'inflight'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; taskStatus?: string; summary: string
+    briefApproved?: boolean | undefined
+    specDraftPresent?: boolean | undefined
     constructionMode?: ConstructionMode | undefined
     gitStory?: GitStorySnapshot | undefined
     requestKind?: 'task_spec' | 'project_question' | 'settings_proposal' | 'persona_practice_proposal' | 'repair_triage' | 'clarification' | undefined
@@ -238,6 +250,9 @@
     taskDescription?: string | undefined
     sourceNote?: { description?: string | undefined; references: string[] } | undefined
     importedDraft?: boolean | undefined
+    dependencyBlockers?: Array<{ taskId: string; title: string }> | undefined
+    dependencyState?: 'waiting' | 'clear' | undefined
+    canStart?: boolean | undefined
     liveAgent?: LiveAgent | undefined
     activity?: LiveActivity[] | undefined
     checklist?: {
@@ -281,6 +296,7 @@
       evidence: string[]
     }
     answerEndpoint: string
+    directTaskEndpoint: string
   }
   interface BoundedChatTurn {
     kind: 'bounded_chat'
@@ -334,6 +350,8 @@
   let threadLoadRequestId = 0
   let orientationSpine = $state<ProjectDetail['orientationSpine'] | null>(null)
   let activeTurnId = $state<string | null>(null)
+  let threadActionModel = $state<ProjectDetail['actionModel'] | null>(null)
+  let projectActivityVisible = $state(false)
   let caughtUp = $state(false)
   let loaded = $state(false)
   let loadError = $state<string | null>(null)
@@ -674,12 +692,39 @@
     try {
       const r = await scopedProjectFetch('/api/project/thread', { cache: 'no-store' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = (await r.json()) as { turns?: Turn[]; activeTurnId?: string | null; caughtUp?: boolean; orientationSpine?: ProjectDetail['orientationSpine'] | null }
+      const j = (await r.json()) as {
+        turns?: Turn[]
+        activeTurnId?: string | null
+        caughtUp?: boolean
+        orientationSpine?: ProjectDetail['orientationSpine'] | null
+        sourceRevision?: number
+        currentThreadFreshness?: string
+        startReadiness?: ProjectDetail['startReadiness']
+        actionModel?: ProjectDetail['actionModel']
+        releaseReadiness?: ProjectDetail['releaseReadiness']
+      }
       if (requestId !== threadLoadRequestId) return
       turns = preserveTaskExtras(j.turns ?? [], turns)
       orientationSpine = j.orientationSpine ?? null
       activeTurnId = j.activeTurnId ?? null
+      threadActionModel = j.actionModel ?? null
       caughtUp = !!j.caughtUp
+      const currentDetail = project.detail
+      const currentRevision = currentDetail?.projectRevision ?? 0
+      const threadRevision = j.sourceRevision ?? 0
+      if (
+        currentDetail &&
+        (!explicitProjectId || currentDetail.id === explicitProjectId) &&
+        j.currentThreadFreshness === 'current' &&
+        threadRevision >= currentRevision
+      ) {
+        project.detail = {
+          ...currentDetail,
+          ...(j.startReadiness !== undefined ? { startReadiness: j.startReadiness } : {}),
+          ...(j.actionModel !== undefined ? { actionModel: j.actionModel } : {}),
+          ...(j.releaseReadiness !== undefined ? { releaseReadiness: j.releaseReadiness } : {}),
+        }
+      }
       const nextSentReplies = { ...sentReplies }
       for (const turn of turns) {
         if (nextSentReplies[turn.id] && turnLiveAgent(turn)) {
@@ -1113,6 +1158,11 @@
     return t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t) && !t.importedDraft && t.taskStatus !== 'in_progress' && canStartTaskTurn(t)
   }
 
+  function isDependencyWaiting(turn: InFlightTurn): boolean {
+    return turn.dependencyState === 'waiting' ||
+      (turn.dependencyState == null && (turn.dependencyBlockers?.length ?? 0) > 0)
+  }
+
   function turnStatusChipLabel(t: Turn): string {
     if (t.status === 'done') return 'done'
     if (needsRecovery(t)) return 'Needs recovery'
@@ -1186,8 +1236,18 @@
   function ownershipLabel(t: Turn): string | null {
     if (turnLiveAgent(t)) return 'Working'
     if (needsRecovery(t)) return 'Needs recovery'
-    if (guildhallShaping(t)) return runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
-    if (t.kind === 'setup_step') return t.status === 'done' || t.skippable ? null : 'Needs you'
+    if (t.kind === 'inflight' && isDependencyWaiting(t)) return 'Waiting'
+    if (guildhallShaping(t)) {
+      return runStatus === 'running' || runStatus === 'stopping'
+        ? 'Queued'
+        : availabilityStatus === 'paused'
+          ? 'Paused'
+          : 'Ready'
+    }
+    if (t.kind === 'setup_step') {
+      if (t.status === 'done') return null
+      return t.status === 'active' || !t.skippable ? 'Needs you' : null
+    }
     if (t.kind === 'pressure_test_question' || t.kind === 'bounded_chat') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'escalation') {
       if (t.status === 'done') return null
@@ -1207,6 +1267,7 @@
     }
     if (t.kind === 'review_feedback') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'inflight') {
+      if (t.taskStatus === 'spec_review') return 'Needs you'
       if (t.importedDraft && t.taskStatus === 'import_draft') {
         return 'Needs you'
       }
@@ -1228,7 +1289,13 @@
       ) {
         return 'Queued'
       }
-      if (canStartTaskTurn(t)) return runStatus === 'running' || runStatus === 'stopping' ? 'Queued' : 'Paused'
+      if (canStartTaskTurn(t)) {
+        return runStatus === 'running' || runStatus === 'stopping'
+          ? 'Queued'
+          : availabilityStatus === 'paused'
+            ? 'Paused'
+            : 'Ready'
+      }
     }
     return null
   }
@@ -1238,6 +1305,7 @@
     const label = ownershipLabel(t)
     if (label === 'Needs you' || label === 'Needs recovery') return 'warn'
     if (label === 'Needs brief') return 'warn'
+    if (label === 'Ready') return 'ok'
     if (label === 'Queued' || label === 'Working') return 'running'
     return 'neutral'
   }
@@ -1257,6 +1325,12 @@
       return { label: 'Setup', tone: 'neutral' }
     }
     if (turn.kind === 'inflight' && turn.status !== 'done') {
+      if (isDependencyWaiting(turn)) {
+        return { label: 'Waiting', tone: 'neutral' }
+      }
+      if (ownershipLabel(turn) === 'Ready') {
+        return { label: 'Ready', tone: 'ok' }
+      }
       return { label: taskStateLabel(turn), tone: taskStateTone(turn) }
     }
     const owner = ownershipLabel(turn)
@@ -1301,7 +1375,7 @@
     const sinceActivity = shortElapsed(agent.silentMs)
     const label = agent.lastEventLabel ?? 'Model call in progress'
     if (agent.lastEventKind === 'provider_wait' && (agent.silentMs ?? 0) >= 60_000) {
-      return `Still waiting for the local model${sinceActivity ? ` · ${sinceActivity}` : ''}`
+      return `The model is still loading or generating${sinceActivity ? ` · ${sinceActivity}` : ''}`
     }
     if (agent.stalled) {
       return `No activity${sinceActivity ? ` for ${sinceActivity.replace(' ago', '')}` : ''}`
@@ -1433,11 +1507,18 @@
   const currentTurns = $derived.by(() => {
     const seenQuestionTasks = new Set<string>()
     let seenOwnerInputQuestion = false
+    const settledCompletion =
+      project.detail?.actionModel?.primaryAction === null &&
+      project.detail?.startReadiness?.code === 'all_terminal'
     const hasActiveOwnerInputQuestion = turns.some(
       turn => (turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat') && turn.status === 'active',
     )
     return turns.filter(turn => {
       if (turn.phase === 'done') return false
+      // Setup is not a parallel owner decision after the project has already
+      // settled its completed scope. Keep the recorded turn in the full
+      // history, but do not make Thread reopen it as the default conversation.
+      if (settledCompletion && turn.kind === 'setup_step') return false
       if (
         hasActiveOwnerInputQuestion &&
         turn.kind === 'setup_step' &&
@@ -1458,6 +1539,73 @@
   })
   const visibleTurns = $derived(currentTurns)
   const visibleList = $derived(threadChains.map(chain => chain.latestTurn))
+  const ownerAction = $derived(
+    project.detail?.actionModel?.primaryAction
+      ?? threadActionModel?.primaryAction
+      ?? null,
+  )
+  const ownerActionHasThread = $derived(
+    !ownerAction?.taskId || threadChains.some(chain =>
+      chain.turns.some(turn => 'taskId' in turn && turn.taskId === ownerAction.taskId),
+    ),
+  )
+  const ownerActionDirectTaskRoute = $derived(Boolean(
+    ownerAction?.taskId && ownerAction.href && /(?:^|\/)task\//.test(ownerAction.href),
+  ))
+  const showProjectDecisionFirst = $derived(Boolean(
+    ownerAction && !projectActivityVisible && (!ownerActionHasThread || ownerActionDirectTaskRoute),
+  ))
+  const resumableWorkAction = $derived(
+    ownerAction?.code === 'ready_work' || ownerAction?.code === 'paused_live_work' || ownerAction?.code === 'worker_recovery' || ownerAction?.code === 'review_retry',
+  )
+  // Thread is for a response, not a second work queue. When the shared action
+  // says a represented task can resume, leave its history out of the default
+  // view and send the owner to the one work item instead.
+  const showReadyWorkSummary = $derived(Boolean(
+    ownerAction &&
+    ownerActionHasThread &&
+    !showProjectDecisionFirst &&
+    !projectActivityVisible &&
+    resumableWorkAction &&
+    runStatus !== 'running' &&
+    runStatus !== 'stopping',
+  ))
+  // A running project with no owner input is not a conversation. The shared
+  // action model already identifies the work in motion; keep Thread to that
+  // handoff instead of rendering an operational queue and agent telemetry.
+  const showPassiveExecutionHandoff = $derived(Boolean(
+    ownerAction &&
+    ownerActionHasThread &&
+    !showProjectDecisionFirst &&
+    !showReadyWorkSummary &&
+    !projectActivityVisible &&
+    (runStatus === 'running' || runStatus === 'stopping') &&
+    !project.detail?.actionModel?.ownerInput?.active &&
+    !threadActionModel?.ownerInput?.active,
+  ))
+  const workHandoffTitle = $derived(
+    ownerAction?.code === 'paused_live_work' || ownerAction?.code === 'worker_recovery' ? 'Current work' : 'No response needed',
+  )
+  const readyWorkOrientation = $derived(orientationSpine ?? project.detail?.orientationSpine ?? null)
+  const readyWorkScopeLabel = $derived(
+    readyWorkOrientation?.summary?.selectedScopeLabel
+      ?? readyWorkOrientation?.selectedRelease?.label
+      ?? null,
+  )
+  // Release readiness is the shared owner-facing scope denominator. The
+  // orientation progress can include explicitly deferred work, so use it only
+  // for older Thread responses that do not carry release readiness yet.
+  const readyWorkScopeCounts = $derived(project.detail?.releaseReadiness?.releaseCounts ?? null)
+  const readyWorkProgress = $derived(readyWorkOrientation?.summary?.progress ?? null)
+  const readyWorkContext = $derived.by(() => {
+    const scope = readyWorkScopeLabel?.trim() || null
+    const done = readyWorkScopeCounts?.done ?? readyWorkProgress?.done
+    const total = readyWorkScopeCounts?.total ?? readyWorkProgress?.total
+    const progress = Number.isFinite(done) && Number.isFinite(total) && (total ?? 0) > 0
+      ? `${done} of ${total} complete`
+      : null
+    return [scope, progress].filter((part): part is string => Boolean(part)).join(' · ') || null
+  })
   const compactListView = $derived(compactThreadMode && compactPane === 'list')
   const compactDetailView = $derived(compactThreadMode && compactPane === 'detail')
   const activeOwnerInputQuestions = $derived(
@@ -1523,7 +1671,7 @@
     }
     const primaryTaskId = project.detail?.decision?.execution?.focusTaskId
       ?? project.detail?.actionModel?.primaryAction?.taskId
-    if (startReadiness?.canStart !== false && primaryTaskId) {
+    if (primaryTaskId) {
       const primaryTaskChain = chains.find(chain => chain.turns.some(turn => 'taskId' in turn && turn.taskId === primaryTaskId))
       if (primaryTaskChain) return primaryTaskChain.id
     }
@@ -1574,7 +1722,12 @@
           .sort(compareOperationTurns)[0] ?? null
         return { id, turns: ordered, latestTurn, activeTurn, currentTurn }
       })
-      .filter(chain => chain.turns.some(turn => turn.phase !== 'done'))
+      .filter(chain =>
+        chain.turns.some(turn => turn.phase !== 'done') &&
+        !(project.detail?.actionModel?.primaryAction === null &&
+          project.detail?.startReadiness?.code === 'all_terminal' &&
+          chain.id === 'setup'),
+      )
       .sort((left, right) => compareArchiveTurns(left.latestTurn, right.latestTurn))
   })
 
@@ -1795,6 +1948,16 @@
       const r = await scopedProjectFetch(endpoint, { method: 'POST' })
       const j = await r.json().catch(() => ({})) as { error?: string }
       if (!r.ok || j.error) {
+        if (isRequiredProjectMigrationError(j.error)) {
+          const projectId = explicitProjectId ?? currentProjectId()
+          if (projectId) {
+            documentPreview = null
+            nav(projectTaskRepairHref(projectId, turn.taskId))
+            return false
+          }
+          replyErrors = { ...replyErrors, [turn.id]: 'Open this project\'s work view to apply its required update.' }
+          return false
+        }
         replyErrors = { ...replyErrors, [turn.id]: j.error ?? `HTTP ${r.status}` }
         return false
       }
@@ -1825,6 +1988,11 @@
         body: JSON.stringify({
           message,
           ...(turn.kind === 'inflight' || turn.kind === 'escalation' ? { preserveStatus: true } : {}),
+          ...(turn.kind === 'brief_approval'
+            ? { revisionTarget: 'brief' }
+            : turn.kind === 'spec_review'
+              ? { revisionTarget: 'spec' }
+              : {}),
         }),
       })
       const j = await r.json().catch(() => ({})) as { error?: string }
@@ -1837,6 +2005,8 @@
       replyDrafts = next
       replyTurnId = null
       sentReplies = { ...sentReplies, [turn.id]: true }
+      await load()
+      await refreshProject()
       await load()
     } finally {
       busyTurnId = null
@@ -2189,7 +2359,12 @@
   function taskStateLabel(turn: InFlightTurn): string {
     return taskStagePresentation(
       { ...turn, liveAgent: turnLiveAgent(turn) },
-      { runStatus, availabilityStatus },
+      {
+        runStatus,
+        availabilityStatus,
+        focusTaskId: startReadiness?.focusTaskId,
+        focusKind: startReadiness?.focusKind,
+      },
     ).label
   }
 
@@ -2202,7 +2377,7 @@
       live?.lastEventKind === 'provider_wait' &&
       (live.silentMs ?? 0) >= 60_000
     ) {
-      return 'Local model is still loading or generating.'
+      return 'The model is still loading or generating.'
     }
     if (live?.name === 'spec-agent') {
       if (turn.requestKind === 'project_question') {
@@ -2214,9 +2389,13 @@
       if (turn.importedDraft) {
         return 'This imported note is becoming a task brief now.'
       }
+      if (turn.briefApproved) return 'The approved brief is becoming a spec now.'
       return turn.taskId === 'task-workspace-import'
         ? 'Your existing project notes are becoming candidate tasks now.'
         : 'Drafting is in progress now.'
+    }
+    if (isDependencyWaiting(turn)) {
+      return `Waiting for ${turn.dependencyBlockers?.map(blocker => blocker.title).join(', ')}.`
     }
     if (turn.taskStatus === 'ready' && !live) {
       if (needsWorkerHandoffSpecCleanup(turn)) {
@@ -2244,11 +2423,19 @@
           ? 'Part of this import review is already drafted. Review it if you want, but answer the current blocker before project notes can keep moving.'
           : 'Part of this import review is already drafted. Review it if you want, or resume to keep turning your project notes into candidate tasks.'
       }
+      if (turn.briefApproved && !turn.specDraftPresent) {
+        return runStatus === 'running' || runStatus === 'stopping'
+          ? 'The brief is approved. The spec is queued for drafting.'
+          : 'The brief is approved. Resume to draft the spec.'
+      }
       return turn.importedDraft
           ? 'The task brief for this imported note is being shaped. You can add context, but you do not need to babysit the draft.'
           : isQueuedSpecRevision(turn)
             ? 'The draft spec and your latest answers are saved. Coordinator review is queued.'
             : 'Task shaping has started, but the brief is not ready yet. The checklist shows what is still missing.'
+    }
+    if (turn.taskStatus === 'spec_review' && !live) {
+      return 'The spec is ready for your review.'
     }
     if (turn.taskStatus === 'in_progress' && !live) {
       return runStatus === 'running'
@@ -2362,12 +2549,13 @@
   }
 
   function canStartTaskTurn(turn: InFlightTurn): boolean {
+    if (typeof turn.canStart === 'boolean') return turn.canStart
     if (projectRunBlocksTaskStart(turn)) return false
+    if (isDependencyWaiting(turn)) return false
     return !turnLiveAgent(turn) && (
       turn.taskStatus === 'ready' ||
       turn.taskStatus === 'import_draft' ||
       turn.taskStatus === 'exploring' ||
-      turn.taskStatus === 'spec_review' ||
       turn.taskStatus === 'in_progress' ||
       turn.taskStatus === 'review' ||
       turn.taskStatus === 'gate_check'
@@ -2399,9 +2587,10 @@
       case 'exploring':
         if (turn.taskId === 'task-meta-intake') return 'Keep setting this up'
         if (turn.requestStage === 'task_brief_cleanup') return 'Clean up brief'
+        if (turn.briefApproved && !turn.specDraftPresent) return 'Continue drafting spec'
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
         return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
-      case 'spec_review': return 'Resume spec work'
+      case 'spec_review': return 'Review spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
@@ -2424,7 +2613,12 @@
   function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     return taskStagePresentation(
       { ...turn, liveAgent: turnLiveAgent(turn) },
-      { runStatus, availabilityStatus },
+      {
+        runStatus,
+        availabilityStatus,
+        focusTaskId: startReadiness?.focusTaskId,
+        focusKind: startReadiness?.focusKind,
+      },
     ).tone
   }
 
@@ -2582,6 +2776,7 @@
           escalationId: turn.escalationId,
           resolution: action.resolution,
           nextStatus: action.nextStatus,
+          resolveEquivalent: true,
         }),
       })
       const body = await res.json().catch(() => ({})) as { error?: string }
@@ -2714,7 +2909,7 @@
           answer,
         }),
       })
-      const body = await r.json().catch(() => ({})) as { error?: string }
+      const body = await r.json().catch(() => ({})) as { error?: string; taskId?: string }
       if (!r.ok || body.error) {
         pressureTestErrors = { ...pressureTestErrors, [turn.id]: body.error ?? `HTTP ${r.status}` }
         return
@@ -2730,6 +2925,26 @@
       pressureTestErrors = nextErrors
       await load()
       await refreshProject()
+      if (body.taskId) {
+        focusTurn(`task:${body.taskId}`)
+      }
+    } finally {
+      busyTurnId = null
+    }
+  }
+
+  async function useRequestAsTaskBrief(turn: PressureTestQuestionTurn): Promise<void> {
+    busyTurnId = turn.id
+    try {
+      const r = await scopedProjectFetch(turn.directTaskEndpoint, { method: 'POST' })
+      const body = await r.json().catch(() => ({})) as { error?: string; taskId?: string }
+      if (!r.ok || body.error) {
+        pressureTestErrors = { ...pressureTestErrors, [turn.id]: body.error ?? `HTTP ${r.status}` }
+        return
+      }
+      await load()
+      await refreshProject()
+      if (body.taskId) focusTurn(`task:${body.taskId}`)
     } finally {
       busyTurnId = null
     }
@@ -3054,6 +3269,9 @@
     }
     if (turn.kind === 'inflight') {
       if (turn.requestStage === 'task_brief_cleanup') return 'Brief cleanup'
+      if (turn.briefApproved && !turn.specDraftPresent) {
+        return turnLiveAgent(turn) ? 'Drafting spec' : 'Continue drafting spec'
+      }
       if (turn.importedDraft || turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') {
         return 'Continue shaping brief'
       }
@@ -3145,6 +3363,31 @@
     })
   }
 
+  async function openProjectDecision(): Promise<void> {
+    if (
+      (ownerAction?.operation === 'push_branch' || ownerAction?.operation === 'open_pull_request') &&
+      ownerAction.taskId &&
+      props.onRunRepositoryAction
+    ) {
+      runBusy = true
+      try {
+        await props.onRunRepositoryAction(ownerAction.taskId, ownerAction.operation)
+      } finally {
+        runBusy = false
+      }
+      return
+    }
+    if (
+      (ownerAction?.operation === 'start_focused' || ownerAction?.operation === 'repair_spec') &&
+      ownerAction.taskId
+    ) {
+      await startTaskRun(ownerAction.taskId)
+      return
+    }
+    if (!ownerAction?.href) return
+    nav(projectActionHref(ownerAction.href, explicitProjectId), { backgroundPath: path.value })
+  }
+
   function showThreadListPane(): void {
     if (!compactThreadMode) return
     compactPane = 'list'
@@ -3177,6 +3420,17 @@
     if (!current || !isDockableTurn(current)) return null
     return current
   })
+  // A direct owner question is the Thread route's only job. Keep its existing
+  // response controls, but remove the surrounding list and transcript.
+  const showOwnerInputFocus = $derived(Boolean(
+    ownerAction?.code === 'owner_input_required' &&
+    !projectActivityVisible &&
+    activeDockTurn &&
+    (activeDockTurn.kind === 'agent_question' || activeDockTurn.kind === 'pressure_test_question' || activeDockTurn.kind === 'bounded_chat'),
+  ))
+  const showSingleSetupFocus = $derived(Boolean(
+    threadChains.length === 1 && threadChains[0]?.currentTurn?.kind === 'setup_step',
+  ))
 
   const historyTurns = $derived.by(() => {
     if (!selectedChain) return []
@@ -3592,12 +3846,72 @@
         </p>
       </Card>
 
-      {@render capabilityRequestDecisions()}
+      {#if !showPassiveExecutionHandoff}
+        {@render capabilityRequestDecisions()}
+      {/if}
     </Stack>
   {:else}
     <div class="thread-body">
       {@render capabilityRequestDecisions()}
-      {#if threadChains.length === 0}
+      {#if showProjectDecisionFirst}
+        <Card title={ownerAction?.ownerHeading ?? 'What needs your attention'} titleTag="h2" tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
+          <div class="thread-project-decision">
+            <div>
+              {#if !ownerAction?.label || ownerAction.label !== ownerAction.ownerHeading}
+                <h3>{ownerAction?.label ?? 'Project needs your decision'}</h3>
+              {/if}
+              {#if ownerAction?.taskLabel}
+                <p class="thread-project-decision-task">{ownerAction.taskLabel}</p>
+              {/if}
+              {#if ownerAction?.detail}
+                <p>{ownerAction.detail}</p>
+              {/if}
+            </div>
+            <Row justify="end" wrap>
+              <Button variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'} disabled={runBusy || props.busy} onclick={() => void openProjectDecision()}>
+                {ownerAction?.buttonLabel ?? 'Continue'}
+              </Button>
+            </Row>
+          </div>
+        </Card>
+      {:else if showReadyWorkSummary}
+        <Card title={workHandoffTitle} titleTag="h2" tone="accent" variant="callout" railStrength="strong">
+          <div class="thread-project-decision">
+            <div>
+              <h3>{ownerAction?.label ?? 'Work is ready to continue'}</h3>
+              {#if ownerAction?.taskLabel}
+                <p class="thread-project-decision-task">{ownerAction.taskLabel}</p>
+              {/if}
+              {#if readyWorkContext}
+                <p>{readyWorkContext}</p>
+              {/if}
+              {#if ownerAction?.detail}
+                <p>{ownerAction.detail}</p>
+              {/if}
+            </div>
+            <Row justify="end" wrap>
+              <Button variant="primary" disabled={runBusy || props.busy} onclick={() => void openProjectDecision()}>{ownerAction?.buttonLabel ?? 'Open work'}</Button>
+            </Row>
+          </div>
+        </Card>
+      {:else if showPassiveExecutionHandoff}
+        <Card title="No response needed" titleTag="h2" tone="accent" variant="callout" railStrength="strong">
+          <div class="thread-project-decision">
+            <div>
+              <h3>{ownerAction?.label ?? 'Work is underway'}</h3>
+              {#if ownerAction?.taskLabel}
+                <p class="thread-project-decision-task">{ownerAction.taskLabel}</p>
+              {/if}
+              {#if ownerAction?.detail}
+                <p>{ownerAction.detail}</p>
+              {/if}
+            </div>
+            <Row justify="end" wrap>
+              <Button variant="secondary" onclick={openProjectDecision}>{ownerAction?.buttonLabel ?? 'Open work'}</Button>
+            </Row>
+          </div>
+        </Card>
+      {:else if threadChains.length === 0}
         <Card title="Nothing current">
           <p class="muted">
             {allTerminalReadinessMessage ?? 'No open questions, queued work, blockers, or active requests right now.'}
@@ -3605,9 +3919,18 @@
         </Card>
       {/if}
 
-      {#if threadChains.length > 0}
-        <div class="thread-columns" class:thread-columns-compact={compactThreadMode}>
-          {#if !compactThreadMode || compactPane === 'list'}
+      {#if threadChains.length > 0 && !showProjectDecisionFirst && !showReadyWorkSummary && !showPassiveExecutionHandoff}
+        {#if ownerAction && !ownerActionHasThread}
+          <Row justify="end">
+            <Button variant="ghost" size="sm" onclick={() => (projectActivityVisible = false)}>Back to project decision</Button>
+          </Row>
+        {/if}
+        <div
+          class="thread-columns"
+          class:thread-columns-compact={compactThreadMode}
+          class:thread-columns-owner-input={showOwnerInputFocus || showSingleSetupFocus}
+        >
+          {#if !showOwnerInputFocus && !showSingleSetupFocus && (!compactThreadMode || compactPane === 'list')}
           <aside
             class="thread-index"
             aria-label="Thread list"
@@ -3652,14 +3975,16 @@
           <section
             class="thread-detail"
             aria-label="Selected thread"
+            class:thread-detail-owner-input-focus={showOwnerInputFocus || showSingleSetupFocus}
             bind:this={detailScrollEl}
             onscroll={handleDetailScroll}
             in:fly|local={{ x: compactThreadMode ? 26 : 0, duration: 180, opacity: 0.16 }}
             out:fly|local={{ x: compactThreadMode ? 20 : 0, duration: 160, opacity: 0.12 }}
           >
             <div class="thread-detail-scroll-wrap">
-              <div class="thread-detail-scroll" aria-label="Thread history">
+              <div class="thread-detail-scroll" aria-label={showOwnerInputFocus ? 'Owner response' : 'Thread history'}>
                 <div class="thread-detail-flow" class:thread-detail-flow-single={centerSingleComposerlessCard}>
+                  {#if !showOwnerInputFocus}
                   <div class="thread-list" class:thread-list-single={centerSingleComposerlessCard}>
                     <Stack gap="3">
                       {#each historyRenderItems as historyItem (historyItem.id)}
@@ -3904,15 +4229,15 @@
                 {:else if t.kind === 'setup_step'}
                   <div class="setup-title">
                     <h3 class="prompt"><Markdown source={setupStepTitle(t)} inline /></h3>
-                    {#if t.skippable && !showStatusChip(t)}
+                    {#if t.skippable && !showStatusChip(t) && ownershipLabel(t) !== 'Needs you'}
                       <Chip label="optional" tone="neutral" />
                     {/if}
                   </div>
                   <p class="why">{setupStepWhy(t)}</p>
-                  {#if t.status === 'active'}
+                    {#if t.status === 'active'}
                     {#if t.contextSummary}
-                      <UtilityPanel className="setup-context" tone="neutral" ariaLabel="Current setup context">
-                        <strong>Current setup context</strong>
+                      <details class="setup-context">
+                        <summary>Setup details</summary>
                         <p>{t.contextSummary.intro}</p>
                         <ul>
                           {#each t.contextSummary.facts as fact}
@@ -3920,7 +4245,7 @@
                           {/each}
                         </ul>
                         <p>{t.contextSummary.uncertainty}</p>
-                      </UtilityPanel>
+                      </details>
                     {/if}
                     {#if t.affordance === 'link' && t.actionHref}
                       <Row justify="end" gap="2">
@@ -4060,6 +4385,13 @@
                       </div>
                       {#if isMultipleOwnerChoice(t)}
                         <Row justify="end" gap="2">
+                          <Button
+                            variant="secondary"
+                            disabled={busyTurnId === t.id}
+                            onclick={() => useRequestAsTaskBrief(t)}
+                          >
+                            Use request as task brief
+                          </Button>
                           <Button
                             variant="primary"
                             disabled={busyTurnId === t.id || selectedPressureChoices(t.id).length === 0}
@@ -4734,7 +5066,7 @@
                         {recoveryAction.label}
                       </Button>
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => openEscalationResolution(t, 'resolve')}>
-                        I handled this...
+                        Mark blocker resolved...
                       </Button>
                     {/if}
                   </Row>
@@ -5177,8 +5509,9 @@
                       {/each}
                     </Stack>
                   </div>
+                  {/if}
 
-                {#if caughtUp}
+                {#if caughtUp && !showOwnerInputFocus}
                   <p class="muted caught-up">
                     {#if operationSummary.needsYou > 0}
                       Needs your input before work can continue.
@@ -5496,7 +5829,7 @@
                                 {recoveryAction.label}
                               </Button>
                               <Button variant="secondary" disabled={busyTurnId === activeDockTurn.id} onclick={() => openEscalationResolution(activeDockTurn, 'resolve')}>
-                                I handled this...
+                                Mark blocker resolved...
                               </Button>
                             {/if}
                           </Row>
@@ -5840,6 +6173,16 @@
                                     Cancel
                                   </Button>
                                 {/if}
+                                {#if footerComposer.kind === 'pressure_test'}
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    disabled={busyTurnId === footerComposer.turn.id}
+                                    onclick={() => useRequestAsTaskBrief(footerComposer.turn)}
+                                  >
+                                    Use request as task brief
+                                  </Button>
+                                {/if}
                                 <Button
                                   variant={footerComposer.kind === 'question_context' ? 'agent' : 'primary'}
                                   size="sm"
@@ -6013,6 +6356,22 @@
     gap: var(--gh-space-3);
     overflow: hidden;
   }
+  .thread-project-decision {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+  .thread-project-decision h3,
+  .thread-project-decision p {
+    margin: 0;
+  }
+  .thread-project-decision > div {
+    display: grid;
+    gap: var(--gh-space-2);
+    max-width: 58rem;
+  }
+  .thread-project-decision-task {
+    color: var(--text-muted);
+  }
   .lede { margin: 0; color: var(--thread-color-muted); font-size: var(--gh-type-size-meta); }
   .handoff-copy {
     display: flex;
@@ -6036,6 +6395,10 @@
   }
   .thread-columns.thread-columns-compact {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .thread-columns.thread-columns-owner-input {
+    grid-template-columns: minmax(0, 48rem);
+    justify-content: center;
   }
   .thread-index {
     position: relative;
@@ -6139,6 +6502,9 @@
   .thread-detail-flow-single {
     justify-content: center;
     padding-block: var(--gh-space-5);
+  }
+  .thread-detail-owner-input-focus {
+    padding-top: var(--gh-space-4);
   }
   .thread-detail-header {
     display: grid;
@@ -6901,22 +7267,23 @@
   :global(.runtime-state-row) {
     gap: var(--gh-space-2);
   }
-  :global(.setup-context) {
+  .setup-context {
     display: grid;
     gap: var(--gh-space-2);
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
-  :global(.setup-context) strong {
+  .setup-context summary {
     color: var(--text);
     font-size: var(--gh-type-size-meta);
     font-weight: var(--gh-type-weight-medium);
+    cursor: pointer;
   }
-  :global(.setup-context) p {
+  .setup-context p {
     margin: 0;
   }
-  :global(.setup-context) ul {
+  .setup-context ul {
     display: grid;
     gap: var(--gh-space-1);
     margin: 0;

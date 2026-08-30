@@ -75,6 +75,17 @@ function activeTaskCount(detail: ProjectDetail | null | undefined): number {
   ).length
 }
 
+function liveExecution(detail: ProjectDetail | null | undefined): {
+  count: number
+  focusTaskTitle: string | null
+} {
+  const execution = detail?.decision?.execution
+  return {
+    count: Number.isFinite(execution?.count) ? Math.max(0, execution?.count as number) : 0,
+    focusTaskTitle: execution?.focusTaskTitle?.trim() || null,
+  }
+}
+
 function importDraftCount(detail: ProjectDetail | null | undefined): number {
   return (detail?.tasks ?? []).filter(task => (task.status ?? '') === 'import_draft').length
 }
@@ -321,6 +332,19 @@ function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActiv
       timeLabel: null,
     }
   }
+  if (readiness.code === 'owner_review_required') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Review',
+      label: 'Review',
+      message: readiness.focusTaskTitle || 'Review the next spec',
+      detail: readiness.count && readiness.count > 1
+        ? `${readiness.count - 1} more waiting behind it`
+        : 'Waiting for spec review',
+      timeLabel: null,
+    }
+  }
   if (readiness.code === 'required_migration_pending') {
     return {
       tone: 'warn',
@@ -451,6 +475,7 @@ export function buildProjectTicker(
 
   if (detail?.run?.status === 'running') {
     const oneTaskRun = detail.run.mode === 'one_task'
+    const live = liveExecution(detail)
     return {
       tone: 'active',
       pulse: true,
@@ -459,6 +484,10 @@ export function buildProjectTicker(
       message:
         oneTaskRun
           ? 'Advancing one task'
+          : live.focusTaskTitle
+          ? `Working on: ${live.focusTaskTitle}`
+          : live.count > 0
+          ? `Working on ${live.count} ${pluralize(live.count, 'task')}`
           : active > 0
           ? `Working on ${active} ${pluralize(active, 'task')}`
           : 'Run is active on this project',
@@ -548,6 +577,8 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
   }
   if (project.run?.status === 'running') {
     const oneTaskRun = project.run.mode === 'one_task'
+    const liveCount = project.decision?.execution?.count ?? 0
+    const liveFocusTitle = project.decision?.execution?.focusTaskTitle?.trim() || null
     const oneTaskMessage = project.highlights?.activeTaskTitle
       ? `Advancing one task: ${project.highlights.activeTaskTitle}`
       : 'Advancing one task'
@@ -558,6 +589,10 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
       message:
         oneTaskRun
           ? oneTaskMessage
+          : liveFocusTitle
+          ? `Working on: ${liveFocusTitle}`
+          : liveCount > 0
+          ? `Working on ${liveCount} ${pluralize(liveCount, 'task')}`
           : project.highlights?.activeTaskTitle
           ?? (counts.active > 0 ? `Working on ${counts.active} ${pluralize(counts.active, 'task')}` : 'Run is active'),
     }

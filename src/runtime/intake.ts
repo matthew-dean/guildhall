@@ -5,11 +5,14 @@ import { acceptanceCriteriaFromStructuredSpec, explicitTaskStructuralIdentity, s
 import {
   atomicWriteText,
   appendTaskEvidence,
+  getProjectLocalHistoryDir,
   inferProjectRootFromMemoryDir,
   projectStatePathFromMemoryDir,
   readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTaskEvidenceCurrent,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
+  withProjectStateWriteLock,
 } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
@@ -30,14 +33,19 @@ import {
   promoteImportDraftToExploring,
 } from './import-drafts.js'
 import {
+  answerPressureTestQuestion,
   createPressureTestIntake,
   inspectPressureTestEvidence,
+  loadPressureTestIntake,
+  renderPressureTestSpec,
+  savePressureTestIntake,
   type PressureTestIntake,
 } from './pressure-test-intake.js'
-import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-intake.js'
+import { analyzeRequestIntake, directRequestIntake, type RequestIntakeOwnerInput } from './request-intake.js'
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 import {
   productBriefFromSpecCompletionBoundary,
+  ownerSpecRevisionRequirements,
   validateProductBriefGrounding,
   validateSpecCompletionBoundary,
   validateSpecGrounding,
@@ -50,7 +58,7 @@ import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.
 import { buildEffectiveTask } from './effective-task.js'
 import { assessTaskReadiness, hasExplicitNoSplitBoundary } from './task-readiness.js'
 import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
-import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
+import { resetCurrentPlanForProofRecovery, resetCurrentPlanForRevision } from './task-plan-recovery.js'
 import {
   sanitizeTaskQueueForProjectWrite,
   readProjectCanonicalCurrentState,
@@ -121,11 +129,12 @@ async function writeQueue(
 ): Promise<void> {
   const tasksPath = tasksPathFor(memoryDir)
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
-  const expectedQueueRevision = options.expectedQueueRevision ?? readProjectStateDatabaseQueueRevision(tasksPath)
   await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
     projectId: path.basename(projectRoot),
     projectRoot,
-    ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+    ...(options.expectedQueueRevision !== null && options.expectedQueueRevision !== undefined
+      ? { expectedQueueRevision: options.expectedQueueRevision }
+      : {}),
     ...(options.expectedProjectRevision !== null && options.expectedProjectRevision !== undefined
       ? { expectedProjectRevision: options.expectedProjectRevision }
       : {}),
@@ -145,8 +154,20 @@ function hasDurableImplementationProgress(task: Task): boolean {
   return false
 }
 
-function nextTaskId(queue: TaskQueue): string {
-  const used = new Set(queue.tasks.map((t) => t.id))
+async function nextTaskId(queue: TaskQueue, memoryDir: string): Promise<string> {
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const archiveRoots = [
+    projectStatePathFromMemoryDir(memoryDir, 'tasks/archive'),
+    path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks', 'archive'),
+  ]
+  const used = new Set(queue.tasks.map(task => task.id))
+  for (const archiveRoot of archiveRoots) {
+    const entries = await fs.readdir(archiveRoot).catch(() => [])
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue
+      used.add(entry.slice(0, -'.json'.length))
+    }
+  }
   let n = queue.tasks.length + 1
   while (used.has(`task-${String(n).padStart(3, '0')}`)) n++
   return `task-${String(n).padStart(3, '0')}`
@@ -187,7 +208,7 @@ export interface IntakeResult {
  */
 export async function createExploringTask(input: IntakeInput): Promise<IntakeResult> {
   const queue = await readQueue(input.memoryDir)
-  const id = input.taskId ?? nextTaskId(queue)
+  const id = input.taskId ?? await nextTaskId(queue, input.memoryDir)
   if (queue.tasks.some((t) => t.id === id)) {
     throw new Error(`Task ${id} already exists`)
   }
@@ -292,6 +313,160 @@ export interface RoutedRequestResult {
   pressureTestIntake?: PressureTestIntake
 }
 
+export interface MaterializedPressureTestIntake {
+  taskId: string
+  transcriptPath?: string
+}
+
+export async function answerPressureTestQuestionWithMaterialization(input: {
+  memoryDir: string
+  intakeId: string
+  questionId: string
+  answer: string
+  materialization?: {
+    domain: string
+    projectPath: string
+  }
+}): Promise<{
+  intake: PressureTestIntake
+  materialized: MaterializedPressureTestIntake | null
+}> {
+  return withProjectStateWriteLock(tasksPathFor(input.memoryDir), async () => {
+    const intake = await answerPressureTestQuestion(input)
+    const materialized = input.materialization
+      ? await materializeCompletedPressureTestIntakeUnlocked({
+          memoryDir: input.memoryDir,
+          intake,
+          ...input.materialization,
+        })
+      : null
+    return { intake, materialized }
+  })
+}
+
+export async function materializeCompletedPressureTestIntake(input: {
+  memoryDir: string
+  intake: PressureTestIntake
+  domain: string
+  projectPath: string
+}): Promise<MaterializedPressureTestIntake | null> {
+  return withProjectStateWriteLock(tasksPathFor(input.memoryDir), async () => {
+    const intake = await loadPressureTestIntake({
+      memoryDir: input.memoryDir,
+      intakeId: input.intake.id,
+    })
+    const result = await materializeCompletedPressureTestIntakeUnlocked({ ...input, intake })
+    if (intake.handoff) {
+      input.intake.handoff = { ...intake.handoff }
+      input.intake.updatedAt = intake.updatedAt
+    }
+    return result
+  })
+}
+
+export async function materializePressureTestRequestWithoutDiscovery(input: {
+  memoryDir: string
+  intakeId: string
+  domain: string
+  projectPath: string
+}): Promise<MaterializedPressureTestIntake | null> {
+  return withProjectStateWriteLock(tasksPathFor(input.memoryDir), async () => {
+    const intake = await loadPressureTestIntake({
+      memoryDir: input.memoryDir,
+      intakeId: input.intakeId,
+    })
+    if (intake.target.type === 'project') return null
+    if (!intake.handoff) {
+      const now = new Date().toISOString()
+      intake.status = 'complete'
+      intake.activeDomainId = null
+      intake.pendingQuestion = null
+      intake.domains = intake.domains.map(domain => domain.status === 'closed'
+        ? domain
+        : { ...domain, status: 'deferred' as const })
+      if (!intake.outputs.decisions.includes('Owner used the supplied request as the task brief.')) {
+        intake.outputs.decisions.push('Owner used the supplied request as the task brief.')
+      }
+      intake.updatedAt = now
+      await savePressureTestIntake(input.memoryDir, intake)
+    }
+    return materializeCompletedPressureTestIntakeUnlocked({
+      memoryDir: input.memoryDir,
+      intake,
+      domain: input.domain,
+      projectPath: input.projectPath,
+      ownerDirect: true,
+    })
+  })
+}
+
+async function materializeCompletedPressureTestIntakeUnlocked(input: {
+  memoryDir: string
+  intake: PressureTestIntake
+  domain: string
+  projectPath: string
+  ownerDirect?: boolean
+}): Promise<MaterializedPressureTestIntake | null> {
+  const { intake } = input
+  if (intake.status !== 'complete' || intake.target.type === 'project') return null
+
+  const queue = await readQueue(input.memoryDir)
+  const requestId = `request-${intake.id}`
+  const linkedTask = queue.tasks.find(task =>
+    task.id === intake.handoff?.taskId || task.request?.id === requestId,
+  )
+  if (linkedTask) {
+    if (intake.handoff?.taskId !== linkedTask.id) {
+      intake.handoff = {
+        status: 'materialized',
+        taskId: linkedTask.id,
+        materializedAt: new Date().toISOString(),
+      }
+      intake.updatedAt = intake.handoff.materializedAt
+      await savePressureTestIntake(input.memoryDir, intake)
+    }
+    return { taskId: linkedTask.id }
+  }
+
+  const now = new Date().toISOString()
+  const task = await createExploringTask({
+    memoryDir: input.memoryDir,
+    ask: input.ownerDirect ? intake.rawRequest : [intake.rawRequest, '', renderPressureTestSpec(intake)].join('\n'),
+    domain: input.domain,
+    projectPath: input.projectPath,
+    title: intake.target.title,
+    request: {
+      id: requestId,
+      raw: intake.rawRequest,
+      kind: 'task_spec',
+      title: intake.target.title,
+      routingSummary: input.ownerDirect
+        ? 'Owner used the supplied request as the task brief.'
+        : 'Completed pressure-test intake',
+      pressureTestRequired: !input.ownerDirect,
+      createdAt: intake.createdAt,
+    },
+    ...(input.ownerDirect
+      ? {
+          requestIntakeOverride: directRequestIntake({
+            ask: intake.rawRequest,
+            title: intake.target.title,
+            createdAt: now,
+          }),
+          ownerInputOverride: null,
+        }
+      : {}),
+  })
+  intake.handoff = {
+    status: 'materialized',
+    taskId: task.taskId,
+    materializedAt: now,
+  }
+  intake.updatedAt = now
+  await savePressureTestIntake(input.memoryDir, intake)
+  return task
+}
+
 export async function createRoutedRequest(input: IntakeInput): Promise<RoutedRequestResult> {
   const routed = routeRequest({
     raw: input.ask,
@@ -300,12 +475,13 @@ export async function createRoutedRequest(input: IntakeInput): Promise<RoutedReq
   })
   const action = routed.actions[0]
   if (action?.kind === 'pressure_test_intake') {
+    const targetTitle = input.title?.trim() || action.intakeTarget.title
     const pressureTestIntake = await createPressureTestIntake({
       memoryDir: input.memoryDir,
       target: {
         type: action.intakeTarget.type === 'release' ? 'release' : 'feature',
-        id: slugId(action.intakeTarget.title),
-        title: action.intakeTarget.title,
+        id: slugId(targetTitle),
+        title: targetTitle,
       },
       rawRequest: input.ask,
     })
@@ -422,6 +598,23 @@ function isProjectRevisionRace(error: unknown): boolean {
   return error instanceof Error && /Stale (?:targeted )?project mutation|project state changed|expected (?:project )?revision/i.test(error.message)
 }
 
+function isMissingCurrentTaskEvidenceRevisionRace(error: unknown): boolean {
+  return error instanceof Error && error.message === 'Normalized current task evidence is unavailable for promoted project'
+}
+
+export function readCurrentTaskEvidenceForSpecApproval(
+  projectRoot: string,
+  taskId: string,
+  readCurrentEvidence = readProjectStateDatabaseTaskEvidenceCurrent,
+) {
+  try {
+    return readCurrentEvidence(projectRoot, taskId)
+  } catch (error) {
+    if (!isMissingCurrentTaskEvidenceRevisionRace(error)) throw error
+    return null
+  }
+}
+
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
   // Approval changes task state and can add a release-local proof child. If a
   // release selection changes while that decision is in flight, discard the
@@ -486,7 +679,12 @@ async function approveSpecFromCurrentSnapshot(input: ApproveSpecInput): Promise<
       error: `Spec is not ready for approval: ${specQuality.errors.join(' ')}`,
     }
   }
-  const specGrounding = validateSpecGrounding(task)
+  const currentTaskEvidence = readCurrentTaskEvidenceForSpecApproval(projectRoot, task.id)
+  const ownerRevisionRequirements = ownerSpecRevisionRequirements(task, currentTaskEvidence)
+  const specGrounding = validateSpecGrounding(task, {
+    ownerRevisionInstructions: ownerRevisionRequirements.instructions,
+    requiredAcceptanceCommands: ownerRevisionRequirements.requiredAcceptanceCommands,
+  })
   if (!specGrounding.ok) {
     return {
       success: false,
@@ -663,7 +861,7 @@ async function approveSpecFromCurrentSnapshot(input: ApproveSpecInput): Promise<
         : `Spec approval did not advance ${task.id}; the task is still waiting for spec review.`,
     }
   }
-  approveReintakeBriefWithSpec(task, now, approvalActor)
+  approveBriefWithSpec(task, now, approvalActor)
   task.updatedAt = now
   resolveSupersededEscalations(task, {
     now,
@@ -767,14 +965,17 @@ function settleBoundedChildContractWorkWithoutMaterializedChildren(task: Task): 
   return true
 }
 
-function approveReintakeBriefWithSpec(task: Task, now: string, approvalActor: 'human' | 'codex_delegated_owner'): void {
+function approveBriefWithSpec(task: Task, now: string, approvalActor: 'human' | 'codex_delegated_owner'): void {
   const brief = task.productBrief
-  if (!brief || brief.authoredBy !== 'project-reintake') return
-  if (typeof brief.approvedAt === 'string' && brief.approvedAt.trim().length > 0) return
-  brief.approvedBy = approvalActor
-  brief.approvedAt = now
-  brief.nonGoals = removeDraftApprovalWarnings(brief.nonGoals)
-  brief.antiPatterns = removeDraftApprovalWarnings(brief.antiPatterns)
+  if (!brief) return
+  if (typeof brief.approvedAt !== 'string' || brief.approvedAt.trim().length === 0) {
+    brief.approvedBy = approvalActor
+    brief.approvedAt = now
+  }
+  if (brief.authoredBy === 'project-reintake') {
+    brief.nonGoals = removeDraftApprovalWarnings(brief.nonGoals)
+    brief.antiPatterns = removeDraftApprovalWarnings(brief.antiPatterns)
+  }
 }
 
 function removeDraftApprovalWarnings(items: string[] | undefined): string[] | undefined {
@@ -849,7 +1050,7 @@ export function parseStackTraceTopFile(stack: string): string | undefined {
 
 export async function createBugReportTask(input: BugReportInput): Promise<BugReportResult> {
   const queue = await readQueue(input.memoryDir)
-  const id = nextTaskId(queue)
+  const id = await nextTaskId(queue, input.memoryDir)
   const now = new Date().toISOString()
 
   const title = `Bug: ${compactStoredLabel(
@@ -921,6 +1122,35 @@ export interface ResumeExploringInput {
    * current worker/reviewer. It should not reopen spec intake.
    */
   preserveStatus?: boolean | undefined
+  /** Typed document boundary for an explicit owner revision request. */
+  revisionTarget?: 'brief' | 'spec' | undefined
+}
+
+const OWNER_COMMAND_PREFIX = /^(?:pnpm|npm|npx|yarn|bun|node|python(?:3)?|pytest|vitest|playwright|cargo|rustc|git)\b/
+const OWNER_INLINE_PACKAGE_COMMAND = /\b((?:pnpm|yarn|bun)\s+(?:run\s+)?[A-Za-z0-9@._:/-]+|npm\s+(?:run\s+)?[A-Za-z0-9@._:/-]+)\b/gi
+const OWNER_INLINE_CARGO_COMMAND = /\b(cargo\s+(?:test|check|build|clippy|fmt)(?:\s+(?!(?:and|then|but)\b)[A-Za-z0-9@._:/=+-]+)*)/gi
+
+export function extractOwnerRequiredAcceptanceCommands(message: string): string[] {
+  const quoted = [...message.matchAll(/`([^`\n]+)`/g)]
+    .map(match => match[1]!.trim())
+    .filter(value => OWNER_COMMAND_PREFIX.test(value))
+  const inlinePackageCommands = [...message.matchAll(OWNER_INLINE_PACKAGE_COMMAND)]
+    .map(match => match[1]!.trim())
+  const inlineCargoCommands = [...message.matchAll(OWNER_INLINE_CARGO_COMMAND)]
+    .map(match => match[1]!.trim().replace(/[.,;:]+$/, ''))
+  return [...new Set([...quoted, ...inlinePackageCommands, ...inlineCargoCommands])]
+}
+
+function ownerRevisionEvent(input: Pick<ResumeExploringInput, 'message' | 'revisionTarget'>) {
+  if (!input.revisionTarget) return undefined
+  const requiredAcceptanceCommands = input.revisionTarget === 'spec' && input.message
+    ? extractOwnerRequiredAcceptanceCommands(input.message)
+    : []
+  return {
+    event: 'document_revision_requested' as const,
+    target: input.revisionTarget,
+    ...(requiredAcceptanceCommands.length > 0 ? { requiredAcceptanceCommands } : {}),
+  }
 }
 
 export interface RerunTaskStageInput {
@@ -1015,6 +1245,7 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
       role: 'human',
       content: input.message,
       timestamp: new Date().toISOString(),
+      ...(ownerRevisionEvent(input) ? { structured: ownerRevisionEvent(input) } : {}),
     })
   }
 
@@ -1041,6 +1272,10 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
       projectRoot,
       mutate: current => {
         if (!input.preserveStatus && current.status !== 'blocked') current.status = 'exploring'
+        if (input.revisionTarget === 'brief') delete current.productBrief
+        if (input.revisionTarget === 'spec') {
+          resetCurrentPlanForRevision(current as unknown as Task, { clearEvidence: false })
+        }
         current.updatedAt = now
         return current
       },
@@ -1055,14 +1290,15 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
         role: 'human',
         content: input.message,
         timestamp: now,
+        ...(ownerRevisionEvent(input) ? { structured: ownerRevisionEvent(input) } : {}),
       },
     })
-  } else if (input.message && !input.preserveStatus && task.status !== 'blocked') {
-    task.status = 'exploring'
-    task.updatedAt = new Date().toISOString()
-    queue.lastUpdated = task.updatedAt
-    await writeQueue(input.memoryDir, queue)
   } else if (input.message) {
+    if (!input.preserveStatus && task.status !== 'blocked') task.status = 'exploring'
+    if (input.revisionTarget === 'brief') delete task.productBrief
+    if (input.revisionTarget === 'spec') {
+      resetCurrentPlanForRevision(task, { clearEvidence: false })
+    }
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = task.updatedAt
     await writeQueue(input.memoryDir, queue)
@@ -1184,6 +1420,10 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   task.completedAt = undefined
   task.status = 'exploring'
   task.assignedTo = 'spec-agent'
+  // A reframe is a fresh review lifecycle. The next spec handoff decides
+  // whether it needs owner or coordinator review; carrying the old gate makes
+  // the new contract look actionable by the wrong party.
+  delete task.specReviewGate
   task.productBrief = undefined
   task.spec = undefined
   task.acceptanceCriteria = []
@@ -1485,7 +1725,7 @@ export async function rerunTaskStage(
       taskId: task.id,
       role: 'system',
       content:
-        'A delegated owner requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
+        'A delegated owner requested a fresh spec pass. Any earlier spec approval in this history is superseded and is historical evidence only. Re-read the task, submit a new current brief/spec from project reality, and ask only the minimum clarifying questions needed.',
     })
     await upsertTaskRuntimeState(projectRoot, task.id, {
       assignedTo: null,

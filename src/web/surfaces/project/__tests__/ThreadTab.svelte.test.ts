@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import ThreadTab from '../ThreadTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
 import { project } from '../../../lib/project.svelte.js'
+import type { ProjectDetail } from '../../../lib/types.js'
 
 function json(data: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -325,6 +326,7 @@ interface PressureTestQuestionTurnForTest {
     evidence: string[]
   }
   answerEndpoint: string
+  directTaskEndpoint: string
 }
 
 interface BoundedChatTurnForTest {
@@ -387,6 +389,7 @@ function pressureTestQuestionTurn(
       evidence: ['internal/plans/guildhall-0-8.md: release goals'],
     },
     answerEndpoint: '/api/project/pressure-test/pti-guildhall-0-8-0/answer',
+    directTaskEndpoint: '/api/project/pressure-test/pti-guildhall-0-8-0/use-request',
     ...overrides,
   }
 }
@@ -455,6 +458,8 @@ function installFetchFakes(
     runtime?: unknown
     projectRunStatus?: string
     startReadiness?: unknown
+    actionModel?: unknown
+    releaseReadiness?: unknown
     decision?: unknown
     projectAvailability?: { status: string; pausedAt?: string | null; resumedAt?: string | null }
     caughtUp?: boolean
@@ -462,6 +467,7 @@ function installFetchFakes(
     threadState?: () => { turns: unknown[]; activeTurnId: string | null; caughtUp?: boolean }
     onSetupSubmit?: (url: string, body: Record<string, unknown> | undefined) => void
     boundedChatAnswerResponse?: Response | (() => Response | Promise<Response>)
+    pressureTestAnswerResponse?: Response
   } = {},
 ) {
   const calls: Array<{ url: string; init?: RequestInit; body?: Record<string, unknown> }> = []
@@ -471,8 +477,28 @@ function installFetchFakes(
     calls.push({ url, init, body })
     if (url.startsWith('/api/project/thread')) {
       const state = options.threadState?.()
-      if (state) return json({ turns: state.turns, activeTurnId: state.activeTurnId, caughtUp: state.caughtUp ?? false, orientationSpine: options.orientationSpine })
-      return json({ turns, activeTurnId, caughtUp: options.caughtUp ?? false, orientationSpine: options.orientationSpine })
+      if (state) return json({
+        turns: state.turns,
+        activeTurnId: state.activeTurnId,
+        caughtUp: state.caughtUp ?? false,
+        orientationSpine: options.orientationSpine,
+        sourceRevision: 2,
+        currentThreadFreshness: 'current',
+        startReadiness: options.startReadiness,
+        actionModel: options.actionModel,
+        releaseReadiness: options.releaseReadiness,
+      })
+      return json({
+        turns,
+        activeTurnId,
+        caughtUp: options.caughtUp ?? false,
+        orientationSpine: options.orientationSpine,
+        sourceRevision: 2,
+        currentThreadFreshness: 'current',
+        startReadiness: options.startReadiness,
+        actionModel: options.actionModel,
+        releaseReadiness: options.releaseReadiness,
+      })
     }
     if (url.startsWith('/api/project/source-note')) {
       if (options.sourceNoteResponse) {
@@ -529,6 +555,7 @@ function installFetchFakes(
       return json({ ok: true })
     }
     if (url.startsWith('/api/project/pressure-test/') && url.includes('/answer')) {
+      if (options.pressureTestAnswerResponse) return options.pressureTestAnswerResponse
       return json({ intake: { id: 'pti-guildhall-0-8-0', pendingQuestion: null } })
     }
     if (url.startsWith('/api/project/bounded-chat/') && url.includes('/answer')) {
@@ -551,12 +578,21 @@ function installFetchFakes(
         path: '/repo/looma-knit',
         run: { status: options.projectRunStatus ?? 'running', mode: 'continuous' },
         availability: options.projectAvailability ?? { status: 'active', pausedAt: null, resumedAt: null },
-        startReadiness: options.startReadiness ?? { canStart: true },
+        startReadiness: options.startReadiness !== undefined ? options.startReadiness : { canStart: true },
         ...(options.decision ? { decision: options.decision } : {}),
         ...(options.runtime ? { runtime: options.runtime } : {}),
         ...(project.detail?.taskRoutingContexts ? { taskRoutingContexts: project.detail.taskRoutingContexts } : {}),
         ...(project.detail?.deliverySpine ? { deliverySpine: project.detail.deliverySpine } : {}),
-        ...(project.detail?.actionModel ? { actionModel: project.detail.actionModel } : {}),
+        ...(options.actionModel !== undefined
+          ? { actionModel: options.actionModel }
+          : project.detail?.actionModel
+            ? { actionModel: project.detail.actionModel }
+            : {}),
+        ...(options.releaseReadiness !== undefined
+          ? { releaseReadiness: options.releaseReadiness }
+          : project.detail?.releaseReadiness
+            ? { releaseReadiness: project.detail.releaseReadiness }
+            : {}),
         tasks: [],
       })
     }
@@ -783,6 +819,405 @@ describe('ThreadTab', () => {
     expect(selectedThread().queryByText('Guildhall is cleaning up task intake.')).toBeNull()
   })
 
+  it('opens the shared owner-review task instead of an unrelated active turn', async () => {
+    const focusedReview = specReviewTurn('task-review-first', {
+      taskTitle: 'Review the focused spec',
+      spec: '## Summary\nApprove this spec before work continues.',
+    })
+    const unrelatedActive = workerTurn({
+      id: 'worker-unrelated',
+      taskId: 'task-unrelated',
+      taskTitle: 'Unrelated active work',
+      summary: 'This old active turn must not replace the review decision.',
+    })
+    installFetchFakes([unrelatedActive, focusedReview], 'worker-unrelated', {
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        actionHref: '/work?task=task-review-first',
+        focusTaskId: 'task-review-first',
+        focusKind: 'owner_review',
+      },
+      actionModel: {
+        primaryAction: {
+          label: 'Review a spec',
+          taskId: 'task-review-first',
+          buttonLabel: 'Review spec',
+          href: '/work?task=task-review-first',
+          tone: 'warn',
+          code: 'owner_review_required',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await selectedThread().findByText('Review the spec draft')
+    expect(document.querySelector('[aria-label="Active thread dock"]')?.getAttribute('data-turn-id')).toBe('spec-task-review-first')
+    expect(selectedThread().queryByText('This old active turn must not replace the review decision.')).toBeNull()
+  })
+
+  it('hands a represented spec review directly to its focused task decision', async () => {
+    const focusedReview = specReviewTurn('task-review-first', {
+      taskTitle: 'Review the focused spec',
+      spec: '## Summary\nApprove this spec before work continues.',
+    })
+    installFetchFakes([focusedReview], 'spec-task-review-first', {
+      actionModel: {
+        primaryAction: {
+          label: 'Review a spec',
+          taskLabel: 'Review the focused spec',
+          taskId: 'task-review-first',
+          buttonLabel: 'Review spec',
+          href: '/task/task-review-first',
+          tone: 'warn',
+          code: 'owner_review_required',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'What needs your attention' })
+    expect(screen.getByText('Review the focused spec')).toBeTruthy()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Review spec' }))
+    expect(path.href).toBe('/projects/looma-knit/task/task-review-first')
+  })
+
+  it('does not replace an unrepresented owner decision with stale Thread activity', async () => {
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-stale-thread',
+        taskId: 'task-stale-thread',
+        taskTitle: 'Old paused task',
+        summary: 'This activity must not become the project decision.',
+      }),
+    ], 'worker-stale-thread', {
+      actionModel: {
+        primaryAction: {
+          label: 'Review a spec',
+          taskId: 'task-current-review',
+          taskLabel: 'Review the current spec before work continues.',
+          buttonLabel: 'Review next spec',
+          href: '/work?task=task-current-review',
+          tone: 'warn',
+          code: 'owner_review_required',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'What needs your attention' })
+    expect(screen.getByText('Review the current spec before work continues.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Browse project activity' })).toBeNull()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Review next spec' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-current-review')
+  })
+
+  it('keeps a stopped ready-work Thread to one route back to the selected work', async () => {
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-ready-work',
+        taskId: 'task-ready-work',
+        taskTitle: 'Resume the focused work',
+        summary: 'This queue detail belongs in Work, not the default Thread view.',
+      }),
+    ], 'worker-ready-work', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Resume the focused work',
+          taskId: 'task-ready-work',
+          taskLabel: 'Resume the focused work',
+          detail: 'Guildhall can continue this work item.',
+          buttonLabel: 'Open work',
+          href: '/work?task=task-ready-work',
+          tone: 'accent',
+          code: 'ready_work',
+        },
+      },
+      orientationSpine: {
+        selectedRelease: { label: 'Stage 2: Local Desktop Harness MVP' },
+        summary: {
+          selectedScopeLabel: 'Stage 2: Local Desktop Harness MVP',
+          progress: { done: 5, total: 9 },
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'No response needed' })
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+    expect(screen.getByText('Stage 2: Local Desktop Harness MVP · 5 of 9 complete')).toBeTruthy()
+    expect(screen.getAllByText('Resume the focused work').length).toBeGreaterThanOrEqual(2)
+    await userEvent.click(screen.getByRole('button', { name: 'Open work' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-ready-work')
+  })
+
+  it('keeps a paused-work Thread to the current work handoff instead of its activity history', async () => {
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-paused-work',
+        taskId: 'task-paused-work',
+        taskTitle: 'Continue the focused work',
+        summary: 'This activity belongs in Work, not the default Thread view.',
+      }),
+    ], 'worker-paused-work', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Work paused',
+          taskId: 'task-paused-work',
+          taskLabel: 'Continue the focused work',
+          detail: 'Resume continues from this work item.',
+          buttonLabel: 'Open work',
+          href: '/work?task=task-paused-work',
+          tone: 'accent',
+          code: 'paused_live_work',
+        },
+      },
+      orientationSpine: {
+        selectedRelease: { label: 'Stage 1: V1 Release Hardening' },
+        summary: {
+          selectedScopeLabel: 'Stage 1: V1 Release Hardening',
+          progress: { done: 0, total: 16 },
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'Current work' })
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+    expect(screen.getByText('Stage 1: V1 Release Hardening · 0 of 16 complete')).toBeTruthy()
+    expect(screen.getByText('Resume continues from this work item.')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Open work' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-paused-work')
+  })
+
+  it('retries a focused review from Thread instead of opening its activity history', async () => {
+    const { calls } = installFetchFakes([
+      workerTurn({
+        id: 'review-retry',
+        taskId: 'task-091',
+        taskTitle: 'Present draft review evaluation and provenance',
+        taskStatus: 'review',
+        summary: 'The saved change is intact.',
+      }),
+    ], 'review-retry', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Automated review needs retry',
+          taskId: 'task-091',
+          taskLabel: 'Present draft review evaluation and provenance',
+          detail: 'The saved change is intact; retry review starts that check again.',
+          buttonLabel: 'Retry review',
+          href: '/work?task=task-091',
+          tone: 'warn',
+          code: 'review_retry',
+          operation: 'start_focused',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'No response needed' })
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry review' }))
+
+    await waitFor(() => {
+      expect(calls.some(call => (
+        call.url.startsWith('/api/project/task/task-091/start') &&
+        call.body?.mode === 'one_task' &&
+        call.body?.scope === 'work_item'
+      ))).toBe(true)
+    })
+    expect(path.href).toBe('/projects/looma-knit/thread')
+  })
+
+  it('opens a repository pull request from Thread instead of reopening Release', async () => {
+    const onRunRepositoryAction = vi.fn()
+    installFetchFakes([
+      workerTurn({
+        id: 'unrelated-history',
+        taskId: 'task-history',
+        taskTitle: 'Older task history',
+      }),
+    ], 'unrelated-history', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Pull request is ready to open',
+          taskId: 'task-004',
+          taskLabel: 'Open supported documents as TypeScript',
+          detail: 'The completed branch is shared.',
+          buttonLabel: 'Open pull request',
+          href: '/release',
+          tone: 'warn',
+          code: 'repository_followup_required',
+          operation: 'open_pull_request',
+        },
+      },
+    })
+
+    render(ThreadTab, { onRunRepositoryAction })
+
+    await screen.findByRole('heading', { name: 'What needs your attention' })
+    await userEvent.click(screen.getByRole('button', { name: 'Open pull request' }))
+
+    expect(onRunRepositoryAction).toHaveBeenCalledWith('task-004', 'open_pull_request')
+    expect(path.href).toBe('/projects/looma-knit/thread')
+  })
+
+  it('uses shared current-scope counts instead of folding deferred work into the Thread handoff', async () => {
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-deferred-scope',
+        taskId: 'task-current-scope',
+        taskTitle: 'Continue the focused work',
+      }),
+    ], 'worker-deferred-scope', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Worker needs a fresh pass',
+          taskId: 'task-current-scope',
+          taskLabel: 'Continue the focused work',
+          detail: 'The prior worker pass did not leave a durable change.',
+          buttonLabel: 'Retry worker',
+          href: '/work?task=task-current-scope',
+          tone: 'warn',
+          code: 'worker_recovery',
+        },
+      },
+      orientationSpine: {
+        summary: {
+          selectedScopeLabel: 'Current task scope',
+          includedWorkCount: 1,
+          deferredWorkCount: 3,
+          progress: { done: 0, total: 4, deferred: 3 },
+        },
+      },
+      releaseReadiness: {
+        releaseCounts: { done: 0, total: 1, deferred: 3 },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'Current work' })
+    expect(screen.getByText('Current task scope · 0 of 1 complete')).toBeTruthy()
+    expect(screen.queryByText('Current task scope · 0 of 4 complete')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Retry worker' })).toBeTruthy()
+  })
+
+  it('keeps passive running work out of Thread until an owner response is needed', async () => {
+    const actionModel = {
+      primaryAction: {
+        label: 'Component implementation',
+        taskId: 'task-running-work',
+        taskLabel: 'Guildhall is working on Component implementation.',
+        detail: 'Nothing is waiting on you right now.',
+        buttonLabel: 'Open work',
+        href: '/work?task=task-running-work',
+        tone: 'running',
+      },
+      ownerInput: { active: false },
+    }
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-running-work',
+        taskId: 'task-running-work',
+        taskTitle: 'Component implementation',
+        summary: 'Raw worker activity must not become the default Thread view.',
+      }),
+      workerTurn({
+        id: 'worker-queued-history',
+        taskId: 'task-queued-history',
+        taskTitle: 'Old queued work',
+        status: 'pending',
+        summary: 'Old queue detail does not help the owner while work is running.',
+      }),
+    ], 'worker-running-work', {
+      projectRunStatus: 'running',
+      actionModel,
+    })
+    project.detail = {
+      ...(project.detail as ProjectDetail),
+      run: { status: 'running', mode: 'continuous' },
+      actionModel,
+    }
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'No response needed' })
+    expect(screen.getByText('Component implementation')).toBeTruthy()
+    expect(screen.getByText('Nothing is waiting on you right now.')).toBeTruthy()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+    expect(screen.queryByText('Old queued work')).toBeNull()
+    expect(screen.queryByText('Raw worker activity must not become the default Thread view.')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open work' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-running-work')
+  })
+
+  it('shows a direct owner question without the Thread list or history', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'old-draft',
+        taskId: 'task-old-draft',
+        taskTitle: 'Old completed context',
+        status: 'done',
+      }),
+      questionTurn(
+        'question-owner-choice',
+        'owner-choice',
+        'Which outcome should this project optimize for?',
+        ['Faster review', 'Broader coverage'],
+      ),
+    ], 'question-owner-choice', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Answer a project question',
+          taskId: 'task-link-controls',
+          taskLabel: 'Knit: add link editor controls',
+          buttonLabel: 'Answer question',
+          href: '/thread?thread=task%3Atask-link-controls',
+          tone: 'warn',
+          code: 'owner_input_required',
+        },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findAllByText('Which outcome should this project optimize for?')
+    await waitFor(() => {
+      expect(document.querySelector('.thread-columns-owner-input .thread-index')?.hasAttribute('inert')).toBe(true)
+    })
+    expect(screen.queryByLabelText('Thread history')).toBeNull()
+    expect(document.querySelector('.thread-detail-owner-input-focus .thread-list')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Faster review' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Broader coverage' })).toBeTruthy()
+  })
+
   it('opens a routed bounded-chat prompt directly on compact Thread even when many threads exist', async () => {
     installViewportMatchMedia(640)
     installBrowserFakes('/projects/looma-knit/thread?thread=bc-new-thread-1')
@@ -916,7 +1351,8 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByPlaceholderText('What should Guildhall know?')
-    expect(screen.getByRole('button', { name: /Give the project direction/i })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Give the project direction/i })).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: 'Thread list' })).toBeNull()
     const detail = within(document.querySelector('.thread-detail') as HTMLElement)
     expect(detail.getByText('Give the project direction')).toBeTruthy()
     expect(detail.queryByText('Name this project')).toBeNull()
@@ -1342,6 +1778,25 @@ describe('ThreadTab', () => {
     await waitFor(() => expect((answer as HTMLTextAreaElement).value).toBe(''))
   })
 
+  it('focuses the materialized task after the final pressure-test answer', async () => {
+    installFetchFakes([
+      requestTurn(),
+      pressureTestQuestionTurn(),
+    ], 'pressure-test:pti-guildhall-0-8-0:product-goals-q-1', {
+      pressureTestAnswerResponse: json({
+        intake: { id: 'pti-guildhall-0-8-0', status: 'complete', pendingQuestion: null },
+        taskId: 'task-086',
+      }),
+    })
+
+    render(ThreadTab)
+    const answer = await threadComposer().findByPlaceholderText('Answer with a sentence or short paragraph. Include constraints or success measures if they matter.')
+    await userEvent.type(answer, 'Ship one packaged flow.')
+    await userEvent.click(threadComposer().getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(path.href).toContain('thread=task%3Atask-086'))
+  })
+
   it('routes free-form agent questions through the shared thread composer', async () => {
     const { calls } = installFetchFakes([
       questionTurn(
@@ -1389,6 +1844,85 @@ describe('ThreadTab', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Request changes' }))
 
     expect(threadComposer().getByPlaceholderText('Correct the spec or ask for another pass…')).toBeTruthy()
+  })
+
+  it('refreshes project chrome after Thread observes a spec revision', async () => {
+    const currentReadiness = {
+      canStart: true,
+      code: 'ready_work',
+      focusTaskId: 'task-link-controls',
+      focusTaskTitle: 'Stripe Connect -- payment flow for licensed projects',
+      focusKind: 'ready_work',
+      message: 'The revised spec is ready to draft.',
+    }
+    const { calls } = installFetchFakes([
+      specReviewTurn('task-link-controls'),
+    ], 'spec-task-link-controls', { startReadiness: currentReadiness })
+    const refreshSpy = vi.spyOn(project, 'refresh').mockImplementation(async () => {
+      project.detail = {
+        ...(project.detail as ProjectDetail),
+        projectRevision: 1,
+        startReadiness: {
+          canStart: false,
+          code: 'no_unattended_progress',
+          focusTaskId: 'task-dependency',
+          focusTaskTitle: 'Dependency-blocked review',
+          focusKind: 'spec_review',
+          message: 'A dependency-blocked task needs review.',
+        },
+      }
+      return project.detail
+    })
+
+    render(ThreadTab)
+    await selectedThread().findByRole('button', { name: 'View spec' })
+    await userEvent.click(selectedThread().getByRole('button', { name: 'View spec' }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Request changes' }))
+    await userEvent.type(
+      threadComposer().getByPlaceholderText('Correct the spec or ask for another pass…'),
+      'Name the exact desktop proof commands.',
+    )
+    await userEvent.click(threadComposer().getByRole('button', { name: /^send$/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call => call.url.includes('/task/task-link-controls/resume'))).toBe(true)
+      expect(refreshSpy).toHaveBeenCalledTimes(1)
+      expect(project.detail?.startReadiness).toMatchObject(currentReadiness)
+    })
+  })
+
+  it('clears stale project projections when the current Thread response explicitly returns null', async () => {
+    project.detail = {
+      ...(project.detail as ProjectDetail),
+      projectRevision: 1,
+      startReadiness: { canStart: true, code: 'ready_work' },
+      actionModel: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      releaseReadiness: {
+        state: 'blocked',
+        counts: { total: 1, done: 0, blocked: 1 },
+        blockers: [],
+      },
+    } as unknown as ProjectDetail
+    installFetchFakes([], null, {
+      startReadiness: null,
+      actionModel: null,
+      releaseReadiness: null,
+    })
+
+    render(ThreadTab)
+
+    await waitFor(() => {
+      expect(project.detail?.startReadiness).toBeNull()
+      expect(project.detail?.actionModel).toBeNull()
+      expect(project.detail?.releaseReadiness).toBeNull()
+    })
   })
 
   it('renders prior task-chain items as timeline events instead of repeating the task title as a mini task card', async () => {
@@ -1509,6 +2043,7 @@ describe('ThreadTab', () => {
           evidence: ['project-brief.md: Narrative Harness is fiction-writing software.'],
         },
         answerEndpoint: '/api/project/pressure-test/pti-narrative-harness/answer',
+        directTaskEndpoint: '/api/project/pressure-test/pti-narrative-harness/use-request',
       }),
     ], 'pressure-test:pti-narrative-harness:project-direction-priority')
 
@@ -1671,7 +2206,7 @@ describe('ThreadTab', () => {
       { label: 'Finished a thought', tone: 'ok', at: now },
       { label: 'Started shell', tone: 'running', at: now },
       { label: 'Finished shell', detail: 'Shell command succeeded.', tone: 'ok', at: now },
-      { label: 'Waiting for the local model to respond.', tone: 'warn', at: now },
+      { label: 'Waiting for the model to respond.', tone: 'warn', at: now },
     ]
     installFetchFakes([
       workerTurn({
@@ -1847,7 +2382,7 @@ describe('ThreadTab', () => {
 
     render(ThreadTab, { projectId: 'font-something' })
 
-    await screen.findByText('Current setup context')
+    await screen.findByText('Setup details')
     expect(screen.getByText(/current snapshot from local files/i)).toBeTruthy()
     expect(screen.getByText('Coordinator areas: Design.')).toBeTruthy()
     expect(screen.getByText(/saved direction is the durable plan input/i)).toBeTruthy()
@@ -1984,7 +2519,7 @@ describe('ThreadTab', () => {
     expect(path.value).toBe('/projects/looma-knit/thread')
   })
 
-  it('labels active skippable project check-in as optional instead of now', async () => {
+  it('focuses a lone active setup decision without an optional duplicate', async () => {
     installFetchFakes(
       [
         setupTurn({
@@ -2005,11 +2540,12 @@ describe('ThreadTab', () => {
     markProjectPaused()
     render(ThreadTab)
 
-    await screen.findByRole('button', { name: /Run project check-in/i })
+    await screen.findByRole('button', { name: /Start project check-in/i })
     const detail = selectedThread()
-    expect(detail.getAllByText('optional').length).toBeGreaterThan(0)
-    expect(detail.queryByText('now')).toBeNull()
-    expect(document.querySelector('[data-turn-id="setup:project-check-in"] .tone-warn')).toBeNull()
+    expect(detail.getAllByText('Needs you').length).toBeGreaterThan(0)
+    expect(detail.queryByText('optional')).toBeNull()
+    expect(screen.queryByRole('complementary', { name: 'Thread list' })).toBeNull()
+    expect(document.querySelector('[data-turn-id="setup:project-check-in"] .tone-warn')).toBeTruthy()
   })
 
   it('explains bootstrap failures with the first useful command output line', async () => {
@@ -2684,7 +3220,7 @@ describe('ThreadTab', () => {
 
     expect(dock.getByText('Needs recovery')).toBeTruthy()
     expect(dock.getByRole('button', { name: 'Resume task' })).toBeTruthy()
-    expect(dock.getByRole('button', { name: /^I handled this/i })).toBeTruthy()
+    expect(dock.getByRole('button', { name: /^Mark blocker resolved/i })).toBeTruthy()
     expect(footer.queryByText('Needs recovery')).toBeNull()
     expect(footer.getByPlaceholderText(/Add recovery guidance/i)).toBeTruthy()
     expect(listElement ? within(listElement).queryByText('Needs recovery') : null).toBeNull()
@@ -2725,6 +3261,29 @@ describe('ThreadTab', () => {
     expect(threadComposer().getByPlaceholderText('Add a note…')).toBeTruthy()
   })
 
+  it('labels dependency-blocked downstream work as waiting instead of paused', async () => {
+    installFetchFakes(
+      [
+        importedDraftTurn({
+          id: 'desktop-shell-waiting',
+          taskId: 'task-088',
+          taskTitle: 'Build quiet desktop shell',
+          status: 'pending',
+          taskStatus: 'exploring',
+          importedDraft: false,
+          dependencyBlockers: [{ taskId: 'task-086', title: 'Prove packaged Tauri sidecar' }],
+        }),
+      ],
+      'desktop-shell-waiting',
+    )
+
+    render(ThreadTab)
+
+    const row = await screen.findByRole('button', { name: /Build quiet desktop shell/i })
+    expect(within(row).getByText('Waiting')).toBeTruthy()
+    expect(within(row).queryByText('Paused')).toBeNull()
+  })
+
   it('uses the shared spec revision stage chip for exploring spec turns', async () => {
     installFetchFakes(
       [
@@ -2746,7 +3305,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     const blockMenuRow = await screen.findByRole('button', { name: /Block menu \/ block side menu/i })
-    await within(blockMenuRow).findByText('Paused')
+    await within(blockMenuRow).findByText('Ready')
     expect(within(blockMenuRow).queryByText('Queued')).toBeNull()
     expect(screen.queryByText('Intake')).toBeNull()
   })
@@ -2780,7 +3339,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     const floatingRow = await screen.findByRole('button', { name: /Floating toolbar/i })
-    await within(floatingRow).findByText('Paused')
+    await within(floatingRow).findByText('Ready')
     expect(within(floatingRow).queryByText('done', { selector: '.chip' })).toBeNull()
     expect(within(floatingRow).getByText(/brief is not ready yet/i)).toBeTruthy()
   })
@@ -3002,6 +3561,51 @@ describe('ThreadTab', () => {
     })
   })
 
+  it('sends brief corrections as typed revision requests', async () => {
+    const { calls } = installFetchFakes([briefTurn()], 'brief-link-controls')
+
+    render(ThreadTab)
+    await screen.findByText('Edit links inline.')
+    await userEvent.click(selectedThread().getByRole('button', { name: /view brief/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve brief/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /no, change it/i }))
+    await userEvent.type(threadComposer().getByPlaceholderText(/correct the brief/i), 'Keep the spike framework-neutral.')
+    await userEvent.click(threadComposer().getByRole('button', { name: /^send$/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call =>
+        call.url.includes('/task/task-link-controls/resume') &&
+        call.body?.message === 'Keep the spike framework-neutral.' &&
+        call.body?.revisionTarget === 'brief' &&
+        call.body?.preserveStatus === undefined
+      )).toBe(true)
+    })
+  })
+
+  it('sends spec corrections as typed revision requests', async () => {
+    const { calls } = installFetchFakes([specReviewTurn('task-link-controls')], 'spec-task-link-controls')
+
+    render(ThreadTab)
+    await selectedThread().findByRole('button', { name: /view spec/i })
+    await userEvent.click(selectedThread().getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /request changes/i }))
+    await userEvent.type(
+      threadComposer().getByPlaceholderText(/correct the spec/i),
+      'Keep the acceptance command exact.',
+    )
+    await userEvent.click(threadComposer().getByRole('button', { name: /^send$/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call =>
+        call.url.includes('/task/task-link-controls/resume') &&
+        call.body?.message === 'Keep the acceptance command exact.' &&
+        call.body?.revisionTarget === 'spec' &&
+        call.body?.preserveStatus === undefined
+      )).toBe(true)
+    })
+  })
+
   it('approves meta-intake splits from the document modal', async () => {
     const { calls } = installFetchFakes(
       [
@@ -3103,6 +3707,28 @@ describe('ThreadTab', () => {
       const stillOpenDialog = screen.getByRole('dialog', { name: /approve spec/i })
       expect(within(stillOpenDialog).getByText('Task is not in spec_review status.')).toBeTruthy()
       expect(screen.getByRole('button', { name: /view spec/i })).toBeTruthy()
+    })
+  })
+
+  it('takes a required project update from spec approval to the selected task repair flow', async () => {
+    installFetchFakes([specReviewTurn('task-link-controls')], 'spec-task-link-controls', {
+      approveSpecResponse: json(
+        { error: 'Run required Guildhall migration 0.13.27/acceptance-command-proof-path-reconciliation before starting this project.' },
+        { status: 409 },
+      ),
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /view spec/i })
+    await userEvent.click(screen.getByRole('button', { name: /view spec/i }))
+    const dialog = await screen.findByRole('dialog', { name: /approve spec/i })
+    await userEvent.click(within(dialog).getByRole('button', { name: /approve spec/i }))
+
+    await waitFor(() => {
+      expect(path.href).toBe('/projects/looma-knit/work?view=queue&task=task-link-controls&repair=migration')
+      expect(screen.queryByText(/Run required Guildhall migration/i)).toBeNull()
+      expect(screen.queryByRole('dialog', { name: /approve spec/i })).toBeNull()
     })
   })
 
@@ -3356,7 +3982,7 @@ describe('ThreadTab', () => {
           liveAgent: {
             name: 'worker-agent',
             startedAt: '2026-05-19T14:58:00.000Z',
-            lastEventLabel: 'Waiting for the local model to respond.',
+            lastEventLabel: 'Waiting for the model to respond.',
             lastEventKind: 'provider_wait',
             silentMs: 90_000,
           },
@@ -3374,9 +4000,31 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findAllByText(/Still waiting for the local model/)
+    await screen.findAllByText(/The model is still loading or generating/)
     expect(screen.getByText('Started write checkpoint')).toBeTruthy()
     expect(screen.getByText('Writing implementation notes')).toBeTruthy()
+  })
+
+  it('keeps approved spec drafting queued while a run is stopping', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'stopping', mode: 'continuous' },
+    }
+    installFetchFakes([
+      workerTurn({
+        persona: 'spec',
+        taskStatus: 'exploring',
+        liveAgent: undefined,
+        briefApproved: true,
+        specDraftPresent: false,
+        summary: 'The brief is approved. Guildhall is shaping the spec now.',
+      }),
+    ], 'worker-link-controls')
+
+    render(ThreadTab)
+
+    expect((await screen.findAllByText('The brief is approved. The spec is queued for drafting.')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('The brief is approved. Resume to draft the spec.')).toBeNull()
   })
 
   it('labels partial durable progress as recovery work instead of queued work', async () => {
@@ -3872,6 +4520,7 @@ describe('ThreadTab', () => {
 
     expect(source).toContain("if (label === 'Needs brief') return 'warn'")
     expect(source).toContain("if (label === 'Queued' || label === 'Working') return 'running'")
+    expect(source).toMatch(/function taskStateTone[\s\S]*?focusTaskId: startReadiness\?\.focusTaskId,[\s\S]*?focusKind: startReadiness\?\.focusKind,/)
     expect(source).not.toMatch(/agent-attention|tone=\"agent|tone='agent'|return 'agent'/)
   })
 

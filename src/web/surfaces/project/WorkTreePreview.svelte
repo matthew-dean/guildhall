@@ -6,7 +6,7 @@
   import { currentTaskHref } from '../../lib/project-routes.js'
   import { taskSourceSummary } from '../../lib/task-grounding.js'
   import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
-  import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
+  import { taskRunActionLabel, taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
   import { taskDisplayLabel, taskSourceQuestion, taskShapingBlockerLabel, taskShapingBlockers } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
@@ -20,10 +20,14 @@
     runBusyTaskId?: string | null
     runActiveTaskId?: string | null
     proofMissingTaskIds?: readonly string[]
+    ownerReviewTaskIds?: readonly string[]
+    handoffStateByTaskId?: ReadonlyMap<string, string | undefined>
     runError?: string | null
+    actionOnly?: boolean
   }
 
   type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
+  const emptyHandoffStateByTaskId = new Map<string, string | undefined>()
 
   let {
     tasks,
@@ -34,10 +38,14 @@
     runBusyTaskId = null,
     runActiveTaskId = null,
     proofMissingTaskIds = [],
+    ownerReviewTaskIds,
+    handoffStateByTaskId = emptyHandoffStateByTaskId,
     runError = null,
+    actionOnly = false,
   }: Props = $props()
 
   const proofMissingSet = $derived(new Set(proofMissingTaskIds))
+  const ownerReviewTaskIdSet = $derived(new Set(ownerReviewTaskIds ?? []))
   const visibleTasks = $derived(tasks.filter(isVisibleLogicalTask))
   const hierarchy = $derived(buildWorkHierarchy(visibleTasks))
   const tasksById = $derived(new Map(visibleTasks.map(task => [task.id, task])))
@@ -148,6 +156,15 @@
     if (blockedStep) return blockedStep.title
     if (task.proofPaths?.[0]?.title) return task.proofPaths[0].title
     if (task.definitionOfDone?.evidenceRequired?.[0]) return task.definitionOfDone.evidenceRequired[0]
+    const expected = task.completionProof?.expectedCount ?? 0
+    const verified = task.completionProof?.verifiedCount ?? 0
+    if (expected > 0) {
+      return verified > 0
+        ? `${verified} / ${expected} verification checks passed`
+        : `${expected} verification checks required`
+    }
+    const acceptanceChecks = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
+    if (acceptanceChecks > 0) return `${acceptanceChecks} completion checks defined`
     return 'Proof path not attached yet'
   }
 
@@ -167,13 +184,19 @@
   }
 
   function taskStatusLabel(task: Task): string {
-    if (hasUnmetDependencies(task, tasks)) return taskStagePresentation(task, { tasks }).label
-    return needsBreakdownReview(task) ? 'Review breakdown' : taskStagePresentation(task, { tasks }).label
+    return taskStagePresentation(task, {
+      tasks,
+      ownerReviewTaskIds: ownerReviewTaskIds ?? undefined,
+      handoffState: handoffStateByTaskId.get(task.id),
+    }).label
   }
 
   function taskStatusTone(task: Task): ChipTone {
-    if (hasUnmetDependencies(task, tasks)) return chipTone(taskStagePresentation(task, { tasks }).tone)
-    return needsBreakdownReview(task) ? 'warn' : chipTone(taskStagePresentation(task, { tasks }).tone)
+    return chipTone(taskStagePresentation(task, {
+      tasks,
+      ownerReviewTaskIds: ownerReviewTaskIds ?? undefined,
+      handoffState: handoffStateByTaskId.get(task.id),
+    }).tone)
   }
 
   function chipTone(tone: TaskPresentationTone): ChipTone {
@@ -182,6 +205,18 @@
 
   function openSelected(): void {
     if (selectedTask) nav(currentTaskHref(selectedTask.id), { backgroundPath: path.value })
+  }
+
+  function openButtonLabel(task: Task): string {
+    if (isOwnerSpecReview(task)) return 'Review spec'
+    if (task.status === 'import_draft') return 'Review task brief'
+    return 'Open task'
+  }
+
+  function isOwnerSpecReview(task: Task): boolean {
+    return task.status === 'spec_review' &&
+      handoffStateByTaskId.get(task.id) !== 'spec_shaping' &&
+      (ownerReviewTaskIds === undefined || ownerReviewTaskIdSet.has(task.id))
   }
 
   async function runSelected(): Promise<void> {
@@ -193,7 +228,13 @@
     if (proofMissingSet.has(task.id)) return busy ? 'Reopening...' : 'Run proof'
     if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft task brief'
     if (taskShapingBlockers(task).length > 0) return busy ? 'Shaping...' : 'Continue shaping brief'
-    return busy ? 'Starting...' : 'Start work'
+    return taskRunActionLabel(task.status, busy)
+  }
+
+  function canRunTask(task: Task): boolean {
+    if (proofMissingSet.has(task.id)) return true
+    if (task.status === 'import_draft' || taskShapingBlockers(task).length > 0) return true
+    return isQueuedWorkTask(task)
   }
 
   function selectContained(task: Task): void {
@@ -211,6 +252,33 @@
 </script>
 
 <aside class="work-inspector" aria-label="Selected work inspector">
+  {#if actionOnly}
+    {#if selectedTask}
+      <div class="inspector-head">
+        <div>
+          <p class="details-context">Selected work</p>
+          <h3>{taskDisplayLabel(selectedTask, friendlyTaskId(selectedTask.id))}</h3>
+        </div>
+        <Chip label={taskStatusLabel(selectedTask)} tone={taskStatusTone(selectedTask)} />
+      </div>
+      <div class="inspector-actions">
+        {#if onRunTask && canRunTask(selectedTask)}
+          {@const runBusy = runBusyTaskId === selectedTask.id}
+          {@const runActive = runActiveTaskId === selectedTask.id}
+          <Button variant="primary" size="sm" disabled={runBusy || runActive} onclick={runSelected}>
+            {runButtonLabel(selectedTask, runBusy, runActive)}
+          </Button>
+        {:else}
+          <Button variant="primary" size="sm" onclick={openSelected}>{openButtonLabel(selectedTask)}</Button>
+        {/if}
+      </div>
+      {#if runError}
+        <p class="run-error" role="alert">{runError}</p>
+      {/if}
+    {:else}
+      <p class="subtle">Select work to open its next action.</p>
+    {/if}
+  {:else}
   <p class="panel-label">Inspector</p>
   {#if selectedTask}
     {@const rollup = rollupFor(selectedTask)}
@@ -223,6 +291,17 @@
         <h3>{taskDisplayLabel(selectedTask, friendlyTaskId(selectedTask.id))}</h3>
       </div>
       <Chip label={taskStatusLabel(selectedTask)} tone={taskStatusTone(selectedTask)} />
+    </div>
+
+    <div class="inspector-actions">
+      <Button variant="primary" size="sm" onclick={openSelected}>{openButtonLabel(selectedTask)}</Button>
+      {#if onRunTask && canRunTask(selectedTask)}
+        {@const runBusy = runBusyTaskId === selectedTask.id}
+        {@const runActive = runActiveTaskId === selectedTask.id}
+        <Button variant="agent" size="sm" disabled={runBusy || runActive} onclick={runSelected}>
+          {runButtonLabel(selectedTask, runBusy, runActive)}
+        </Button>
+      {/if}
     </div>
 
     <dl>
@@ -257,7 +336,7 @@
       {:else if deliverySteps.length > 0}
         <p class="subtle">This item has tracked delivery steps and no contained work.</p>
       {:else if needsBreakdownReview(selectedTask)}
-        <p class="subtle">No contained work or decomposition proposal exists yet. Review a breakdown before treating this as runnable work.</p>
+        <p class="subtle">No contained work or decomposition proposal is recorded for this item.</p>
       {:else}
         <p class="subtle">This item has no contained work yet.</p>
       {/if}
@@ -297,21 +376,12 @@
       </section>
     {/if}
 
-    <div class="inspector-actions">
-      {#if onRunTask}
-        {@const runBusy = runBusyTaskId === selectedTask.id}
-        {@const runActive = runActiveTaskId === selectedTask.id}
-        <Button variant="agent" size="sm" disabled={runBusy || runActive} onclick={runSelected}>
-          {runButtonLabel(selectedTask, runBusy, runActive)}
-        </Button>
-      {/if}
-      <Button variant="primary" size="sm" onclick={openSelected}>Open drawer</Button>
-    </div>
     {#if runError}
       <p class="run-error" role="alert">{runError}</p>
     {/if}
   {:else}
     <p class="subtle">Select work to inspect its scope, proof path, contained work, and delivery checklist.</p>
+  {/if}
   {/if}
 </aside>
 

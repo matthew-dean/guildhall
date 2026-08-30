@@ -366,6 +366,8 @@ describe('buildContext — task summary', () => {
 
   it('includes acceptance criteria', async () => {
     const ctx = await buildContext(baseTask, tmpDir)
+    expect(ctx.taskSummary).toContain('1. `ac-1`: Ghost variant renders correctly')
+    expect(ctx.taskSummary).toContain('2. `ac-2`: pnpm build passes')
     expect(ctx.taskSummary).toContain('Ghost variant renders correctly')
     expect(ctx.taskSummary).toContain('pnpm build passes')
   })

@@ -48,16 +48,19 @@ import {
   type ProjectStateDatabaseSurfaceReadOptions,
   type ProjectStateDatabaseSurfaceState,
   type ProjectStateDatabaseTaskEvidenceCurrentManyRead,
+  type ProjectStateDatabaseTaskPointRead,
+  type ProjectStateDatabaseTaskRuntime,
   type ProjectStateDatabaseStateClaim,
   type ProjectStateDatabaseStateResolutionRead,
   type ProjectStateDatabaseStateResolutionSnapshot,
 } from '@guildhall/sessions'
-import type {
-  ProjectRelease,
+import {
   Task,
-  TaskQueue,
-  TaskEvidenceEvent as TaskEvidenceEventRecord,
-  TaskEvidenceKind,
+  ProjectRelease as ProjectReleaseSchema,
+  type ProjectRelease,
+  type TaskQueue,
+  type TaskEvidenceEvent as TaskEvidenceEventRecord,
+  type TaskEvidenceKind,
 } from '@guildhall/core'
 import {
   PROJECT_SUMMARY_PROJECTION_VERSION,
@@ -72,8 +75,8 @@ import {
   type ProjectSummaryProjection,
 } from './project-summary-projection.js'
 import { executionScopeRows, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
-import { buildEffectiveTask, buildEffectiveTasks } from './effective-task.js'
-import { appendTaskEvidence, TASK_EVIDENCE_RETENTION } from './task-state-store.js'
+import { buildEffectiveTask, buildEffectiveTaskFromDatabaseOverlay, buildEffectiveTasks } from './effective-task.js'
+import { flushTaskEvidenceOutboxForTasksPath, TASK_EVIDENCE_RETENTION } from './task-state-store.js'
 import { recoverClippedTitle } from '@guildhall/shared'
 import {
   resolveRegisteredProjectStateClaimSet,
@@ -482,6 +485,7 @@ export const FORBIDDEN_PROJECT_TASK_FIELDS = [
   'adjudications',
   'gateResults',
   'escalations',
+  'openEscalations',
   'agentIssues',
   'worktreePath',
   'branchName',
@@ -503,10 +507,11 @@ export const FORBIDDEN_PROJECT_TASK_FIELDS = [
   'evidence',
 ] as const
 
-// Runtime-owned fields may appear on an effective task read but never belong
-// to a persisted task definition. Keep this list at the current-state boundary
-// so every read/mutate/write flow carries exactly the same envelope.
-const TaskRuntimeOverlayFieldNames = [
+// Effective-task fields may appear on a rich current-state read but never
+// belong to a persisted task definition. Keep this list at the mutation
+// boundary so repair decisions see the same state as product surfaces while
+// the writer routes runtime and evidence fields back through their owners.
+const TaskEffectiveMutationFieldNames = [
   'assignedTo',
   'revisionCount',
   'retryWindow',
@@ -518,6 +523,14 @@ const TaskRuntimeOverlayFieldNames = [
   'shelveReason',
   'openEscalationIds',
   'openIssueIds',
+  'notes',
+  'gateResults',
+  'reviewVerdicts',
+  'adjudications',
+  'escalations',
+  'agentIssues',
+  'mergeRecord',
+  'doneSummaryBundle',
 ] as const
 
 export type ForbiddenProjectTaskField = typeof FORBIDDEN_PROJECT_TASK_FIELDS[number]
@@ -680,8 +693,13 @@ export function resolveSelectedReleaseTaskContract(
 
 function persistableRelease(release: ProjectRelease): ProjectRelease {
   const description = (release as ProjectRelease & { description?: string | null }).description
+  // SQLite compatibility rows can predate the lifecycle/readiness split and
+  // contain a readiness verdict such as `blocked` in the lifecycle column.
+  // Never leak that invalid value back into compact product projections.
+  const lifecycle = ProjectReleaseSchema.shape.state.safeParse(release.state)
   return {
     ...release,
+    state: lifecycle.success ? lifecycle.data : 'active',
     nodeIds: [...(release.nodeIds ?? [])],
     deferredNodeIds: [...(release.deferredNodeIds ?? [])],
     ...(typeof description === 'string' ? { description } : { description: undefined }),
@@ -799,11 +817,14 @@ export async function readProjectTaskQueueForRichMutation(
   const currentState = readProjectCurrentStateModel(tasksPath)
   if (currentState.authority === 'database') {
     const current = await buildProjectCanonicalCurrentState(projectRoot, currentState)
-    return {
+    return bindProjectTaskQueueMutationToken({
       version: 1,
       ...current.rawQueue,
       tasks: current.tasks.map(task => ({ ...task })) as unknown as Array<Record<string, unknown>>,
-    }
+    }, {
+      expectedQueueRevision: current.queueRevision,
+      expectedProjectRevision: current.projectRevision,
+    })
   }
   return readProjectTaskQueue(tasksPath)
 }
@@ -824,18 +845,23 @@ export function preserveRuntimeOverlayOnTaskQueueParse(raw: unknown, queue: Task
     const runtime = rawTask.runtime && typeof rawTask.runtime === 'object' && !Array.isArray(rawTask.runtime)
       ? rawTask.runtime as Record<string, unknown>
       : rawTask
-    const fields = Object.fromEntries(TaskRuntimeOverlayFieldNames.flatMap(field => (
-      Object.prototype.hasOwnProperty.call(runtime, field) ? [[field, runtime[field]]] : []
-    )))
+    const fields = Object.fromEntries(TaskEffectiveMutationFieldNames.flatMap(field => {
+      if (Object.prototype.hasOwnProperty.call(runtime, field)) return [[field, runtime[field]]]
+      if (Object.prototype.hasOwnProperty.call(rawTask, field)) return [[field, rawTask[field]]]
+      return []
+    }))
     return [[rawTask.id, fields] as const]
   }))
-  return {
+  return bindProjectTaskQueueMutationToken({
     ...queue,
     tasks: queue.tasks.map(task => ({
       ...task,
       ...(runtimeByTaskId.get(task.id) ?? {}),
     })) as Task[],
-  }
+  }, projectTaskQueueMutationToken(raw) ?? {
+    expectedQueueRevision: null,
+    expectedProjectRevision: null,
+  })
 }
 
 /**
@@ -995,6 +1021,8 @@ export interface ProjectCompactStateReadModel {
   selectedTask: ProjectStateDatabaseTask | null
   /** Selected execution scope from this same queue/scope snapshot. */
   scope: ProjectScope | null
+  /** Scope rows for the selected execution count and hierarchy boundary. */
+  scopeRows: ProjectStateDatabaseScopeRow[]
   repositories: ProjectStateDatabaseRepository[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   summary: ProjectSummaryProjection | null
@@ -1020,6 +1048,7 @@ function compactStateFromDatabaseProjection(
     queue: current.queue as ProjectStateDatabaseQueue,
     inventory: current.inventory,
     scope,
+    scopeRows: current.scopeRows,
     repositories: current.repositories,
     selectedTask: current.selectedTask,
     diagnostics: current.diagnostics,
@@ -1132,6 +1161,8 @@ export interface ProjectOverviewStateReadModel {
   summary: ProjectSummaryProjection | null
   /** Current normalized membership for the saved selected release only. */
   scope: ProjectScope | null
+  /** Scope rows from the same saved overview transaction. */
+  scopeRows: ProjectStateDatabaseScopeRow[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   availability: ProjectStateDatabaseSurfaceState['availability']
   memoryHealth: ProjectStateDatabaseSurfaceState['memoryHealth']
@@ -1176,6 +1207,7 @@ export function readProjectOverviewStateAtBoundary(
     authority: current.authority,
     summary,
     scope,
+    scopeRows: current.scopeRows,
     diagnostics: current.diagnostics,
     availability: current.availability,
     memoryHealth: current.memoryHealth,
@@ -1193,10 +1225,14 @@ export function readProjectSurfaceStateAtBoundary(
     options,
   )
   if (!current) return null
+  const compact = current.projection ? compactStateFromDatabaseProjection(current.projection) : null
   return {
     authority: current.authority,
-    compact: current.projection ? compactStateFromDatabaseProjection(current.projection) : null,
-    summary: current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null,
+    compact,
+    // The compact projection normalizes release counts against this same
+    // snapshot's selected scope. Reuse that summary so callers cannot observe
+    // a second, global deferred count from the auxiliary summary row.
+    summary: compact?.summary ?? (current.summary ? projectSummaryAtRuntimeVersion(current.summary) : null),
     thread: current.thread,
     attentionRecords: current.attentionRecords,
     attentionWatermark: current.attentionWatermark,
@@ -1858,36 +1894,38 @@ function writeTargetedTaskMutationIfSafe(
     projectId?: string | null
     projectRoot?: string
     expectedQueueRevision?: number | null
+    expectedProjectRevision?: number | null
     taskEvidence?: readonly {
       event: TaskEvidenceEventRecord
       retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+      history?: 'database' | 'outbox'
     }[]
   },
-): boolean {
-  if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return false
+): number | null {
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return null
 
   const current = readProjectTaskQueueSyncWithRevision(tasksPath)
   const expectedQueueRevision = options.expectedQueueRevision ?? current.revision
-  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
-  const expectedProjectRevision = current.projectRevision
-  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return false
+  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return null
+  const expectedProjectRevision = options.expectedProjectRevision ?? current.projectRevision
+  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return null
   const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath) ?? current.queue
   const currentTasks = taskRecordById(currentQueue)
   const nextTasks = taskRecordById(queue)
-  if (currentTasks.size === 0 || currentTasks.size !== nextTasks.size) return false
-  if ([...currentTasks.keys()].some(id => !nextTasks.has(id))) return false
-  if (!sameJson(queueReleases(currentQueue), queueReleases(queue))) return false
-  if (!sameJson(queueSelectedReleaseId(currentQueue), queueSelectedReleaseId(queue))) return false
-  if (!sameJson(queueEnvelopeList(currentQueue, 'executionPlanActions'), queueEnvelopeList(queue, 'executionPlanActions'))) return false
-  if (!sameJson(queueEnvelopeList(currentQueue, 'scopeAuthorityRequests'), queueEnvelopeList(queue, 'scopeAuthorityRequests'))) return false
+  if (currentTasks.size === 0 || currentTasks.size !== nextTasks.size) return null
+  if ([...currentTasks.keys()].some(id => !nextTasks.has(id))) return null
+  if (!sameJson(queueReleases(currentQueue), queueReleases(queue))) return null
+  if (!sameJson(queueSelectedReleaseId(currentQueue), queueSelectedReleaseId(queue))) return null
+  if (!sameJson(queueEnvelopeList(currentQueue, 'executionPlanActions'), queueEnvelopeList(queue, 'executionPlanActions'))) return null
+  if (!sameJson(queueEnvelopeList(currentQueue, 'scopeAuthorityRequests'), queueEnvelopeList(queue, 'scopeAuthorityRequests'))) return null
 
   const changedTaskIds = [...currentTasks.keys()].filter(id => !sameJson(currentTasks.get(id), nextTasks.get(id)))
-  if (changedTaskIds.length !== 1) return false
+  if (changedTaskIds.length !== 1) return null
   const changedTaskId = changedTaskIds[0]
-  if (!changedTaskId) return false
+  if (!changedTaskId) return null
 
   const inventory = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })
-  if (!inventory) return false
+  if (!inventory) return null
   const currentScope = new Map(inventory.tasks.map(task => [task.id, task.scopeRow]))
   const projectionQueue = queueForProjection(queue)
   const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
@@ -1898,17 +1936,17 @@ function writeTargetedTaskMutationIfSafe(
       ? projectionQueue.tasks as Task[]
       : undefined,
   })
-  if (!prepared.parsedQueue || !prepared.scopeRows) return false
+  if (!prepared.parsedQueue || !prepared.scopeRows) return null
   const nextScope = scopeRowByTaskId(prepared.scopeRows)
   const scopeIds = new Set([...currentScope.keys(), ...nextScope.keys()])
   const changedScopeIds = [...scopeIds].filter(id => !sameJson(currentScope.get(id) ?? null, nextScope.get(id) ?? null))
-  if (changedScopeIds.some(id => id !== changedTaskId)) return false
+  if (changedScopeIds.some(id => id !== changedTaskId)) return null
 
   const nextTask = nextTasks.get(changedTaskId)
-  if (!nextTask) return false
+  if (!nextTask) return null
   const scopeRow = nextScope.get(changedTaskId) ?? null
   const lastUpdated = isRecord(queue) && typeof queue.lastUpdated === 'string' ? queue.lastUpdated : null
-  writeProjectStateDatabaseTaskMutation(tasksPath, {
+  return writeProjectStateDatabaseTaskMutation(tasksPath, {
     task: nextTask,
     summary: prepared.projection as unknown as Record<string, unknown>,
     expectedQueueRevision,
@@ -1917,15 +1955,32 @@ function writeTargetedTaskMutationIfSafe(
     scopeRow,
     evidence: options.taskEvidence,
   })
-  return true
 }
 
 export interface PromotedTaskDetailMutationOptions {
   projectId?: string | null
   projectRoot?: string
+  /** Queue freshness timestamp for this mutation when it differs from the task timestamp. */
+  lastUpdated?: string
   /** Override the derived scope row only for a deliberately external scope change. */
   scopeRow?: ProjectStateDatabaseScopeRow | null
   mutate: (task: Record<string, unknown>) => Record<string, unknown> | null
+  evidence?: readonly {
+    event: TaskEvidenceEventRecord
+    retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+    history?: 'database' | 'outbox'
+  }[]
+  runtime?: ProjectStateDatabaseTaskRuntime | null
+  workspace?: ProjectStateDatabaseTaskRuntime | null
+  /** Merge runtime state from the same point read used by the task CAS. */
+  mutateRuntime?: (current: Record<string, unknown> | null) => Record<string, unknown> | null
+  /** Merge workspace state from the same point read used by the task CAS. */
+  mutateWorkspace?: (current: Record<string, unknown> | null) => Record<string, unknown> | null
+  validate?: (input: {
+    current: ProjectStateDatabaseTaskPointRead
+    nextTask: Record<string, unknown>
+    nextEffectiveTask: Record<string, unknown>
+  }) => string | null
 }
 
 /**
@@ -1942,6 +1997,12 @@ function writePromotedTaskDetailMutationOnce(
   if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return null
   const point = readProjectStateDatabaseTaskPointWithRevision(tasksPath, taskId)
   if (!point) return null
+  if (options.runtime !== undefined && options.mutateRuntime) {
+    throw new Error('Promoted task mutations cannot provide runtime and mutateRuntime together')
+  }
+  if (options.workspace !== undefined && options.mutateWorkspace) {
+    throw new Error('Promoted task mutations cannot provide workspace and mutateWorkspace together')
+  }
   // Detail rows from older promoted projects can still contain overlay fields.
   // Remove them before handing the task to a definition mutator so an ordinary
   // edit cannot copy stale runtime state back into the canonical definition.
@@ -1987,7 +2048,55 @@ function writePromotedTaskDetailMutationOnce(
     nextTask.doneSummaryBundle = currentDefinition.doneSummaryBundle
   }
   nextTask.id = taskId
-  const compact = projectStateDatabaseTaskSummary(nextTask)
+  const generatedAt = options.lastUpdated ??
+    (typeof nextTask.updatedAt === 'string' ? nextTask.updatedAt : new Date().toISOString())
+  const runtimePayload = options.mutateRuntime?.(
+    point.overlay?.runtime?.payload && typeof point.overlay.runtime.payload === 'object'
+      ? { ...point.overlay.runtime.payload }
+      : null,
+  )
+  const workspacePayload = options.mutateWorkspace?.(
+    point.overlay?.workspace?.payload && typeof point.overlay.workspace.payload === 'object'
+      ? { ...point.overlay.workspace.payload }
+      : null,
+  )
+  const runtime = options.mutateRuntime !== undefined
+    ? runtimePayload == null
+      ? null
+      : {
+          taskId,
+          updatedAt: typeof runtimePayload.updatedAt === 'string' ? runtimePayload.updatedAt : generatedAt,
+          payload: { ...runtimePayload, taskId },
+        }
+    : options.runtime
+  const workspace = options.mutateWorkspace !== undefined
+    ? workspacePayload == null
+      ? null
+      : {
+          taskId,
+          updatedAt: typeof workspacePayload.updatedAt === 'string' ? workspacePayload.updatedAt : generatedAt,
+          payload: { ...workspacePayload, taskId },
+        }
+    : options.workspace
+  const nextOverlay = point.overlay === null
+    ? null
+    : {
+        ...point.overlay,
+        runtime: runtime === undefined ? point.overlay.runtime : runtime ?? undefined,
+        workspace: workspace === undefined ? point.overlay.workspace : workspace ?? undefined,
+      }
+  const nextEffectiveTask = buildEffectiveTaskFromDatabaseOverlay(
+    nextTask as unknown as Task,
+    nextOverlay,
+    (options.evidence ?? []).map(entry => entry.event),
+  )
+  const validationError = options.validate?.({
+    current: point,
+    nextTask,
+    nextEffectiveTask: nextEffectiveTask as unknown as Record<string, unknown>,
+  }) ?? null
+  if (validationError) throw new Error(validationError)
+  const compact = projectStateDatabaseTaskSummary(nextEffectiveTask as unknown as Record<string, unknown>)
   const nextIndexedTask = {
     ...point.task,
     ...compact,
@@ -2031,7 +2140,6 @@ function writePromotedTaskDetailMutationOnce(
   const changedScopeRows = nextScopeRows.filter(row => !scopeRowsEqual(existingScopeByTaskId.get(row.taskId), row))
   const removeScopeRowTaskIds = [...existingScopeByTaskId.keys()]
     .filter(scopeTaskId => !nextScopeByTaskId.has(scopeTaskId))
-  const generatedAt = typeof nextTask.updatedAt === 'string' ? nextTask.updatedAt : new Date().toISOString()
   const summary = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
     projectId: options.projectId,
     generatedAt,
@@ -2042,12 +2150,16 @@ function writePromotedTaskDetailMutationOnce(
   if (!summary) return null
   const committedRevision = writeProjectStateDatabaseTaskMutation(tasksPath, {
     task: nextTask,
+    taskSummary: compact,
     summary: summary as unknown as Record<string, unknown>,
     expectedQueueRevision: point.revision,
     expectedProjectRevision: point.projectRevision,
     lastUpdated: generatedAt,
     scopeRows: changedScopeRows,
     removeScopeRowTaskIds,
+    evidence: options.evidence,
+    runtime,
+    workspace,
     // A task edit is a new project state, not an invitation for a later read
     // to reinterpret it. The database gives us the new revision and commits
     // this packet with the task and compact summary in the same transaction.
@@ -2108,32 +2220,33 @@ function writeTargetedReleaseSelectionIfSafe(
     projectId?: string | null
     projectRoot?: string
     expectedQueueRevision?: number | null
+    expectedProjectRevision?: number | null
   },
-): boolean {
-  if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return false
+): number | null {
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return null
 
   const current = readProjectTaskQueueSyncWithRevision(tasksPath)
   const expectedQueueRevision = options.expectedQueueRevision ?? current.revision
-  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
-  const expectedProjectRevision = current.projectRevision
-  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return false
+  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return null
+  const expectedProjectRevision = options.expectedProjectRevision ?? current.projectRevision
+  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return null
   const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath) ?? current.queue
   const currentTasks = taskRecordById(currentQueue)
   const nextTasks = taskRecordById(queue)
-  if (currentTasks.size !== nextTasks.size || [...currentTasks.keys()].some(id => !nextTasks.has(id))) return false
-  if ([...currentTasks.keys()].some(id => !sameJson(currentTasks.get(id), nextTasks.get(id)))) return false
-  if (!sameJson(queueEnvelopeList(currentQueue, 'executionPlanActions'), queueEnvelopeList(queue, 'executionPlanActions'))) return false
-  if (!sameJson(queueEnvelopeList(currentQueue, 'scopeAuthorityRequests'), queueEnvelopeList(queue, 'scopeAuthorityRequests'))) return false
-  if (!isRecord(queue) || typeof queue.selectedReleaseId !== 'string' || queue.selectedReleaseId.length === 0) return false
-  if (sameJson(queueReleases(currentQueue), queueReleases(queue)) && queue.selectedReleaseId === queueSelectedReleaseId(currentQueue)) return false
+  if (currentTasks.size !== nextTasks.size || [...currentTasks.keys()].some(id => !nextTasks.has(id))) return null
+  if ([...currentTasks.keys()].some(id => !sameJson(currentTasks.get(id), nextTasks.get(id)))) return null
+  if (!sameJson(queueEnvelopeList(currentQueue, 'executionPlanActions'), queueEnvelopeList(queue, 'executionPlanActions'))) return null
+  if (!sameJson(queueEnvelopeList(currentQueue, 'scopeAuthorityRequests'), queueEnvelopeList(queue, 'scopeAuthorityRequests'))) return null
+  if (!isRecord(queue) || typeof queue.selectedReleaseId !== 'string' || queue.selectedReleaseId.length === 0) return null
+  if (sameJson(queueReleases(currentQueue), queueReleases(queue)) && queue.selectedReleaseId === queueSelectedReleaseId(currentQueue)) return null
 
   const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
     projectId: options.projectId,
     projectRoot: options.projectRoot,
     queue: queueForProjection(queue),
   })
-  if (!prepared.parsedQueue || !prepared.scopeRows) return false
-  writeProjectStateDatabaseReleaseSelectionMutation(tasksPath, {
+  if (!prepared.parsedQueue || !prepared.scopeRows) return null
+  return writeProjectStateDatabaseReleaseSelectionMutation(tasksPath, {
     releases: queueReleases(queue).filter(isRecord),
     selectedReleaseId: queue.selectedReleaseId,
     summary: prepared.projection as unknown as Record<string, unknown>,
@@ -2141,8 +2254,19 @@ function writeTargetedReleaseSelectionIfSafe(
     expectedQueueRevision,
     expectedProjectRevision,
     lastUpdated: typeof queue.lastUpdated === 'string' ? queue.lastUpdated : null,
+    stateResolution: ({ projectRevision, queueRevision, generatedAt }) =>
+      canonicalDecisionStateResolution({
+        projectId: prepared.projection.projectId,
+        projectRevision,
+        queueRevision,
+        selectedReleaseId: prepared.projection.releaseSummary.release?.id ?? null,
+        decision: prepared.projection.decision,
+        generatedAt,
+        releaseSummary: prepared.projection.releaseSummary,
+        releaseMembershipTaskIds: (prepared.projection.orientationSpine?.selectedRelease?.nodeIds ?? [])
+          .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : nodeId),
+      }),
   })
-  return true
 }
 
 /**
@@ -2163,49 +2287,71 @@ function writeTargetedTaskBatchMutationIfSafe(
       retention: ProjectStateDatabaseTaskEvidenceRetentionInput
     }[]
     taskRuntimes?: readonly { taskId: string; updatedAt?: string; payload: unknown }[]
+    removeTaskRuntimeIds?: readonly string[]
+    taskWorkspaces?: readonly { taskId: string; updatedAt?: string; payload: unknown }[]
+    removeTaskWorkspaceIds?: readonly string[]
+    /** Effective post-mutation tasks used only for compact summary/scope projection. */
+    projectionTasks?: readonly Task[]
   },
-): boolean {
-  if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return false
+): number | null {
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return null
   const current = readProjectTaskQueueSyncWithRevision(tasksPath)
   const expectedQueueRevision = options.expectedQueueRevision ?? current.revision
-  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
-  const expectedProjectRevision = options.expectedProjectRevision ?? current.projectRevision
-  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return false
+  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return null
+  const hasAtomicExtras = options.taskEvidence !== undefined || options.taskRuntimes !== undefined ||
+    options.removeTaskRuntimeIds !== undefined || options.taskWorkspaces !== undefined ||
+    options.removeTaskWorkspaceIds !== undefined
+  const expectedProjectRevision = options.expectedProjectRevision ?? (
+    hasAtomicExtras ? null : current.projectRevision
+  )
+  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return null
   const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath) ?? current.queue
   const currentTasks = taskRecordById(currentQueue)
   const nextTasks = taskRecordById(queue)
-  if (currentTasks.size === 0 && nextTasks.size === 0) return false
+  if (currentTasks.size === 0 && nextTasks.size === 0) return null
 
   const removedTaskIds = [...currentTasks.keys()].filter(id => !nextTasks.has(id))
   const addedTaskIds = [...nextTasks.keys()].filter(id => !currentTasks.has(id))
   const changedTaskIds = [...currentTasks.keys()].filter(id => nextTasks.has(id) && !sameJson(currentTasks.get(id), nextTasks.get(id)))
-  const affectedTaskIds = new Set([...removedTaskIds, ...addedTaskIds, ...changedTaskIds])
+  const affectedTaskIds = new Set([
+    ...removedTaskIds,
+    ...addedTaskIds,
+    ...changedTaskIds,
+    ...(options.taskRuntimes ?? []).map(entry => entry.taskId),
+    ...(options.removeTaskRuntimeIds ?? []),
+    ...(options.taskWorkspaces ?? []).map(entry => entry.taskId),
+    ...(options.removeTaskWorkspaceIds ?? []),
+    ...(options.taskEvidence ?? []).map(entry => entry.event.taskId),
+  ])
   const envelopeChanged =
     !sameJson(queueReleases(currentQueue), queueReleases(queue)) ||
     !sameJson(queueSelectedReleaseId(currentQueue), queueSelectedReleaseId(queue)) ||
     !sameJson(queueEnvelopeList(currentQueue, 'executionPlanActions'), queueEnvelopeList(queue, 'executionPlanActions')) ||
     !sameJson(queueEnvelopeList(currentQueue, 'scopeAuthorityRequests'), queueEnvelopeList(queue, 'scopeAuthorityRequests'))
-  if (affectedTaskIds.size === 0 && !envelopeChanged) return false
+  if (affectedTaskIds.size === 0 && !envelopeChanged) return null
 
   const inventory = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })
-  if (!inventory) return false
+  if (!inventory) return null
   const currentScope = new Map(inventory.tasks.map(task => [task.id, task.scopeRow]))
   const projectionQueue = queueForProjection(queue)
+  const projectionTasks = options.projectionTasks ?? (
+    isRecord(projectionQueue) && Array.isArray(projectionQueue.tasks)
+      ? projectionQueue.tasks as Task[]
+      : undefined
+  )
   const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
     projectId: options.projectId,
     projectRoot: options.projectRoot,
     queue: projectionQueue,
-    projectionTasks: isRecord(projectionQueue) && Array.isArray(projectionQueue.tasks)
-      ? projectionQueue.tasks as Task[]
-      : undefined,
+    projectionTasks: projectionTasks ? [...projectionTasks] : undefined,
   })
-  if (!prepared.parsedQueue || !prepared.scopeRows) return false
+  if (!prepared.parsedQueue || !prepared.scopeRows) return null
   const nextScope = scopeRowByTaskId(prepared.scopeRows)
   const scopeIds = new Set([...currentScope.keys(), ...nextScope.keys()])
   const changedScopeIds = [...scopeIds].filter(id => !sameJson(currentScope.get(id) ?? null, nextScope.get(id) ?? null))
   const scopeMutationIds = new Set([...affectedTaskIds, ...changedScopeIds])
 
-  writeProjectStateDatabaseTaskBatchMutation(tasksPath, {
+  return writeProjectStateDatabaseTaskBatchMutation(tasksPath, {
     tasks: [...affectedTaskIds].flatMap(id => {
       const task = nextTasks.get(id)
       return task ? [task] : []
@@ -2230,12 +2376,32 @@ function writeTargetedTaskBatchMutationIfSafe(
       : {}),
     ...(options.taskEvidence ? { evidence: options.taskEvidence } : {}),
     ...(options.taskRuntimes ? { taskRuntimes: options.taskRuntimes } : {}),
+    ...(options.removeTaskRuntimeIds ? { removeTaskRuntimeIds: options.removeTaskRuntimeIds } : {}),
+    ...(options.taskWorkspaces ? { taskWorkspaces: options.taskWorkspaces } : {}),
+    ...(options.removeTaskWorkspaceIds ? { removeTaskWorkspaceIds: options.removeTaskWorkspaceIds } : {}),
+    ...(projectionTasks ? {
+      taskSummaries: [...affectedTaskIds].flatMap(id => {
+        const task = projectionTasks.find(candidate => candidate.id === id)
+        return task ? [{ taskId: id, summary: projectStateDatabaseTaskSummary(task) }] : []
+      }),
+    } : {}),
     summary: prepared.projection as unknown as Record<string, unknown>,
     expectedQueueRevision,
     expectedProjectRevision,
     lastUpdated: isRecord(queue) && typeof queue.lastUpdated === 'string' ? queue.lastUpdated : null,
+    stateResolution: ({ projectRevision, queueRevision, generatedAt }) =>
+      canonicalDecisionStateResolution({
+        projectId: prepared.projection.projectId,
+        projectRevision,
+        queueRevision,
+        selectedReleaseId: prepared.projection.releaseSummary.release?.id ?? null,
+        decision: prepared.projection.decision,
+        generatedAt,
+        releaseSummary: prepared.projection.releaseSummary,
+        releaseMembershipTaskIds: (prepared.projection.orientationSpine?.selectedRelease?.nodeIds ?? [])
+          .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice('work:'.length) : nodeId),
+      }),
   })
-  return true
 }
 
 /**
@@ -2435,7 +2601,12 @@ export function findForbiddenProjectTaskFields(queue: unknown): ForbiddenProject
 export function writeProjectTaskQueue(
   tasksPath: string,
   queue: unknown,
-  options: { projectId?: string | null; projectRoot?: string; expectedQueueRevision?: number | null } = {},
+  options: {
+    projectId?: string | null
+    projectRoot?: string
+    expectedQueueRevision?: number | null
+    expectedProjectRevision?: number | null
+  } = {},
 ): SanitizedTaskQueueResult {
   const result = sanitizeTaskQueueForProjectWrite(queue)
   writeProjectTaskQueueWithSummary(tasksPath, result.queue, {
@@ -2473,12 +2644,21 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
   } = {},
 ): Promise<void> {
   const wasDatabaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+  const capturedToken = projectTaskQueueMutationToken(queue)
+  const expectedQueueRevision = options.expectedQueueRevision ?? capturedToken?.expectedQueueRevision
+  const expectedProjectRevision = options.expectedProjectRevision ?? capturedToken?.expectedProjectRevision
   if (!options.projectRoot) {
     if (wasDatabaseAuthority) {
       throw new Error('Promoted rich task writes require projectRoot for normalized state stores')
     }
     writeProjectTaskQueueWithSummary(tasksPath, queue, options)
     return
+  }
+  if (wasDatabaseAuthority && (
+    typeof expectedQueueRevision !== 'number' ||
+    typeof expectedProjectRevision !== 'number'
+  )) {
+    throw new Error('Promoted rich task writes require the paired queue and project revision from their mutation read')
   }
 
   const originalTasks = queueTasks(queue).filter(isRecord)
@@ -2490,12 +2670,13 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
   const evidence: Array<{
     event: TaskEvidenceEventRecord
     retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+    history?: 'database' | 'outbox'
   }> = []
   for (const task of originalTasks) {
     const id = typeof task.id === 'string' ? task.id : ''
     if (!id) continue
     const updatedAt = typeof task.updatedAt === 'string' ? task.updatedAt : new Date().toISOString()
-    const runtime: Record<string, unknown> = {}
+    const runtime: Record<string, unknown> = isRecord(task.runtime) ? { ...task.runtime } : {}
     if (typeof task.assignedTo === 'string' || task.assignedTo === null) runtime.assignedTo = task.assignedTo
     if (typeof task.revisionCount === 'number' && task.revisionCount > 0) runtime.revisionCount = task.revisionCount
     if (isRecord(task.retryWindow)) runtime.retryWindow = task.retryWindow
@@ -2529,7 +2710,7 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
       })
     }
 
-    const workspace: Record<string, unknown> = {}
+    const workspace: Record<string, unknown> = isRecord(task.workspace) ? { ...task.workspace } : {}
     for (const field of ['worktreePath', 'branchName', 'baseBranch', 'mode', 'createdAt']) {
       if (typeof task[field] === 'string') workspace[field] = task[field]
     }
@@ -2568,6 +2749,7 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
             payload: record,
           },
           retention: TASK_EVIDENCE_RETENTION[kind],
+          ...(evidenceAuthority === 'compressed' ? { history: 'outbox' as const } : {}),
         })
       }
     }
@@ -2575,20 +2757,30 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
   // Queue definitions, mutable overlays, and bounded evidence are one
   // re-intake mutation. The state writer commits them together; a reader can
   // never observe a new queue with old runtime/evidence rows.
-  writeProjectTaskQueueWithSummary(tasksPath, wasDatabaseAuthority ? sanitized.queue : queue, {
+  const committedRevision = writeProjectTaskQueueWithSummary(tasksPath, wasDatabaseAuthority ? sanitized.queue : queue, {
     ...options,
+    ...(expectedQueueRevision !== undefined ? { expectedQueueRevision } : {}),
+    ...(expectedProjectRevision !== undefined ? { expectedProjectRevision } : {}),
     ...(wasDatabaseAuthority ? { taskDefinitionsAlreadySanitized: true } : {}),
     taskRuntimes: runtimeOverlays,
+    removeTaskRuntimeIds: originalTasks
+      .map(task => typeof task.id === 'string' ? task.id : '')
+      .filter(id => id && !runtimeOverlays.some(entry => entry.taskId === id)),
     taskWorkspaces: workspaceOverlays,
-    ...(evidenceAuthority === 'compressed' ? {} : { taskEvidence: evidence }),
+    removeTaskWorkspaceIds: originalTasks
+      .map(task => typeof task.id === 'string' ? task.id : '')
+      .filter(id => id && !workspaceOverlays.some(entry => entry.taskId === id)),
+    taskEvidence: evidence,
+    projectionTasks: originalTasks as unknown as Task[],
   })
-  // Compressed evidence is a detail-only ledger and cannot participate in the
-  // SQLite queue transaction. It still has one owner: use its canonical writer
-  // after the current-state commit rather than leaving a second evidence shape.
+  if (committedRevision !== null) {
+    bindProjectTaskQueueMutationToken(queue, {
+      expectedQueueRevision: committedRevision,
+      expectedProjectRevision: committedRevision,
+    })
+  }
   if (evidenceAuthority === 'compressed') {
-    for (const entry of evidence) {
-      await appendTaskEvidence(options.projectRoot, entry.event.taskId, entry.event)
-    }
+    await flushTaskEvidenceOutboxForTasksPath(tasksPath)
   }
 }
 
@@ -2614,18 +2806,24 @@ export function writeProjectTaskQueueWithSummary(
     taskEvidence?: readonly {
       event: TaskEvidenceEventRecord
       retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+      history?: 'database' | 'outbox'
     }[]
     taskRuntimes?: readonly { taskId: string; updatedAt?: string; payload: unknown }[]
+    removeTaskRuntimeIds?: readonly string[]
     taskWorkspaces?: readonly { taskId: string; updatedAt?: string; payload: unknown }[]
+    removeTaskWorkspaceIds?: readonly string[]
+    /** Effective post-mutation tasks used only for compact summary/scope projection. */
+    projectionTasks?: readonly Task[]
   } = {},
-): void {
+): number | null {
   const compatibilityExport = options.fullCompatibility === true
     ? 'full' as const
     : options.compactCompatibility === true
       ? 'compact' as const
       : undefined
   const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
-  const hasAtomicExtras = options.taskRuntimes !== undefined || options.taskWorkspaces !== undefined || options.taskEvidence !== undefined
+  const hasAtomicExtras = options.taskRuntimes !== undefined || options.removeTaskRuntimeIds !== undefined ||
+    options.taskWorkspaces !== undefined || options.removeTaskWorkspaceIds !== undefined || options.taskEvidence !== undefined
   if (databaseAuthority && compatibilityExport === undefined && !hasAtomicExtras) {
     // The public sanitizer calls this function with an explicit marker after
     // removing retired fields. Direct aggregate callers must be checked first
@@ -2643,12 +2841,23 @@ export function writeProjectTaskQueueWithSummary(
   // for migration/bootstrap input, but it cannot resurrect retired fields in
   // a promoted project's current task definitions.
   const persistedQueue = preserveProjectQueueEnvelope(tasksPath, currentQueue, compatibilityExport !== undefined)
-  if (databaseAuthority && !hasAtomicExtras && writeTargetedReleaseSelectionIfSafe(tasksPath, persistedQueue, options)) return
-  if (databaseAuthority && options.taskWorkspaces === undefined && writeTargetedTaskBatchMutationIfSafe(tasksPath, persistedQueue, options)) return
-  if (databaseAuthority && !hasAtomicExtras && writeTargetedTaskMutationIfSafe(tasksPath, persistedQueue, options)) return
+  if (databaseAuthority && !hasAtomicExtras) {
+    const committedRevision = writeTargetedReleaseSelectionIfSafe(tasksPath, persistedQueue, options)
+    if (committedRevision !== null) return committedRevision
+  }
+  if (databaseAuthority) {
+    const committedRevision = writeTargetedTaskBatchMutationIfSafe(tasksPath, persistedQueue, options)
+    if (committedRevision !== null) return committedRevision
+  }
+  if (databaseAuthority && !hasAtomicExtras) {
+    const committedRevision = writeTargetedTaskMutationIfSafe(tasksPath, persistedQueue, options)
+    if (committedRevision !== null) return committedRevision
+  }
   if (databaseAuthority && compatibilityExport === undefined && !hasAtomicExtras) {
     const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath)
-    if (currentQueue && sameCanonicalQueue(currentQueue, persistedQueue)) return
+    if (currentQueue && sameCanonicalQueue(currentQueue, persistedQueue)) {
+      return readProjectTaskQueueSyncWithRevision(tasksPath).projectRevision
+    }
     throw new Error(
       `Promoted project state cannot use aggregate queue replacement for ${tasksPath}; use a normalized task, structural batch, release-envelope, or explicit migration write.`,
     )
@@ -2685,6 +2894,7 @@ export function writeProjectTaskQueueWithSummary(
     ...(options.taskDefinitionsAlreadySanitized ? { taskDefinitionsAlreadySanitized: true } : {}),
     ...(compatibilityExport ? { compatibilityExport } : {}),
   })
+  return null
 }
 
 export async function readProjectTaskQueue(tasksPath: string): Promise<unknown> {
@@ -2705,6 +2915,27 @@ export interface ProjectTaskQueueMutationRead {
   queue: unknown
   expectedQueueRevision: number | null
   expectedProjectRevision: number | null
+}
+
+interface ProjectTaskQueueMutationToken {
+  expectedQueueRevision: number | null
+  expectedProjectRevision: number | null
+}
+
+// Mutation snapshots carry their paired CAS token by object identity. The
+// token is deliberately not serialized into project data, and the parse
+// adapter below transfers it to the typed queue object used by rich writers.
+const projectTaskQueueMutationTokens = new WeakMap<object, ProjectTaskQueueMutationToken>()
+
+function bindProjectTaskQueueMutationToken<T>(queue: T, token: ProjectTaskQueueMutationToken): T {
+  if (queue && typeof queue === 'object') projectTaskQueueMutationTokens.set(queue, token)
+  return queue
+}
+
+function projectTaskQueueMutationToken(queue: unknown): ProjectTaskQueueMutationToken | null {
+  return queue && typeof queue === 'object'
+    ? projectTaskQueueMutationTokens.get(queue) ?? null
+    : null
 }
 
 /**

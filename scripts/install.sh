@@ -44,6 +44,43 @@ verify_checksum() {
 
 mkdir -p "$APP_DIR" "$BIN_DIR" "$LOCAL_BIN_DIR" "$GUILDHALL_HOME/logs"
 
+stop_existing_launch_agent() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+
+  LAUNCH_AGENT_LABEL="io.guildhall.agent"
+  LAUNCH_AGENT_PLIST="$HOME_DIR/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
+  /bin/launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT_PLIST" >/dev/null 2>&1 || true
+
+  SERVICE_PID=""
+  if [ -f "$GUILDHALL_HOME/service.json" ]; then
+    SERVICE_PID="$(/usr/bin/python3 - "$GUILDHALL_HOME/service.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as fh:
+        value = json.load(fh).get('pid')
+    if isinstance(value, int) and value > 0:
+        print(value)
+except Exception:
+    pass
+PY
+)"
+  fi
+
+  if [ -n "$SERVICE_PID" ]; then
+    attempts=0
+    while /bin/kill -0 "$SERVICE_PID" 2>/dev/null; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 50 ]; then
+        printf 'Existing Guildhall service did not stop; leaving the prior install intact.\n' >&2
+        exit 1
+      fi
+      sleep 0.1
+    done
+  fi
+
+  rm -f "$GUILDHALL_HOME/service.json"
+}
+
 if [ -n "${GUILDHALL_ARTIFACT_DIR:-}" ]; then
   cp -R "$GUILDHALL_ARTIFACT_DIR" "$TMP_DIR/guildhall-macos"
 else
@@ -58,6 +95,8 @@ with open(sys.argv[1], 'r', encoding='utf-8') as fh:
     print(json.load(fh)['version'])
 PY
 )"
+
+stop_existing_launch_agent
 
 INSTALL_ID="${RELEASE_VERSION}-$(date +%s)-$$"
 RELEASE_DIR="${APP_DIR}/${INSTALL_ID}"

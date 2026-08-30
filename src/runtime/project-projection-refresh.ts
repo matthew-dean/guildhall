@@ -23,16 +23,22 @@ export interface ProjectProjectionRefreshSchedulerOptions {
 /**
  * Startup should repair missing or stale projections, not rebuild current
  * ones. Current saved summaries are already the fleet read boundary; making
- * service availability wait for every project detail refresh defeats it.
+ * service availability wait for every project detail refresh defeats it. A
+ * blocked task is the exception: it gets one bounded reconciliation pass so
+ * an internal recovery cannot remain visible as an owner decision forever.
  */
 export function shouldRefreshProjectAtStartup(input: {
   authority: 'database' | 'legacy'
   summaryFreshness: 'current' | 'stale' | 'missing' | 'error' | undefined
+  threadFreshness?: 'current' | 'stale' | 'missing'
   attentionNeedsRefresh?: boolean
+  blockedTaskCount?: number
 }): boolean {
   return input.authority !== 'database' ||
     input.summaryFreshness !== 'current' ||
-    input.attentionNeedsRefresh === true
+    (input.threadFreshness !== undefined && input.threadFreshness !== 'current') ||
+    input.attentionNeedsRefresh === true ||
+    (input.blockedTaskCount ?? 0) > 0
 }
 
 export interface ProjectProjectionRefreshScheduler {

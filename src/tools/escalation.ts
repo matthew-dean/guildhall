@@ -14,7 +14,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
-import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
+import { atomicWriteText, appendTaskEvidence, inferProjectRootFromSystemStatePath, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
 import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
 import {
   readProjectTaskQueueForMutationSync,
@@ -94,6 +94,12 @@ function normalizeEscalationText(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim()
 }
 
+function hasRecordedHardGateFailure(task: Task): boolean {
+  return (task.gateResults ?? []).some(gate =>
+    gate.type === 'hard' && gate.passed === false,
+  )
+}
+
 function findMatchingOpenEscalation(escalations: Escalation[], input: RaiseEscalationInput): Escalation | null {
   return escalations.find(escalation =>
     !escalation.resolvedAt &&
@@ -160,11 +166,7 @@ function persistEscalationTaskState(input: {
 }
 
 function projectRootForTaskState(tasksPath: string, task: Task): string {
-  const stateDir = path.dirname(tasksPath)
-  if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
-    return task.projectPath
-  }
-  return inferProjectRootFromMemoryDir(stateDir)
+  return inferProjectRootFromSystemStatePath(tasksPath, task.projectPath)
 }
 
 export async function raiseEscalation(
@@ -179,6 +181,17 @@ export async function raiseEscalation(
     const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
     Object.assign(task, effectiveTask)
     const effectiveEscalations = await readEffectiveEscalations(projectRoot, task)
+
+    // A provider's explanation of a failed command is audit material, not
+    // authority to halt a release. Only the typed gate ledger may establish a
+    // hard-gate failure.
+    if (input.reason === 'gate_hard_failure' && !hasRecordedHardGateFailure(task)) {
+      return {
+        success: false,
+        error:
+          'Cannot raise gate_hard_failure without a recorded failed hard gate. Run and persist the task\'s authoritative gates first.',
+      }
+    }
 
     if (input.handling === 'guildhall_recovery') {
       return {
@@ -227,6 +240,7 @@ export async function raiseEscalation(
       ...(input.externalChecklist !== undefined ? { externalChecklist: input.externalChecklist } : {}),
     }
     blockTaskForEscalation(task, input, now)
+    task.escalations = [...effectiveEscalations, escalation]
     queue.lastUpdated = now
 
     await appendTaskEvidence(projectRoot, task.id, {
@@ -342,6 +356,12 @@ const resolveEscalationInputSchema = z.object({
   resolution: z.string(),
   resolvedBy: z.string().default('human'),
   /**
+   * A one-click recovery may collapse repeated copies of the same typed
+   * escalation. It never uses human prose to decide which records belong
+   * together.
+   */
+  resolveEquivalent: z.boolean().optional(),
+  /**
    * Optional typed disposition for a gate failure outside this task's target
    * surface. Resolution prose alone can never create this exception.
    */
@@ -367,6 +387,14 @@ export type ResolveEscalationInput = z.input<typeof resolveEscalationInputSchema
 export interface ResolveEscalationResult {
   success: boolean
   error?: string
+  resolvedEscalationIds?: string[]
+}
+
+function hasSameRecoveryIdentity(left: Escalation, right: Escalation): boolean {
+  return left.reason === right.reason &&
+    left.agentId === right.agentId &&
+    left.handling === right.handling &&
+    left.recoveryCode === right.recoveryCode
 }
 
 function normalizeAssignmentForResolvedStatus(task: Task, nextStatus: z.infer<typeof resolveEscalationInputSchema>['nextStatus']): void {
@@ -454,10 +482,15 @@ export async function resolveEscalation(
       }
     }
 
+    const resolvedEscalations = input.resolveEquivalent === true && !input.gateScopeException
+      ? effectiveEscalations.filter(candidate => !candidate.resolvedAt && hasSameRecoveryIdentity(candidate, esc))
+      : [esc]
     const now = new Date().toISOString()
-    esc.resolvedAt = now
-    esc.resolution = input.resolution
-    esc.resolvedBy = input.resolvedBy ?? 'human'
+    for (const candidate of resolvedEscalations) {
+      candidate.resolvedAt = now
+      candidate.resolution = input.resolution
+      candidate.resolvedBy = input.resolvedBy ?? 'human'
+    }
     task.escalations = effectiveEscalations
     if (input.gateScopeException) {
       const exception = TaskGateScopeException.parse({
@@ -473,11 +506,11 @@ export async function resolveEscalation(
       ]
     }
 
-    const stillOpen = effectiveEscalations.some((e) => e.id !== esc.id && !e.resolvedAt)
+    const stillOpen = effectiveEscalations.some(e => !e.resolvedAt)
     let retryWindowPatch: Task['retryWindow'] | undefined
     if (!stillOpen) {
       normalizeAssignmentForResolvedStatus(task, input.nextStatus)
-      if (esc.reason === 'max_revisions_exceeded' && supportsRetryWindow(task.status)) {
+      if (resolvedEscalations.some(candidate => candidate.reason === 'max_revisions_exceeded') && supportsRetryWindow(task.status)) {
         ensureRetryWindow(task)
         retryWindowPatch = task.retryWindow ?? {
           startedAt: now,
@@ -492,17 +525,19 @@ export async function resolveEscalation(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await appendTaskEvidence(projectRoot, task.id, {
-      id: `${esc.id}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
-      kind: 'escalation',
-      recordedAt: now,
-      payload: esc,
-    })
+    for (const resolved of resolvedEscalations) {
+      await appendTaskEvidence(projectRoot, task.id, {
+        id: `${resolved.id}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+        kind: 'escalation',
+        recordedAt: now,
+        payload: resolved,
+      })
+    }
     await upsertTaskRuntimeState(projectRoot, task.id, {
       ...(task.assignedTo !== undefined ? { assignedTo: task.assignedTo } : {}),
       ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
       openEscalationIds: effectiveEscalations
-        .filter((candidate) => candidate.id !== esc.id && !candidate.resolvedAt)
+        .filter(candidate => !candidate.resolvedAt)
         .map((candidate) => candidate.id),
       ...(retryWindowPatch ?? task.retryWindow ? { retryWindow: retryWindowPatch ?? task.retryWindow } : {}),
       updatedAt: now,
@@ -522,14 +557,14 @@ export async function resolveEscalation(
         domain: task.domain,
         taskId: task.id,
         summary: stillOpen
-          ? `Escalation ${esc.id} resolved (${effectiveEscalations.filter((e) => e.id !== esc.id && !e.resolvedAt).length} still open): ${input.resolution}`
-          : `Escalation ${esc.id} resolved; task returning to ${input.nextStatus}: ${input.resolution}`,
+          ? `${resolvedEscalations.length} matching escalation${resolvedEscalations.length === 1 ? '' : 's'} resolved (${effectiveEscalations.filter(e => !e.resolvedAt).length} still open): ${input.resolution}`
+          : `${resolvedEscalations.length} matching escalation${resolvedEscalations.length === 1 ? '' : 's'} resolved; task returning to ${input.nextStatus}: ${input.resolution}`,
         type: 'milestone',
       }
       await logProgress({ progressPath: input.progressPath, entry })
     }
 
-    return { success: true }
+    return { success: true, resolvedEscalationIds: resolvedEscalations.map(candidate => candidate.id) }
   } catch (err) {
     return { success: false, error: String(err) }
   }

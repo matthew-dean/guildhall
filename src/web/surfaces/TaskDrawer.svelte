@@ -19,6 +19,7 @@
   import OverviewTab from './drawer/OverviewTab.svelte'
   import SpecTab from './drawer/SpecTab.svelte'
   import CurrentTab from './drawer/CurrentTab.svelte'
+  import SpecReviewDecision from './drawer/SpecReviewDecision.svelte'
   import JourneyTab from './drawer/JourneyTab.svelte'
   import TranscriptTab from './drawer/TranscriptTab.svelte'
   import HistoryTab from './drawer/HistoryTab.svelte'
@@ -27,7 +28,7 @@
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
   import type { DrawerPayload, DrawerTab, Escalation, Task } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
-  import { currentProjectHref, currentTaskHref, projectFetch } from '../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, isRequiredProjectMigrationError, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
   import { nav, path as navPath } from '../lib/nav.svelte.js'
   import { onMount, onDestroy } from 'svelte'
@@ -68,9 +69,10 @@
     projectId?: string | null
     routeHref?: string
     onClose: () => void
+    onMigrationRequired?: () => void
   }
 
-  let { taskId, projectId = null, routeHref = '', onClose }: Props = $props()
+  let { taskId, projectId = null, routeHref = '', onClose, onMigrationRequired }: Props = $props()
 
   let payload = $state<DrawerPayload | null>(null)
   let taskExtras = $state<TaskExtrasState>({})
@@ -180,13 +182,17 @@
     }
   }
 
-  function requestedInitialTab(href: string): DrawerTab | null {
+  function requestedParams(href: string): URLSearchParams {
     const queryStart = href.indexOf('?')
     const hashStart = href.indexOf('#', queryStart)
     const search = queryStart >= 0
       ? href.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart)
       : (typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, ''))
-    const raw = new URLSearchParams(search).get('tab')
+    return new URLSearchParams(search)
+  }
+
+  function requestedInitialTab(href: string): DrawerTab | null {
+    const raw = requestedParams(href).get('tab')
     if (raw === 'action') return 'current'
     if (
       raw === 'current' ||
@@ -201,6 +207,18 @@
       return raw
     }
     return null
+  }
+
+  function requestedFullRecord(href: string): boolean {
+    return requestedParams(href).get('detail') === 'full'
+  }
+
+  function requestedCheckpoint(href: string): boolean {
+    return requestedParams(href).get('detail') === 'checkpoint'
+  }
+
+  function requestedDiagnosticContext(href: string): boolean {
+    return requestedParams(href).get('diagnostics') === 'context'
   }
 
   const BASE_TABS = [
@@ -330,6 +348,29 @@
     }
   }
 
+  async function openGitPullRequest(): Promise<void> {
+    busy = true
+    try {
+      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}/git-story/open-pr`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const body = await res.json().catch(() => ({})) as { error?: string; url?: string }
+      if (!res.ok) {
+        error = body.error ?? `HTTP ${res.status}`
+        return
+      }
+      await load()
+      await project.refresh(scopedProjectId())
+      toast.success(body.url ? 'Pull request opened.' : 'Pull request requested.')
+    } catch (err) {
+      error = friendlyFetchError(err)
+    } finally {
+      busy = false
+    }
+  }
+
   function eventPayload(event: TaskHistoryEvent): Record<string, unknown> {
     const payload = event.payload && typeof event.payload === 'object' ? { ...event.payload } : {}
     if (!payload.timestamp && event.recordedAt) payload.timestamp = event.recordedAt
@@ -378,7 +419,12 @@
       )
       if (!res.ok) {
         const b = await res.json().catch(() => ({}))
-        error = b.error ?? `HTTP ${res.status}`
+        const message = b.error ?? `HTTP ${res.status}`
+        if (isRequiredProjectMigrationError(message)) {
+          onMigrationRequired?.()
+          return false
+        }
+        error = message
         return false
       }
       await load()
@@ -400,10 +446,39 @@
     approveSpecOpen = true
   }
 
+  async function handleRequestSpecChanges(message: string): Promise<void> {
+    if (!(await post('resume', { message, revisionTarget: 'spec' }))) return
+    await project.refresh(scopedProjectId())
+    toast.success('Guildhall will revise this spec.')
+  }
+
+  function openFullTaskRecord(): void {
+    nav(`${currentTaskHref(taskId, scopedProjectId())}?detail=full&tab=overview`, {
+      backgroundPath: drawerBackgroundPath(),
+    })
+  }
+
+  function openCheckpoint(): void {
+    nav(`${currentTaskHref(taskId, scopedProjectId())}?detail=checkpoint`, {
+      backgroundPath: drawerBackgroundPath(),
+    })
+  }
+
+  async function openProjectDecision(): Promise<void> {
+    const targetTaskId = projectPrimaryAction?.taskId
+    if (!targetTaskId) return
+    if (projectPrimaryAction?.operation === 'repair_spec') {
+      await runProject('start', targetTaskId)
+      return
+    }
+    nav(currentTaskHref(targetTaskId, scopedProjectId()), {
+      backgroundPath: drawerBackgroundPath(),
+    })
+  }
+
   async function submitApproveSpec() {
     const note = approveSpecNote.trim()
     const body = note ? { approvalNote: note } : undefined
-    approveSpecOpen = false
     if (taskId === 'task-workspace-import') {
       busy = true
       try {
@@ -418,6 +493,7 @@
           return
         }
         await load()
+        approveSpecOpen = false
         return
       } catch (err) {
         error = friendlyFetchError(err)
@@ -426,7 +502,13 @@
         busy = false
       }
     }
-    await post('approve-spec', body)
+    if (await post('approve-spec', body)) {
+      approveSpecOpen = false
+      // The task record is current after `post`, but the drawer's next branch
+      // belongs to the shared project action. Refresh it before rendering so a
+      // completed approval never strands the owner in the old spec document.
+      await project.refresh(scopedProjectId())
+    }
   }
 
   function handleResolveEscalation(escalation: Escalation, mode: 'retry' | 'resolve' = 'resolve') {
@@ -445,6 +527,7 @@
       escalationId: escalation.id,
       resolution: action.resolution,
       nextStatus: action.nextStatus,
+      resolveEquivalent: true,
     }))) return
     await project.refresh()
     toast.success('This task can continue.')
@@ -634,6 +717,64 @@
     }
     return next
   })
+  const fullRecordRequested = $derived(requestedFullRecord(routeHref || navPath.href || currentBrowserHref()))
+  const checkpointRequested = $derived(requestedCheckpoint(routeHref || navPath.href || currentBrowserHref()))
+  const diagnosticContextRequested = $derived(requestedDiagnosticContext(routeHref || navPath.href || currentBrowserHref()))
+  const scopeHandoffState = $derived.by(() => task?.id
+    ? project.detail?.orientationSpine?.scopeRows?.find(row => row.taskId === task.id)?.handoffState
+    : null)
+  const isSpecRepair = $derived(scopeHandoffState === 'spec_shaping')
+  const focusedSpecRepair = $derived(task?.status === 'spec_review' && isSpecRepair && !fullRecordRequested)
+  // The shared readiness model owns approvals. Older routes without that
+  // model retain their compatibility behavior, but an explicit empty list
+  // means no selected review row can invent an owner decision.
+  const ownerReviewTaskIds = $derived(
+    project.detail?.startReadiness
+      ? project.detail.startReadiness.reviewTaskIds ?? []
+      : undefined,
+  )
+  const ownerSpecReview = $derived(
+    ownerReviewTaskIds
+      ? Boolean(task?.id && ownerReviewTaskIds.includes(task.id))
+      : task?.specReviewGate?.authority !== 'coordinator',
+  )
+  const focusedSpecReview = $derived(task?.status === 'spec_review' && ownerSpecReview && !isSpecRepair && !fullRecordRequested)
+  const openEscalations = $derived(task ? activeEscalations(task) : [])
+  const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
+  const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)
+  const firstOpenEscalation = $derived(hasCompletionEscalationHygieneWarning ? null : (openEscalations[0] ?? null))
+  // Detail carries a revision-matched action model. The page store may still
+  // describe a previous project decision while a drawer is open.
+  const projectPrimaryAction = $derived(payload?.actionModel?.primaryAction ?? project.detail?.actionModel?.primaryAction ?? null)
+  const projectDecisionEyebrow = $derived(
+    projectPrimaryAction?.operation === 'repair_spec'
+      ? 'One repair is ready'
+      : 'Next action',
+  )
+  const systemRepairedGateBlocker = $derived(Boolean(
+    task?.status === 'ready' &&
+    (task.escalations ?? []).some(escalation =>
+      escalation.reason === 'gate_hard_failure' && escalation.resolvedBy === 'system',
+    ),
+  ))
+  const projectDecisionContext = $derived(
+    firstOpenEscalation
+      ? 'The task you opened stopped. Guildhall has selected the next work item that can move forward.'
+      : systemRepairedGateBlocker
+        ? 'Guildhall cleared a blocker that was not tied to this task. This task is ready again after the current work item.'
+      : null,
+  )
+  const projectDecisionElsewhere = $derived(Boolean(
+    !fullRecordRequested &&
+    !focusedSpecReview &&
+    !focusedSpecRepair &&
+    // The shared project action is the single owner-facing priority. A
+    // selected task's recovery remains reachable as its full record, but it
+    // cannot independently replace a newer project decision.
+    task?.id &&
+    projectPrimaryAction?.taskId &&
+    projectPrimaryAction.taskId !== task.id,
+  ))
   const currentWorkProgress = $derived(task ? payload?.workProgress?.byTaskId?.[task.id] ?? null : null)
   const currentDeliveryBadge = $derived(deliveryProgressBadge(currentWorkProgress))
   const allTaskContext = $derived.by(() => {
@@ -668,7 +809,20 @@
   const runStatus = $derived(payload?.runStatus ?? project.detail?.run?.status ?? 'stopped')
   const availabilityStatus = $derived(payload?.availability?.status ?? project.detail?.availability?.status ?? 'active')
   const hasCurrentTurns = $derived((taskExtras.threadTurns?.length ?? payload?.threadTurns?.length ?? 0) > 0)
-  const tabs = $derived([BASE_TABS[0], { id: 'current', label: 'Action' }, ...BASE_TABS.slice(1)] as const)
+  // Normal detail only answers the owner's two jobs: understand the current
+  // work or deliberately read its specification. Diagnostic views stay
+  // linkable for audit evidence, but do not compete as peer navigation.
+  const tabs = $derived.by(() => {
+    const diagnosticTab = BASE_TABS.find(tab =>
+      tab.id === activeTab && !['overview', 'spec'].includes(tab.id),
+    )
+    return [
+      BASE_TABS[0],
+      ...(hasCurrentTurns ? [{ id: 'current', label: 'Action' } as const] : []),
+      BASE_TABS[1],
+      ...(diagnosticTab ? [diagnosticTab] : []),
+    ]
+  })
   function isTerminalRunStatus(status: string | undefined): boolean {
     return status === 'done' || status === 'shelved' || status === 'pending_pr'
   }
@@ -703,24 +857,65 @@
   const isShelved = $derived(task?.status === 'shelved')
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const hasUnansweredTaskQuestion = $derived(Boolean(task?.openQuestions?.some(question => !question.answeredAt && !question.answer)))
-  const openEscalations = $derived(task ? activeEscalations(task) : [])
-  const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])
-  const hasCompletionEscalationHygieneWarning = $derived(completionEscalations.length > 0)
-  const firstOpenEscalation = $derived(hasCompletionEscalationHygieneWarning ? null : (openEscalations[0] ?? null))
   const projectStartBlocker = $derived(
     project.detail?.startReadiness?.canStart === false
       ? project.detail.startReadiness
       : null,
   )
+  const requiredProjectUpdateBeforeSpecReview = $derived(
+    focusedSpecReview && projectStartBlocker?.code === 'required_migration_pending',
+  )
   const projectStartBlockerMessage = $derived(projectStartBlocker?.message ?? null)
+  $effect(() => {
+    if (!requiredProjectUpdateBeforeSpecReview) return
+    onMigrationRequired?.()
+  })
   const canRunTaskDirectly = $derived(
     !projectStartBlocker &&
+    !isSpecRepair &&
     !isTerminalRunTask &&
     !isContainingWorkTask &&
     !firstOpenEscalation &&
     !hasUnansweredTaskQuestion &&
     (!hasCurrentTurns || task?.status === 'ready'),
   )
+  // The shared project action has already chosen this task. Lead with that
+  // command; the record is available only when the owner explicitly asks for it.
+  const showFocusedRunAction = $derived(Boolean(
+    task &&
+    !fullRecordRequested &&
+    !focusedSpecReview &&
+    !focusedSpecRepair &&
+    !projectDecisionElsewhere &&
+    !isWorkspaceImportTask &&
+    runStatus !== 'running' &&
+    runStatus !== 'stopping' &&
+    canRunTaskDirectly &&
+    projectPrimaryAction?.taskId === task.id,
+  ))
+  // A focused task that has actually started owns this surface too. The owner
+  // needs confirmation and an exit ramp, not the task's implementation record.
+  const showFocusedRunningState = $derived(Boolean(
+    task &&
+    !fullRecordRequested &&
+    !focusedSpecReview &&
+    !focusedSpecRepair &&
+    !projectDecisionElsewhere &&
+    runStatus === 'running' &&
+    task.status === 'in_progress',
+  ))
+  const showSettledCompletionHandoff = $derived(Boolean(
+    task &&
+    !fullRecordRequested &&
+    !focusedSpecReview &&
+    !focusedSpecRepair &&
+    !projectDecisionElsewhere &&
+    !hasCompletionEscalationHygieneWarning &&
+    activeTab === 'overview' &&
+    task.status === 'done' &&
+    projectPrimaryAction === null,
+  ))
+  const showFocusedRunHandoff = $derived(showFocusedRunAction || showFocusedRunningState || showSettledCompletionHandoff)
   const canResumeHold = $derived(!projectStartBlocker && isHeld && !firstOpenEscalation)
   const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const firstOpenEscalationGuidance = $derived(escalationUserGuidance(firstOpenEscalation))
@@ -732,6 +927,11 @@
   )
   const drawerOutcome = $derived.by(() => {
     if (!task) return null
+    // An unrelated task record must not compete with the project's owner decision.
+    if (projectDecisionElsewhere) return null
+    // A direct repository-decision route owns the task's next move. Historical
+    // merge failures belong in diagnostics, not above the actionable branch card.
+    if (fullRecordRequested && activeTab === 'provenance' && task.gitStory?.state === 'no_upstream') return null
     if (task.status === 'shelved') {
       return {
         tone: 'warn',
@@ -758,6 +958,16 @@
         eyebrow: 'Completion hygiene',
         title: 'This task is marked done but still has unresolved escalation history.',
         detail: firstEscalation?.summary ?? 'Review the unresolved escalation before treating the completion as clean.',
+      }
+    }
+    // Once the shared project action has settled, historical landing failures
+    // belong to the explicit record rather than the completion headline.
+    if (task.status === 'done' && projectPrimaryAction === null) {
+      return {
+        tone: 'ok',
+        eyebrow: 'Finished',
+        title: 'This task is complete.',
+        detail: 'Its completed work is already part of the project history.',
       }
     }
     if (task.terminalSummary?.headline) {
@@ -835,6 +1045,7 @@
   })
   const stageRerun = $derived.by(() => {
     if (!task) return null
+    if (isSpecRepair) return null
     if (task.id === 'task-meta-intake' || task.id === 'task-workspace-import') return null
     if (['exploring', 'spec_review', 'ready', 'proposed'].includes(task.status ?? '')) {
       return { stage: 'spec' as const, label: 'Re-draft spec' }
@@ -862,7 +1073,9 @@
     if (requested && (requested !== 'current' || hasCurrentTurns)) {
       activeTab = requested
     } else if (taskChanged) {
-      activeTab = 'overview'
+      // A direct recovery route is the first owner job for this task. Do not
+      // make the owner discover it behind an Overview tab.
+      activeTab = firstOpenEscalation && hasCurrentTurns ? 'current' : 'overview'
     }
     initializedTabForTaskId = taskId
     initializedTabForHref = href
@@ -884,7 +1097,7 @@
       void loadTaskExtras('context')
     }
     if (activeTab === 'provenance') {
-      void loadTaskExtras('context')
+      if (diagnosticContextRequested) void loadTaskExtras('context')
       void loadTaskGitStory()
     }
   })
@@ -974,6 +1187,11 @@
       }
       setTimeout(() => void project.refresh(scopedProjectId()), 500)
       setTimeout(() => void project.refresh(scopedProjectId()), 1800)
+      // A cross-task repair can finish in one focused pass. Refresh the
+      // drawer packet alongside the project cache so its stale action does
+      // not remain clickable until the ordinary polling interval.
+      setTimeout(() => void load(), 500)
+      setTimeout(() => void load(), 1800)
     } catch (err) {
       runError = friendlyFetchError(err)
     } finally {
@@ -1046,8 +1264,8 @@
           <span>{taskDisplayKey(taskId, allTaskContext, scopedProjectId())}</span>
         {/if}
       </nav>
-      <h3>{displayTaskTitle}</h3>
-      {#if currentDeliveryBadge}
+      <h3 title={displayTaskTitle}>{displayTaskTitle}</h3>
+      {#if currentDeliveryBadge && !showFocusedRunHandoff && !focusedSpecRepair}
         <div class="drawer-progress-line">
           <Chip
             label={currentDeliveryBadge.label}
@@ -1061,7 +1279,26 @@
     </Button>
   </header>
 
-  {#if payload}
+  {#if payload && isSpecRepair && fullRecordRequested}
+    <UtilityPanel as="section" className="drawer-spec-repair" tone="neutral" railStrength="strong" ariaLabel="Spec repair">
+      <span class="outcome-eyebrow">Guildhall is repairing this spec</span>
+      <strong>{runStatus === 'running' ? 'Repair in progress.' : 'Run one repair pass.'}</strong>
+      <span>{runStatus === 'running' ? 'Guildhall will bring this back for review when the spec is ready.' : 'Guildhall needs one focused pass before this spec can be reviewed.'}</span>
+      {#if task && runStatus !== 'running' && runStatus !== 'stopping'}
+        <div class="drawer-spec-repair-actions">
+          <Button variant="agent" size="sm" disabled={runBusy} onclick={() => runProject('start', task.id)}>
+            <Icon name="sparkles" size={14} />
+            Repair spec
+          </Button>
+        </div>
+      {/if}
+      {#if runError}
+        <span class="drawer-run-action-error">{runError}</span>
+      {/if}
+    </UtilityPanel>
+  {/if}
+
+  {#if payload && !focusedSpecReview && !focusedSpecRepair && !projectDecisionElsewhere && !showFocusedRunHandoff}
     <div class="gh-drawer-tabs">
       <Tabs
         tabs={tabs}
@@ -1080,7 +1317,81 @@
     {:else if !payload}
       <p class="loading">Loading...</p>
       {:else}
-      {#if drawerOutcome && !activeTabOwnsEscalationDecision}
+      {#if showFocusedRunAction && task}
+        <UtilityPanel
+          as="section"
+          className="drawer-run-action"
+          tone="accent"
+          railStrength="strong"
+          ariaLabel="Current task action"
+        >
+          <span class="outcome-eyebrow">{projectPrimaryAction?.ownerHeading ?? 'Ready to continue'}</span>
+          <span class="drawer-run-action-copy">{projectPrimaryAction?.detail ?? 'Guildhall can continue this work item.'}</span>
+          {#if runError}
+            <span class="drawer-run-action-error">{runError}</span>
+          {/if}
+          <div class="drawer-run-action-actions">
+            <Button
+              variant="agent"
+              size="sm"
+              disabled={runBusy || runStatus === 'stopping'}
+              onclick={() => runProject('start', task.id)}
+            >
+              <Icon name="sparkles" size={14} />
+              {projectPrimaryAction?.buttonLabel ?? 'Resume work'}
+            </Button>
+            {#if checkpointRequested}
+              <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>Open full task record</Button>
+            {:else}
+              <Button variant="secondary" size="sm" onclick={openCheckpoint}>View checkpoint</Button>
+            {/if}
+          </div>
+        </UtilityPanel>
+        {#if checkpointRequested && drawerOutcome}
+          <UtilityPanel
+            as="section"
+            className="drawer-outcome"
+            tone={drawerOutcomeTone}
+            railStrength="strong"
+            ariaLabel={drawerOutcome.eyebrow}
+          >
+            <span class="outcome-eyebrow">{drawerOutcome.eyebrow}</span>
+            <strong>{drawerOutcome.title}</strong>
+            <span>{drawerOutcome.detail}</span>
+          </UtilityPanel>
+        {/if}
+      {:else if showFocusedRunningState && task}
+        <UtilityPanel
+          as="section"
+          className="drawer-run-action"
+          tone="accent"
+          railStrength="strong"
+          ariaLabel="Current work is running"
+        >
+          <span class="outcome-eyebrow">Work is underway</span>
+          <strong>Guildhall is working on {displayTaskTitle}.</strong>
+          <span class="drawer-run-action-copy">Nothing is waiting on you right now. Guildhall will return when it needs a decision or reaches a result.</span>
+          <div class="drawer-run-action-actions">
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
+          </div>
+        </UtilityPanel>
+      {:else if showSettledCompletionHandoff && task}
+        <UtilityPanel
+          as="section"
+          className="drawer-run-action"
+          tone="ok"
+          railStrength="strong"
+          ariaLabel="Task complete"
+        >
+          <span class="outcome-eyebrow">Finished</span>
+          <strong>This task is complete.</strong>
+          <span class="drawer-run-action-copy">Its completed work is already part of the project history.</span>
+          <div class="drawer-run-action-actions">
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
+          </div>
+        </UtilityPanel>
+      {:else}
+      {#if drawerOutcome && !activeTabOwnsEscalationDecision && !focusedSpecReview && !focusedSpecRepair}
         <UtilityPanel
           as="section"
           className="drawer-outcome"
@@ -1093,7 +1404,7 @@
           <span>{drawerOutcome.detail}</span>
         </UtilityPanel>
       {/if}
-      {#if devServers.length > 0}
+      {#if devServers.length > 0 && !focusedSpecReview}
         <section class="drawer-dev-servers" aria-label="Runtime dev servers">
           {#each devServers as server}
             <UtilityPanel as="div" className="drawer-dev-server" tone="neutral">
@@ -1123,7 +1434,54 @@
           {/each}
         </section>
       {/if}
-      {#if activeTab === 'current'}
+      {#if requiredProjectUpdateBeforeSpecReview}
+        <p class="loading">Opening project update...</p>
+      {:else if focusedSpecRepair && task}
+        <UtilityPanel as="section" className="drawer-spec-repair" tone="neutral" railStrength="strong" ariaLabel="Spec repair">
+          <span class="outcome-eyebrow">Guildhall is repairing this spec</span>
+          <strong>{runStatus === 'running' ? 'Repair in progress.' : 'Run one repair pass.'}</strong>
+          <span>{runStatus === 'running' ? 'Guildhall will bring this back for review when the spec is ready.' : 'Guildhall needs one focused pass before this spec can be reviewed.'}</span>
+          <div class="drawer-spec-repair-actions">
+            {#if runStatus !== 'running' && runStatus !== 'stopping'}
+              <Button variant="agent" size="sm" disabled={runBusy} onclick={() => runProject('start', task.id)}>
+                <Icon name="sparkles" size={14} />
+                Repair spec
+              </Button>
+            {/if}
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>Read full task record</Button>
+          </div>
+          {#if runError}
+            <span class="drawer-run-action-error">{runError}</span>
+          {/if}
+        </UtilityPanel>
+      {:else if focusedSpecReview && task}
+        <SpecReviewDecision
+          {busy}
+          onApprove={handleApproveSpec}
+          onRequestChanges={handleRequestSpecChanges}
+          onOpenFullRecord={openFullTaskRecord}
+        />
+      {:else if projectDecisionElsewhere && projectPrimaryAction}
+        <UtilityPanel as="section" className="drawer-project-decision" tone="warn" railStrength="strong" ariaLabel="Project decision">
+          <span class="outcome-eyebrow">{projectDecisionEyebrow}</span>
+          <strong>{projectPrimaryAction.label}</strong>
+          {#if projectPrimaryAction.taskLabel}
+            <span class="drawer-project-decision-task" title={projectPrimaryAction.taskLabel}>
+              {projectPrimaryAction.taskLabel}
+            </span>
+          {/if}
+          {#if projectPrimaryAction.detail}
+            <span class="drawer-project-decision-detail">{projectPrimaryAction.detail}</span>
+          {/if}
+          {#if projectDecisionContext}
+            <span class="drawer-project-decision-context">{projectDecisionContext}</span>
+          {/if}
+          <div class="drawer-project-decision-actions">
+            <Button variant="primary" size="sm" disabled={busy || runBusy} onclick={openProjectDecision}>{projectPrimaryAction.buttonLabel}</Button>
+            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View this task record</Button>
+          </div>
+        </UtilityPanel>
+      {:else if activeTab === 'current'}
         <CurrentTab
           {task}
           turns={taskExtras.threadTurns ?? payload.threadTurns ?? []}
@@ -1135,6 +1493,7 @@
           {projectStartBlockerMessage}
           contextDebug={taskExtras.contextDebug ?? []}
           workProgress={currentWorkProgress}
+          canApproveSpec={!isSpecRepair}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onRunTask={() => runProject('start', taskId)}
@@ -1151,6 +1510,7 @@
           projectId={scopedProjectId()}
           deliverySpine={payload.deliverySpine}
           workProgress={currentWorkProgress}
+          handoffState={scopeHandoffState}
           onNavigateTask={navigateToRelatedTask}
           onCreateSplitChildren={handleCreateSplitChildren}
           createSplitBusy={splitTaskBusy}
@@ -1159,6 +1519,8 @@
         <SpecTab
           {task}
           {busy}
+          specRepair={isSpecRepair}
+          canApproveSpec={ownerSpecReview && !isSpecRepair}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onPause={handleOpenHold}
@@ -1190,13 +1552,16 @@
             {task}
             contextDebug={taskExtras.contextDebug ?? []}
             gitStoryLoaded={loadedExtras.has('git-story')}
+            {busy}
+            onOpenPullRequest={openGitPullRequest}
           />
         {/if}
+      {/if}
       {/if}
     {/if}
   </div>
 
-  {#if payload && task}
+  {#if payload && task && !focusedSpecRepair && !projectDecisionElsewhere && !showFocusedRunHandoff}
     <footer class="gh-drawer-foot">
       {#if isWorkspaceImportTask}
         <div class="footer-actions-left">
@@ -1220,7 +1585,7 @@
             Open import review
           </Button>
         </div>
-      {:else}
+      {:else if !focusedSpecReview}
         <div class="footer-actions-left">
           <div class="run-controls">
             {#if runError}
@@ -1247,7 +1612,9 @@
                   onclick={() => runProject('start', task.id)}
                 >
                   <Icon name="sparkles" size={14} />
-                  Resume only this work item
+                  {projectPrimaryAction?.taskId === task.id
+                    ? projectPrimaryAction.buttonLabel ?? 'Resume work'
+                    : 'Resume only this work item'}
                 </Button>
               {/if}
             {/if}
@@ -1343,12 +1710,13 @@
           {#if firstOpenEscalation && !activeTabOwnsEscalationDecision}
             {#if firstOpenEscalationGuidance.actionOwner === 'user' && canReframeTask}
               <Button
-                variant="secondary"
+                variant="agent"
                 size="sm"
                 disabled={busy || runBusy}
-                onclick={handleOpenReframe}
+                onclick={() => handleOpenEscalationAction(firstOpenEscalation.id, 'retry')}
               >
-                Reframe task...
+                <Icon name="sparkles" size={14} />
+                {firstOpenEscalationAction.label}
               </Button>
               {#if firstOpenEscalationIsWorkspaceBuild}
                 <Button
@@ -1378,7 +1746,7 @@
                 disabled={busy}
                 onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
               >
-                I handled this...
+                Mark blocker resolved...
               </Button>
             {/if}
           {/if}
@@ -1425,6 +1793,9 @@
   size="sm"
 >
   {#snippet children()}
+    {#if error}
+      <p class="form-error" role="alert">{error}</p>
+    {/if}
     <Field label="Note (optional)">
       <Textarea
         bind:value={approveSpecNote}
@@ -1602,6 +1973,12 @@
     gap: var(--s-1);
     min-width: 0;
   }
+  .drawer-title-block h3 {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .drawer-breadcrumb {
     display: flex;
     align-items: center;
@@ -1643,6 +2020,58 @@
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-relaxed);
+  }
+  :global(.drawer-project-decision) {
+    display: grid;
+    gap: var(--s-3);
+  }
+  .drawer-project-decision-task {
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+    line-height: var(--gh-type-line-height-tight);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .drawer-project-decision-detail {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-relaxed);
+  }
+  .drawer-project-decision-context {
+    color: var(--text-subtle);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-relaxed);
+  }
+  :global(.drawer-run-action) {
+    display: grid;
+    gap: var(--s-3);
+  }
+  :global(.drawer-run-action) strong {
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-tight);
+  }
+  :global(.drawer-run-action-copy) {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-relaxed);
+  }
+  .drawer-run-action-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .drawer-run-action-error {
+    color: var(--danger);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-tight);
+  }
+  .drawer-project-decision-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
   }
   .modal-copy {
     margin: 0;

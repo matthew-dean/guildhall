@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import type { ResolvedConfig } from '@guildhall/config'
-import { getProjectRecentEventsPath, getProjectSystemStatePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
+import { getProjectRecentEventsPath, getProjectSystemStatePath, promoteProjectStateDatabaseAuthority, updateProjectStateDatabaseSummaryAndCurrentState } from '@guildhall/sessions'
 import { OrchestratorSupervisor, compactProjectRecentEvents, readPersistedEventPage, recoverOrphanedExecutionProjection } from '../serve-supervisor.js'
+import { pausedThreadFocusTaskId } from '../serve.js'
 import { readProjectSummaryProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
 import { clearProviderClientPool, getOrCreateProviderClient, openAiCompatiblePoolKey } from '../provider-client-pool.js'
 import type { ApiMessageRequest, ApiStreamEvent, SupportsStreamingMessages } from '@guildhall/engine'
@@ -37,6 +38,36 @@ async function drain(client: SupportsStreamingMessages): Promise<void> {
 }
 
 describe('OrchestratorSupervisor', () => {
+  it('keeps paused live work focused when the shared decision is resumable', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-paused-thread-focus-'))
+    try {
+      const tasksPath = getProjectSystemStatePath(workspacePath, 'TASKS.json')
+      writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+        projectId: 'paused-thread-focus',
+        queue: { version: 1, lastUpdated: '2026-08-30T00:00:00.000Z', tasks: [] },
+      })
+      promoteProjectStateDatabaseAuthority(workspacePath)
+      updateProjectStateDatabaseSummaryAndCurrentState(tasksPath, summary => ({
+        summary: {
+          ...summary,
+          decision: {
+            ...(summary.decision as Record<string, unknown>),
+            execution: {
+              state: 'runnable',
+              code: 'paused_live_work',
+              focusTaskId: 'task-paused',
+              focus: { taskId: 'task-paused', displayTitle: 'Resume the focused task' },
+            },
+          },
+        },
+      }))
+
+      expect(pausedThreadFocusTaskId(tasksPath)).toBe('task-paused')
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
   it('persists only typed live worker ownership and clears it at lifecycle exit', async () => {
     const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-active-task-'))
     let letWorkerStartContinue!: () => void
@@ -62,7 +93,22 @@ describe('OrchestratorSupervisor', () => {
       })
       promoteProjectStateDatabaseAuthority(workspacePath)
 
-      const run = supervisor.start({ workspaceId: 'active-task-project', workspacePath })
+      const run = supervisor.start({
+        workspaceId: 'active-task-project',
+        workspacePath,
+        initialActiveTask: {
+          id: 'task-live',
+          title: 'Prove live execution identity',
+        },
+      })
+      // A named owner start stays oriented before a worker emits its first
+      // lifecycle event.
+      expect(supervisor.get('active-task-project')?.activeTaskId).toBe('task-live')
+      expect(readProjectSummaryProjection(tasksPath)?.execution).toMatchObject({
+        status: 'running',
+        activeTaskId: 'task-live',
+        activeTaskTitle: 'Prove live execution identity',
+      })
       letWorkerStartContinue()
       await new Promise(resolve => setTimeout(resolve, 0))
       expect(supervisor.get('active-task-project')?.activeTaskId).toBe('task-live')
@@ -427,6 +473,31 @@ describe('OrchestratorSupervisor', () => {
       expect(forced).toBe(true)
       expect(run.status).toBe('stopped')
     } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('settles an unresponsive pause into a resumable state without another owner action', async () => {
+    vi.useFakeTimers()
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
+    const supervisor = new OrchestratorSupervisor({
+      resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
+      runOrchestrator: async () => {
+        await new Promise<void>(() => {})
+        return STOP_SUMMARY
+      },
+    })
+
+    try {
+      const run = supervisor.start({ workspaceId: 'w', workspacePath })
+      expect(await supervisor.stop('w', { waitMs: 0, reason: 'owner_pause' })).toBe(false)
+      expect(run.status).toBe('stopping')
+
+      await vi.advanceTimersByTimeAsync(3_000)
+
+      expect(run.status).toBe('stopped')
+    } finally {
+      vi.useRealTimers()
       await rm(workspacePath, { recursive: true, force: true })
     }
   })

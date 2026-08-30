@@ -64,6 +64,47 @@ function queue(tasks: Record<string, unknown>[], extra: Record<string, unknown> 
   })
 }
 
+function ownerReviewFields(): Record<string, unknown> {
+  return {
+    productBrief: {
+      userJob: 'Review a bounded implementation plan.',
+      successMetric: 'The task has a complete owner-reviewable contract.',
+      nonGoals: ['Do not start implementation during review.'],
+      authoredBy: 'spec-agent',
+    },
+    structuredSpec: {
+      whatThisIs: 'A bounded implementation plan.',
+      problemContext: 'The task needs an explicit completion contract.',
+      goals: ['Provide a reviewable implementation plan.'],
+      nonGoals: ['Do not start implementation during review.'],
+      proposedDesign: 'Use the existing project boundary.',
+      keyDecisions: ['Keep the scope bounded.'],
+      acceptanceCriteria: [{
+        scenario: 'Given the owner opens the review',
+        expectation: 'The completion contract is visible.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the contract before approval.'],
+      completionBoundary: {
+        productOutcome: 'The owner can approve a complete plan.',
+        whatGuildhallCanCompleteInCode: 'Record the implementation contract.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The registered project.',
+        whatCountsAsDone: 'The complete contract is available for review.',
+        whatMustBeSplitOrBlocked: 'Split only independent work.',
+        splitPolicy: 'conditional',
+      },
+    },
+    acceptanceCriteria: [{
+      id: 'ac-1',
+      description: 'The completion contract is visible.',
+      verifiedBy: 'review',
+      met: false,
+    }],
+  }
+}
+
 describe('project-summary-projection', () => {
   let temp: string | undefined
 
@@ -96,6 +137,22 @@ describe('project-summary-projection', () => {
     expect(projectSummaryProjectionIsCurrent(legacy)).toBe(false)
     expect(projectSummaryProjectionIsCurrent({ ...projection, version: 26 })).toBe(false)
     expect(projectSummaryProjectionIsCurrent({ ...projection, version: 27 })).toBe(false)
+  })
+
+  it('settles completed unscoped work without a fake release action', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 't-minus-t',
+      queue: queue([task('task-004', 'done')]),
+      generatedAt: now,
+    })
+
+    expect(projection.releaseSummary.release).toBeNull()
+    expect(projection.nextAction).not.toMatchObject({ code: 'release_ready' })
+    expect(projection.decision.primaryAction).toEqual({
+      kind: 'none',
+      reasonCode: 'all_terminal',
+    })
+    expect(projection.actionModel).toMatchObject({ primaryAction: null })
   })
 
   it('hydrates a legacy decision from the selected release lifecycle before action reconciliation', () => {
@@ -167,7 +224,7 @@ describe('project-summary-projection', () => {
         ...projection.decision,
         primaryAction: { kind: 'open_work' as const, targetId: 'done-task', reasonCode: 'ready_work' },
       },
-    }
+    } as typeof projection
 
     expect(synchronizeProjectSummaryDecision(stale).decision.primaryAction).toEqual({
       kind: 'none',
@@ -175,10 +232,49 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('makes a saved blocked-task action own an older ready-work decision', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([task('ready-task', 'ready', { spec: 'A real spec.' })]),
+      generatedAt: now,
+    })
+    const stale = {
+      ...projection,
+      actionModel: {
+        ...projection.actionModel,
+        primaryAction: {
+          source: 'task' as const,
+          code: 'blocked_work' as const,
+          taskId: 'blocked-task',
+          label: 'Component implementation',
+          detail: 'Worker made no visible progress.',
+          buttonLabel: 'Open task',
+          href: '/task/blocked-task',
+          tone: 'warn' as const,
+        },
+      },
+    } as typeof projection
+
+    expect(synchronizeProjectSummaryDecision(stale).decision).toMatchObject({
+      execution: {
+        state: 'blocked',
+        code: 'blocked_work',
+        focusKind: 'blocked_work',
+        focusTaskId: 'blocked-task',
+      },
+      primaryAction: {
+        kind: 'open_work',
+        targetId: 'blocked-task',
+        reasonCode: 'blocked_work',
+      },
+    })
+  })
+
   it('projects an owner spec review separately from owner input', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',
       queue: queue([task('review-me', 'spec_review', {
+        ...ownerReviewFields(),
         specReviewGate: {
           authority: 'owner',
           requestedAt: now,
@@ -230,8 +326,8 @@ describe('project-summary-projection', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'release-bounded-review',
       queue: queue([
-        task('current-review', 'spec_review', { specReviewGate: reviewGate }),
-        task('later-review', 'spec_review', { specReviewGate: reviewGate }),
+        task('current-review', 'spec_review', { ...ownerReviewFields(), specReviewGate: reviewGate }),
+        task('later-review', 'spec_review', { ...ownerReviewFields(), specReviewGate: reviewGate }),
       ], {
         selectedReleaseId: 'release-current',
         releases: [
@@ -272,11 +368,52 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('does not let a dependency-blocked review outrank its runnable prerequisite', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'dependency-bounded-review',
+      queue: queue([
+        task('architecture-gate', 'exploring'),
+        task('desktop-adapter', 'spec_review', {
+          ...ownerReviewFields(),
+          dependsOn: ['architecture-gate'],
+          specReviewGate: {
+            authority: 'owner',
+            requestedAt: now,
+            requestedBy: 'spec-agent',
+            reason: 'spec_handoff',
+          },
+        }),
+      ], {
+        selectedReleaseId: 'release-current',
+        releases: [{
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          proofStyle: 'unspecified',
+          nodeIds: ['work:architecture-gate', 'work:desktop-adapter'],
+          deferredNodeIds: [],
+        }],
+      }),
+      generatedAt: now,
+    })
+
+    expect(projection.ownerReview).toMatchObject({ openCount: 0, taskIds: [] })
+    expect(projection.nextAction).toMatchObject({
+      code: 'ready_work',
+      focusTaskId: 'architecture-gate',
+      focusKind: 'ready_work',
+    })
+    expect(projection.decision.execution.reviewTaskIds).toBeUndefined()
+  })
+
   it('retains review authority in the compact indexed summary path', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-indexed-review-authority-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
     const taskQueue = queue([
       task('owner-review', 'spec_review', {
+        ...ownerReviewFields(),
         specReviewGate: {
           authority: 'owner',
           requestedAt: now,
@@ -285,6 +422,7 @@ describe('project-summary-projection', () => {
         },
       }),
       task('coordinator-review', 'spec_review', {
+        ...ownerReviewFields(),
         specReviewGate: {
           authority: 'coordinator',
           requestedAt: now,
@@ -522,6 +660,39 @@ describe('project-summary-projection', () => {
     })
 
     expect(projection.decision.primaryAction.targetId).toBe(projection.actionModel?.primaryAction?.taskId)
+    expect(projection.orientationSpine?.summary.pinnedNow).toEqual([
+      projection.decision.primaryAction.targetId,
+    ])
+  })
+
+  it('projects Work summary counts from the full task inventory', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([
+        task('ready-task', 'ready'),
+        task('waiting-task', 'ready', { dependsOn: ['dependency-task'] }),
+        task('dependency-task', 'in_progress'),
+        task('done-task', 'pending_pr'),
+        task('task-meta-intake', 'done'),
+      ]),
+      generatedAt: now,
+      execution: { status: 'stopped', mode: 'continuous', updatedAt: now },
+    })
+
+    expect(projection.actionModel?.workSummary).toEqual({
+      total: 4,
+      agentActive: 0,
+      paused: 1,
+      waiting: 1,
+      reviewWaiting: 0,
+      gatesWaiting: 0,
+      shaping: 0,
+      specRevisionQueued: 0,
+      readyForWorker: 0,
+      needsSpecCleanup: 1,
+      awaitingApproval: 0,
+      done: 1,
+    })
   })
 
   it('carries only compact structured source authority into the shared summary', () => {
@@ -638,6 +809,54 @@ describe('project-summary-projection', () => {
     expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks.every(task => Object.keys(task.definition).length === 0)).toBe(true)
   })
 
+  it('uses the normalized decision action code in regular and indexed summaries', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-index-normalized-action-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('brief-cleanup', 'ready', { releaseIds: ['release-current'] }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:brief-cleanup'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'normalized-action', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    const regular = buildProjectSummaryProjection({
+      projectId: 'normalized-action',
+      projectRoot: temp,
+      queue: taskQueue,
+      generatedAt: now,
+    })
+    const indexed = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'normalized-action',
+      generatedAt: now,
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(regular.decision.execution).toMatchObject({
+      code: 'no_unattended_progress',
+      focusKind: 'brief_cleanup',
+    })
+    expect(regular.nextAction).toMatchObject({
+      code: 'owner_input_required',
+      focusTaskId: 'brief-cleanup',
+      focusKind: 'brief_cleanup',
+    })
+    expect(indexed?.decision.execution).toMatchObject({
+      code: 'no_unattended_progress',
+      focusKind: 'brief_cleanup',
+    })
+    expect(indexed?.nextAction).toEqual(regular.nextAction)
+  })
+
   it('uses canonical release membership before executable child rows for indexed release counts', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-index-node-membership-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
@@ -684,6 +903,47 @@ describe('project-summary-projection', () => {
     })
     expect(indexed?.releaseSummary.taskStatusCounts).toEqual({ done: 2 })
     expect(indexed?.scope).toMatchObject({ included: 2 })
+  })
+
+  it('uses collapsed execution rows for owner-visible release progress', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-collapsed-release-progress-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('feature-container', 'done', {
+        releaseIds: ['release-current'],
+        hierarchy: { childIds: ['feature-work'], relation: 'contains' },
+      }),
+      task('feature-work', 'ready', {
+        releaseIds: ['release-current'],
+        hierarchy: { parentId: 'feature-container', childIds: [], relation: 'decomposes' },
+      }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:feature-container', 'work:feature-work'],
+        deferredNodeIds: [],
+      }],
+    })
+    const regular = buildProjectSummaryProjection({
+      projectId: 'collapsed-progress',
+      queue: taskQueue,
+      generatedAt: now,
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'collapsed-progress', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+    const indexed = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'collapsed-progress',
+      generatedAt: now,
+      sourceQueueLastUpdated: now,
+    })
+
+    expect(regular.releaseSummary.counts).toMatchObject({ total: 1, done: 0 })
+    expect(indexed?.releaseSummary.counts).toMatchObject({ total: 1, done: 0 })
   })
 
   it('keeps the indexed orientation note when a named release has later work', async () => {
@@ -1803,13 +2063,125 @@ describe('project-summary-projection', () => {
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'stale' })
   })
 
+  it('makes a worker timeout with saved partial work visible in the shared resume action', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-saved-work-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projection = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 'narrative-harness',
+      queue: queue([task('one', 'in_progress')]),
+      taskRuntimes: [{
+        taskId: 'one',
+        payload: { workerRecovery: { dirtyTimeoutRetries: 1 } },
+      }],
+      generatedAt: now,
+    })
+
+    expect(projection.decision?.execution).toMatchObject({
+      state: 'runnable',
+      code: 'paused_live_work',
+      progressState: 'partial_work_saved',
+    })
+    expect(projection.actionModel?.primaryAction).toMatchObject({
+      buttonLabel: 'Resume work',
+      detail: '"one" is paused with saved work. Resume continues the same task.',
+    })
+  })
+
+  it('makes owner-paused dirty work visible in the shared resume action', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-owner-paused-work-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projection = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 'narrative-harness',
+      queue: queue([task('one', 'in_progress')]),
+      taskRuntimes: [{
+        taskId: 'one',
+        payload: { workerRecovery: { ownerPauseWithSavedWorkAt: now } },
+      }],
+      generatedAt: now,
+    })
+
+    expect(projection.decision?.execution).toMatchObject({
+      state: 'runnable',
+      code: 'paused_live_work',
+      progressState: 'partial_work_saved',
+    })
+    expect(projection.actionModel?.primaryAction).toMatchObject({
+      buttonLabel: 'Resume work',
+      detail: '"one" is paused with saved work. Resume continues the same task.',
+    })
+  })
+
+  it('recommends a fresh worker pass after two typed no-progress attempts', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-worker-retry-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projection = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 't-minus-t',
+      queue: queue([task('one', 'in_progress')]),
+      taskRuntimes: [{
+        taskId: 'one',
+        payload: { workerRecovery: { noProgressAttempts: 2 } },
+      }],
+      generatedAt: now,
+    })
+
+    expect(projection.decision?.execution).toMatchObject({
+      state: 'runnable',
+      code: 'worker_recovery',
+      progressState: 'worker_retry_recommended',
+    })
+    expect(projection.actionModel?.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      ownerHeading: 'Worker needs a fresh pass',
+      buttonLabel: 'Retry worker',
+    })
+  })
+
+  it('makes discarded worker edits a direct retry and never calls them saved work', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-worker-edit-loss-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projection = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 't-minus-t',
+      queue: queue([task('one', 'in_progress')]),
+      taskRuntimes: [{
+        taskId: 'one',
+        payload: {
+          workerRecovery: {
+            ownerPauseWithSavedWorkAt: now,
+            worktreeObservation: {
+              state: 'lost',
+              observedAt: now,
+              files: ['packages/extension/src/extension.ts'],
+            },
+          },
+        },
+      }],
+      generatedAt: now,
+    })
+
+    expect(projection.decision?.execution).toMatchObject({
+      state: 'runnable',
+      code: 'worker_recovery',
+      progressState: 'worker_edit_loss',
+    })
+    expect(projection.actionModel?.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      ownerHeading: 'Worker discarded its edits',
+      buttonLabel: 'Retry worker',
+      detail: 'Guildhall saw this worker\'s edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.',
+    })
+  })
+
   it('persists compact execution and runtime state without replacing task facts', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-supplemental-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
     writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
       projectId: 'narrative-harness',
-      queue: queue([task('one', 'ready')]),
+      queue: queue([task('one', 'in_progress')]),
       generatedAt: now,
+    })
+    expect(readProjectSummaryProjection(tasksPath)?.nextAction).toMatchObject({
+      code: 'paused_live_work',
+      label: 'Resume',
     })
 
     const updated = updateProjectSummaryProjection(tasksPath, {
@@ -1818,6 +2190,7 @@ describe('project-summary-projection', () => {
         mode: 'continuous',
         startedAt: now,
         activeTaskId: 'one',
+        activeTaskTitle: 'one',
         updatedAt: now,
       },
       runtime: {
@@ -1834,6 +2207,24 @@ describe('project-summary-projection', () => {
       runtime: { status: 'running', health: 'healthy' },
     })
     expect(updated?.decision?.execution).toMatchObject({ state: 'running', focusTaskId: 'one' })
+    expect(updated?.nextAction).toMatchObject({
+      code: 'running',
+      label: 'Start',
+      message: 'Guildhall is working on "one".',
+    })
+    expect(updated?.actionModel?.primaryAction).toMatchObject({
+      buttonLabel: 'Open Work',
+      taskId: 'one',
+    })
+
+    // A worker writes task progress while the supervisor is live. That write
+    // must retain the live execution decision instead of restoring Resume.
+    writeProjectTaskQueue(tasksPath, queue([task('one', 'in_progress')]))
+    expect(readProjectSummaryProjection(tasksPath)?.nextAction).toMatchObject({
+      code: 'running',
+      label: 'Start',
+      message: 'Guildhall is working on "one".',
+    })
 
     const stopped = updateProjectSummaryProjection(tasksPath, {
       execution: { status: 'stopped', stoppedAt: now, updatedAt: now },

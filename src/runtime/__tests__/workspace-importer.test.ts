@@ -34,6 +34,7 @@ import {
 import { approveSpec } from '../intake.js'
 import { pickNextTask } from '../orchestrator-picker.js'
 import {
+  readProjectTaskQueueForMutationSync,
   readProjectTaskQueueForRichMutation,
   writeProjectTaskQueueAtCurrentStateBoundary,
 } from '../project-state-boundary.js'
@@ -93,10 +94,21 @@ async function readQueue(): Promise<TaskQueue> {
 }
 
 async function writeQueue(queue: TaskQueue): Promise<void> {
+  const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  const current = await fs.access(tasksPath).then(
+    () => readProjectTaskQueueForMutationSync(tasksPath),
+    () => null,
+  )
   await writeProjectTaskQueueAtCurrentStateBoundary(
-    getProjectSystemStatePath(tmpDir, 'TASKS.json'),
+    tasksPath,
     queue,
-    { projectRoot: tmpDir },
+    {
+      projectRoot: tmpDir,
+      ...(current ? {
+        expectedQueueRevision: current.expectedQueueRevision,
+        expectedProjectRevision: current.expectedProjectRevision,
+      } : {}),
+    },
   )
 }
 
@@ -5703,7 +5715,9 @@ tasks:
     })
     expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-unit-task-runner-records'))
       .toMatchObject({
-        releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+        // Internal implementation steps inherit execution scope through the
+        // parent hierarchy instead of appearing as visible release members.
+        releaseIds: [],
         references: expect.arrayContaining([
           path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
           path.join(tmpDir, 'docs', 'harness', 'prototype-iteration-workflow.md'),

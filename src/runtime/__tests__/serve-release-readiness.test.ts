@@ -10,16 +10,18 @@ import {
   appendTaskEvidence,
   projectStatePath,
   readProjectStateDatabaseMetadata,
+  readProjectStateDatabaseProjectionState,
   readProjectStateDatabaseQueueDefinition,
   promoteProjectStateDatabaseAuthority,
   updateProjectStateDatabaseSummary,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
   writeProjectStateDatabaseDiagnosticProjection,
+  writeProjectStateDatabaseSummarySnapshot,
   writeProjectStateJsonAsync,
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
-import { buildServeApp } from '../serve.js'
+import { buildServeApp, countDistinctOwnerBlockingTasks } from '../serve.js'
 import { buildEffectiveTasks, legacyEvidenceFromTask, legacyRuntimeFromTask, legacyWorkspaceFromTask } from '../effective-task.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from '../migrations.js'
 import { projectSummaryScopeRowsForQueue, writeProjectSummaryProjection, writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
@@ -139,12 +141,10 @@ async function seedQueue(queue: TaskQueue): Promise<void> {
       })
     }
   }
-  writeProjectSummaryProjectionFromUnknownQueue(projectStatePath(tmpDir, 'TASKS.json'), {
-    projectId,
-    projectRoot: tmpDir,
-    queue: normalized,
-    queueCommit: false,
-  })
+  // Let pending migrations perform the first canonical summary write after
+  // promotion. Pre-projecting here would bind pre-migration semantics to the
+  // current revision, then make a legitimate migration refresh look like a
+  // conflicting replay of the same canonical claim.
   for (let attempt = 0; attempt < 128; attempt += 1) {
     const prerequisites = await applyProjectMigrations({
       projectRoot: tmpDir,
@@ -247,7 +247,14 @@ async function initChildRepo(repoPath: string): Promise<void> {
   await execFileP('git', ['commit', '-m', 'baseline'], { cwd: repoPath })
 }
 
-describe('GET /api/project/release-readiness', () => {
+describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
+  it('counts disjoint projection and live owner blockers by task identity', () => {
+    expect(countDistinctOwnerBlockingTasks(
+      new Set(['task:projection-owner']),
+      new Set(['task:live-escalation']),
+    )).toBe(2)
+  })
+
   it('serves saved status counts for current work without a named release', async () => {
     await seedQueue({
       version: 1,
@@ -267,7 +274,8 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.statusCounts).toEqual({ ready: 1, blocked: 1 })
     expect(body.totals).toMatchObject({ tasks: 2, unfinishedCount: 2 })
     expect(body.diagnostics.statusCounts).toEqual({ ready: 1, blocked: 1 })
-  })
+    expect(body.unapprovedSpecs).toEqual([])
+  }, 15_000)
 
   it('serves the saved release summary without task expansion or repository inspection', async () => {
     await seedQueue({
@@ -304,11 +312,49 @@ describe('GET /api/project/release-readiness', () => {
       summaryFreshness: 'current',
       detailEndpoint: '/api/project/release-readiness?detail=true',
       release: { id: 'first-pass', label: 'First pass' },
+      verdict: { state: 'work_remaining', title: 'First pass has work remaining' },
     })
     expect(body.statusCounts).toEqual(expect.objectContaining({ ready: 1 }))
     expect(body).not.toHaveProperty('gitStory')
     expect(body).not.toHaveProperty('designSystem')
     expect(body).not.toHaveProperty('openEscalations')
+  })
+
+  it('keeps a legacy readiness verdict out of the release lifecycle envelope', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'legacy-release',
+      releases: [{
+        id: 'legacy-release',
+        label: 'Legacy release',
+        kind: 'release',
+        // Older SQLite rows used the readiness verdict in this lifecycle slot.
+        // Seed the compatibility shape directly so the response boundary owns
+        // its normalization rather than trusting test-only parsed input.
+        state: 'blocked' as any,
+        source: 'release_plan',
+        nodeIds: ['work:task-ready'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [makeTask({
+        id: 'task-ready',
+        title: 'Ready task',
+        status: 'ready',
+        releaseIds: ['legacy-release'],
+        spec: 'A complete release task specification.',
+        acceptanceCriteria: [{ id: 'ac-ready', description: 'The task can run.', verifiedBy: 'review', met: false }],
+      })],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    expect(response.status).toBe(200)
+    const body = await response.json() as any
+
+    expect(body.release).toMatchObject({ id: 'legacy-release', state: 'active' })
+    expect(body.release.state).not.toBe('blocked')
   })
 
   it('serves saved diagnostics by default and requires an explicit live query for inspection', async () => {
@@ -503,7 +549,10 @@ describe('GET /api/project/release-readiness', () => {
       completeness: 'scope',
       checksLoaded: false,
     })
-    expect(body.releaseReadiness.verdict).toBeUndefined()
+    expect(body.releaseReadiness.verdict).toMatchObject({
+      state: 'work_remaining',
+      title: 'First pass has work remaining',
+    })
     expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('First pass')
     expect(body.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 2,
@@ -539,8 +588,149 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 1,
       visibleActive: 0,
-      visibleBlocked: 1,
+      visibleBlocked: 0,
     })
+  })
+
+  it('preserves dependency state through the compact scope-row read boundary', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'desktop-mvp',
+      releases: [{
+        id: 'desktop-mvp',
+        label: 'Desktop MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-gate', 'work:task-shell'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        makeTask({ id: 'task-gate', title: 'Prove the architecture gate', status: 'ready', releaseIds: ['desktop-mvp'] }),
+        makeTask({
+          id: 'task-shell',
+          title: 'Build the desktop shell',
+          status: 'exploring',
+          releaseIds: ['desktop-mvp'],
+          dependsOn: ['task-gate'],
+        }),
+      ],
+    })
+
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+    const response = await app.fetch(new Request(projectUrl('/api/project?surface=overview&compact=true')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    const persistedRow = body.orientationSpine?.scopeRows?.find((row: any) => row.taskId === 'task-shell')
+    expect([
+      persistedRow?.dependencyBlocked,
+      persistedRow?.dependencyTaskIds,
+      persistedRow?.blocksStart,
+    ]).toEqual([true, ['task-gate'], true])
+  })
+
+  it('preserves split-parent identity through compact scope rows before progressive counts', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'desktop-mvp',
+      releases: [{
+        id: 'desktop-mvp',
+        label: 'Desktop MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-parent', 'work:task-child'],
+        deferredNodeIds: ['work:task-later'],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-parent',
+          title: 'Build the desktop run flow',
+          status: 'ready',
+          releaseIds: ['desktop-mvp'],
+          hierarchy: { childIds: ['task-child'], relation: 'contains' } as Task['hierarchy'],
+        }),
+        makeTask({
+          id: 'task-child',
+          title: 'Implement the packaged sidecar',
+          status: 'in_progress',
+          releaseIds: ['desktop-mvp'],
+          hierarchy: { parentId: 'task-parent', childIds: [], order: 0, relation: 'decomposes' } as Task['hierarchy'],
+        }),
+        makeTask({
+          id: 'task-later',
+          title: 'Add a later desktop feature',
+          status: 'shelved',
+          releaseIds: ['desktop-mvp'],
+        }),
+        makeTask({
+          id: 'task-unassigned',
+          title: 'Keep unrelated backlog out of release counts',
+          status: 'spec_review',
+        }),
+      ],
+    })
+
+    const currentQueue = readProjectStateDatabaseQueueDefinition(projectStatePath(tmpDir, 'TASKS.json'))
+    expect(currentQueue?.tasks.find(task => task.id === 'task-child')?.hierarchy).toMatchObject({
+      parentId: 'task-parent',
+    })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+    const refreshedQueue = readProjectStateDatabaseQueueDefinition(projectStatePath(tmpDir, 'TASKS.json'))
+    expect(refreshedQueue?.tasks.find(task => task.id === 'task-child')?.hierarchy).toMatchObject({
+      parentId: 'task-parent',
+    })
+    expect(readProjectStateDatabaseProjectionState(projectStatePath(tmpDir, 'TASKS.json'))?.scopeRows).toContainEqual(
+      expect.objectContaining({ taskId: 'task-child', parentTaskId: 'task-parent' }),
+    )
+    const response = await app.fetch(new Request(projectUrl('/api/project?surface=work&compact=true')))
+    const body = await response.json() as any
+
+    expect(body.orientationSpine?.scopeRows).toEqual([
+      expect.objectContaining({
+        taskId: 'task-child',
+        parentTaskId: 'task-parent',
+        hierarchyRole: 'child',
+      }),
+      expect.objectContaining({
+        taskId: 'task-later',
+        scope: 'deferred',
+      }),
+    ])
+    expect(body.orientationSpine?.scopeRows).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'task-unassigned' }),
+    ]))
+    expect(body.orientationSpine?.summary).toMatchObject({
+      includedWorkCount: 1,
+      deferredWorkCount: 1,
+    })
+    expect(body.releaseReadiness.releaseCounts).toMatchObject({
+      total: 1,
+      done: 0,
+      unfinished: 1,
+      deferred: 1,
+    })
+    expect(body.taskPayload).toMatchObject({
+      selectedScopeCount: 1,
+      selectedScopeAndDeferredCount: 2,
+    })
+    expect(body.workProgress.selectedCounts).toMatchObject({
+      visibleTotal: 1,
+    })
+
+    const releaseUrl = new URL('http://localhost/api/project/release-readiness')
+    releaseUrl.searchParams.set('projectId', projectId)
+    const releaseDetail = await (await app.fetch(new Request(releaseUrl))).json() as any
+    expect(releaseDetail.scope.nodeIds).toEqual(['work:task-child'])
+    expect(releaseDetail.release.nodeIds).toEqual(['work:task-child'])
+    expect(releaseDetail.totals).toMatchObject({ tasks: 1, unfinishedCount: 1 })
   })
 
   it('keeps Work and Map inventory records bounded while preserving row-level signals', async () => {
@@ -840,6 +1030,11 @@ describe('GET /api/project/release-readiness', () => {
     const body = await res.json() as any
 
     expect(body.diagnostics.designSystem).toMatchObject({
+      drafted: false,
+      approved: false,
+      source: 'none',
+    })
+    expect(body.designSystem).toMatchObject({
       drafted: false,
       approved: false,
       source: 'none',
@@ -1672,6 +1867,51 @@ describe('GET /api/project/release-readiness', () => {
     await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
   })
 
+  it('does not surface a deleted worktree as a repository follow-up after proven skipped completion', async () => {
+    const deletedWorktreePath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-deleted-worktree`)
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Historical worktree task',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          ...modeledScriptProof(),
+          worktreePath: deletedWorktreePath,
+          mergeRecord: {
+            fromBranch: 'guildhall/task-current',
+            strategy: 'ff_only_local',
+            result: 'skipped',
+            toBranch: 'main',
+            detail: 'The former task worktree was cleaned up after completion.',
+          },
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness?live=true')))
+    const body = await res.json() as any
+
+    expect(body.diagnostics.totals.gitStoryBlockingCount).toBe(0)
+    expect(body.diagnostics.gitStory.blockers).toEqual([])
+    expect(body.diagnostics.gitStory.snapshots.some((snapshot: any) => snapshot.taskId === 'task-current')).toBe(false)
+  })
+
   it('blocks release readiness on proof-missing completed work without counting reserved import scaffolding', async () => {
     const missingProofPath = {
       path: 'artifacts/fixture-run.md',
@@ -2222,7 +2462,7 @@ describe('GET /api/project/release-readiness', () => {
     for (const body of [project, map]) {
       expect(body.orientationSpine?.activePins?.[0]).toMatchObject({
         nodeId: 'work:task-import-e2e',
-        kind: 'owner_input',
+        kind: 'active_work',
         label: 'E2E tests: login -> create page -> edit -> search flow',
       })
     }
@@ -2438,7 +2678,11 @@ describe('GET /api/project/release-readiness', () => {
             command: 'pnpm prove:fixture-schemas',
             source: 'inferred',
             expectedEvidence: [{ id: 'fixture-schema', required: true }],
-            verificationRecords: [{ evidenceId: 'fixture-schema', status: 'passed' }],
+            verificationRecords: [{
+              evidenceId: 'fixture-schema',
+              status: 'passed',
+              recordedAt: '2026-07-04T08:50:00.000Z',
+            }],
           }],
           doneSummaryBundle: {
             taskId: 'task-current',
@@ -3002,7 +3246,11 @@ describe('GET /api/project/release-readiness', () => {
             command: 'pnpm test -- generate-story',
             source: 'inferred',
             expectedEvidence: [{ id: 'chapter-generation', required: true }],
-            verificationRecords: [{ evidenceId: 'chapter-generation', status: 'passed' }],
+            verificationRecords: [{
+              evidenceId: 'chapter-generation',
+              status: 'passed',
+              recordedAt: '2026-07-04T08:50:00.000Z',
+            }],
           }],
           doneSummaryBundle: {
             taskId: 'task-current',
@@ -3070,7 +3318,7 @@ describe('GET /api/project/release-readiness', () => {
     const task = taskDetail.task
     expect(task?.completionProof).toMatchObject({
       state: 'verified',
-      expectedCount: 1,
+      expectedCount: 2,
       verifiedCount: expect.any(Number),
       latestAt: '2026-07-04T08:50:00.000Z',
     })
@@ -3350,13 +3598,13 @@ describe('GET /api/project/release-readiness', () => {
     const task = taskDetail.task
     expect(task?.completionProof).toMatchObject({
       state: 'missing',
-      expectedCount: 1,
+      expectedCount: 2,
       verifiedCount: expect.any(Number),
       missing: ['Required proof evidence has not been attached yet.'],
     })
     expect(project.orientationSpine?.summary).toMatchObject({
       headline: 'Headless MVP is waiting on proof.',
-      nextAction: expect.stringContaining('completion proof is missing or stale'),
+      nextAction: expect.stringContaining('waiting on proof evidence'),
     })
   })
 
@@ -3674,12 +3922,13 @@ describe('GET /api/project/release-readiness', () => {
 
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project?surface=work')))
+    const projectBody = await projectRes.json() as any
 
     expect(body.diagnostics.statusCounts).toEqual({ in_progress: 1, ready: 2 })
     expect(body.totals.tasks).toBe(3)
     expect(body.totals.unfinishedCount).toBe(3)
     expect([...body.scope.nodeIds].sort()).toEqual([
-      'work:task-contracts',
       'work:task-contracts-split-model',
       'work:task-contracts-split-world',
       'work:task-contracts-split-space',
@@ -3687,7 +3936,9 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.release.nodeIds).toEqual(body.scope.nodeIds)
     expect(body.diagnostics.blockedByAgent).toEqual([])
     expect(body.releaseBlockers ?? []).toEqual([])
-  })
+    expect(projectBody.orientationSpine.summary.includedWorkCount).toBe(3)
+    expect(projectBody.orientationSpine.summary.progress.total).toBe(3)
+  }, 20000)
 
   it('does not let stale completion proof mark revised in-progress work as done', async () => {
     await seedQueue({
@@ -3810,6 +4061,8 @@ describe('GET /api/project/release-readiness', () => {
     const body = await res.json() as any
     expect(body.diagnostics.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
     expect(body.diagnostics.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
+    expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
+    expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
     expect(body.totals.humanBlockingCount).toBe(2)
     expect(body.totals.blockingCount).toBe(2)
     expect(body.totals.unfinishedCount).toBe(2)
@@ -3909,7 +4162,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.diagnostics.ready).toBe(false)
   })
 
-  it('returns projection release blockers for every unshaped current execution row', async () => {
+  it('keeps projection release blockers distinct from visible blocked-work counts', async () => {
     await seedQueue({
       version: 1,
       lastUpdated: new Date().toISOString(),
@@ -3973,24 +4226,24 @@ describe('GET /api/project/release-readiness', () => {
     const overview = await overviewRes.json() as any
     expect(overview.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
-      visibleActive: 0,
+      visibleBlocked: 0,
+      visibleActive: 3,
     })
 
     const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work')))
     const work = await workRes.json() as any
     expect(work.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
-      visibleActive: 0,
+      visibleBlocked: 0,
+      visibleActive: 3,
     })
 
     const mapRes = await app.fetch(new Request(projectUrl('/api/project?surface=map')))
     const map = await mapRes.json() as any
     expect(map.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
-      visibleActive: 0,
+      visibleBlocked: 0,
+      visibleActive: 3,
     })
 
     registerWorkspace({ id: projectId, name: 'Release Test', path: tmpDir, tags: [] })
@@ -3999,7 +4252,7 @@ describe('GET /api/project/release-readiness', () => {
     const project = service.projects.find((candidate: any) => candidate.path === tmpDir)
     expect(project.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
+      visibleBlocked: 0,
       visibleActive: 0,
     })
 
@@ -4007,7 +4260,7 @@ describe('GET /api/project/release-readiness', () => {
     const detail = await detailRes.json() as any
     expect(detail.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 3,
-      visibleBlocked: 3,
+      visibleBlocked: 0,
       visibleActive: 0,
     })
   }, 45000)
@@ -4187,7 +4440,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.workProgress.counts).toMatchObject({
       visibleTotal: 2,
       visibleBlocked: 1,
-      deliveryBlocked: 1,
+      deliveryBlocked: 0,
     })
     expect(body.workProgress.selectedCounts).toMatchObject({
       visibleTotal: 1,
@@ -4459,17 +4712,16 @@ describe('GET /api/project/release-readiness', () => {
         status: 'done',
       }),
     ])
-    expect(spineBody.summaryFreshness).toBe('stale')
-    expect(spineBody.requiresRefresh).toBe(true)
+    expect(spineBody.summaryFreshness).toBe('current')
+    expect(spineBody.requiresRefresh).toBeUndefined()
     expect(compactReadiness).toMatchObject({
-      summaryFreshness: 'stale',
-      requiresRefresh: true,
+      summaryFreshness: 'current',
       ready: false,
       release: { id: 'headless-mvp' },
       scope: { id: 'headless-mvp' },
     })
-    expect(compactReadiness).not.toHaveProperty('releaseCounts')
-  })
+    expect(compactReadiness).toHaveProperty('releaseCounts')
+  }, 30_000)
 
   it('returns a compact project spine for overview previews without changing the full map spine', async () => {
     await seedQueue({
@@ -4829,6 +5081,20 @@ describe('GET /api/project/release-readiness', () => {
         blockReason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
       }),
     ])
+    const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
+    const savedProjection = readProjectStateDatabaseProjectionState(tasksPath)
+    expect(savedProjection?.summary?.payload).toBeTruthy()
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: savedProjection!.summary!.payload,
+      scopeRows: savedProjection!.scopeRows.map(row => row.taskId === 'task-oauth'
+        ? {
+            ...row,
+            handoffState: 'spec_review',
+            blocksRelease: true,
+            blockerSummary: 'Stale projected blocker detail.',
+          }
+        : row),
+    })
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('settle external setup blocker')
@@ -4844,7 +5110,49 @@ describe('GET /api/project/release-readiness', () => {
         reason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
       },
     ])
+    expect(body.releaseBlockers).toContainEqual(expect.objectContaining({
+      id: 'task-oauth',
+      code: 'blocked',
+      label: 'OAuth client secrets need external setup before Guildhall can verify this work.',
+    }))
     expect(body.totals.humanBlockingCount).toBe(1)
+  })
+
+  it('prunes a saved blocker when current task state is no longer blocking', async () => {
+    await seed([
+      makeTask({
+        id: 'task-currently-ready',
+        title: 'Current ready work',
+        status: 'ready',
+        spec: 'Implement the current ready work.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Ready work is implemented.', verifiedBy: 'test', met: false }],
+      }),
+    ])
+    const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
+    const savedProjection = readProjectStateDatabaseProjectionState(tasksPath)
+    expect(savedProjection?.summary?.payload).toBeTruthy()
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: savedProjection!.summary!.payload,
+      scopeRows: savedProjection!.scopeRows.map(row => row.taskId === 'task-currently-ready'
+        ? {
+            ...row,
+            handoffState: 'spec_review',
+            blocksStart: true,
+            blocksRelease: true,
+            humanBlocking: true,
+            blockerSummary: 'Stale review blocker.',
+          }
+        : row),
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('current ready state supersedes saved blocker')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.releaseBlockers.map((blocker: any) => blocker.id)).not.toContain('task-currently-ready')
+    expect(body.totals.humanBlockingCount).toBe(0)
   })
 
   it('does not count terminal or reserved workspace-import briefs as human blockers', async () => {
@@ -5272,8 +5580,9 @@ describe('GET /api/project/release-readiness', () => {
 
   it('reports the design-system approval state', async () => {
     // Draft a DS via the endpoint, then check before/after approval.
+    await seed([])
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await app.fetch(new Request(projectUrl('/api/project/design-system'), {
+    const draftResponse = await app.fetch(new Request(projectUrl('/api/project/design-system'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -5286,6 +5595,9 @@ describe('GET /api/project/release-readiness', () => {
         authoredBy: 'human',
       }),
     }))
+    expect(draftResponse.ok).toBe(true)
+    const draftBody = await draftResponse.json()
+    expect(draftBody).toMatchObject({ ok: true, revision: 1 })
     let res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     let body = await res.json() as any
     expect(body.diagnostics.designSystem.drafted).toBe(true)

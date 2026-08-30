@@ -22,6 +22,7 @@
     projectId?: string | null
     deliverySpine?: DeliverySpine | null
     workProgress?: TaskWorkProgressDisplay | null
+    handoffState?: string | null
     onNavigateTask?: (taskId: string) => void
     onCreateSplitChildren?: () => void
     createSplitBusy?: boolean
@@ -33,15 +34,13 @@
     projectId = null,
     deliverySpine = null,
     workProgress = null,
+    handoffState = null,
     onNavigateTask,
     onCreateSplitChildren,
     createSplitBusy = false,
   }: Props = $props()
 
   const sizePlan = $derived(task.sizePlan ?? null)
-  const reviewPlan = $derived(task.reviewPlan ?? null)
-  const requestIntake = $derived(task.requestIntake ?? null)
-  const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
   const plannedChildren = $derived(projectDerivedRecommendedChildren(task))
   const taskDescription = $derived(
     humanizeRuntimeText(
@@ -52,7 +51,7 @@
   )
   const createdChildren = $derived(plannedChildren.filter((child) => child.createdTaskId))
   const taskById = $derived(new Map([task, ...tasks].filter((candidate): candidate is Task => Boolean(candidate?.id)).map(candidate => [candidate.id, candidate])))
-  const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks] }))
+  const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks], handoffState }))
   const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
   const deliverySteps = $derived(workProgress?.deliverySteps ?? [])
   const containingWorkId = $derived(task.hierarchy?.parentId ?? null)
@@ -73,8 +72,6 @@
   const splitStillNeedsAction = $derived(
     splitNeeded && createdChildren.length === 0,
   )
-  const reviewLaneCount = $derived(reviewPlan?.selectedLanes?.length ?? 0)
-  const reviewerGroupCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
   const blockingTaskIds = $derived(task.dependsOn ?? [])
   const contextPacket = $derived(deliverySpine?.contextPacket ?? null)
   const shapingBlockers = $derived(contextPacket?.executionOrder?.shapingBlockers ?? [])
@@ -110,22 +107,10 @@
       .replace(/\bApi\b/g, 'API')
   }
 
-  function sizeTone(action: string | undefined): ChipTone {
-    if (action === 'split_required' || action === 'decompose_before_execution') return 'danger'
-    if (action === 'split_recommended' || action === 'ask_clarifying_question') return 'warn'
-    if (action === 'proceed_with_warning') return 'warn'
-    return 'neutral'
-  }
-
   function isDecompositionAction(action: string | undefined): boolean {
     return action === 'split_required' ||
       action === 'split_recommended' ||
       action === 'decompose_before_execution'
-  }
-
-  function sizeActionLabel(action: string | undefined): string {
-    if (isDecompositionAction(action)) return 'Decompose before execution'
-    return token(action)
   }
 
   function priorityTone(priority: string | undefined): ChipTone {
@@ -401,98 +386,6 @@
     </Card>
   {/if}
 
-  {#if sizePlan}
-    <Card title="Task size">
-      <Stack gap="3">
-        <Row wrap gap="2">
-          <Chip label={token(sizePlan.band)} tone={sizeTone(sizePlan.action)} />
-          <Chip label={sizeActionLabel(sizePlan.action)} tone={sizeTone(sizePlan.action)} />
-          {#if sizePlan.score}<Chip label={`Score ${sizePlan.score}`} tone="neutral" />{/if}
-          {#if sizePlan.reviewBudgetHint}<Chip label={`${token(sizePlan.reviewBudgetHint)} review`} tone="ok" />{/if}
-        </Row>
-        {#if sizePlan.reasons?.length}
-          <p class="muted">{sizePlan.reasons[0]}</p>
-        {/if}
-        {#if sizePlan.factors?.length}
-          <ul class="factor-list">
-            {#each sizePlan.factors as factor (`${factor.id ?? factor.label}`)}
-              <li>{factor.label ?? factor.reason}</li>
-            {/each}
-          </ul>
-        {/if}
-      </Stack>
-    </Card>
-  {/if}
-
-  {#if requestIntake}
-    <Card title="Request shape">
-      <Stack gap="3">
-        <Row wrap gap="2">
-          {#if requestIntake.intent}<Chip label={token(requestIntake.intent)} tone="neutral" />{/if}
-          {#if requestIntake.recommendedNextAction}<Chip label={token(requestIntake.recommendedNextAction)} tone="ok" />{/if}
-        </Row>
-        {#if requestIntake.ambiguity}
-          <p class="muted">{requestIntake.ambiguity}</p>
-        {/if}
-        {#if requestIntake.componentStack?.length}
-          <ul class="child-list">
-            {#each requestIntake.componentStack as component, index (`${component.kind ?? 'component'}-${index}`)}
-              <li>
-                <strong>{component.title ?? token(component.kind)}</strong>
-                {#if component.role}<span>{component.role}</span>{/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </Stack>
-    </Card>
-  {/if}
-
-  {#if latestCheckpoint}
-    <Card title="Latest checkpoint">
-      <Stack gap="2">
-        {#if latestCheckpoint.intent}
-          <p class="muted">{latestCheckpoint.intent}</p>
-        {/if}
-        {#if latestCheckpoint.nextPlannedAction}
-          <p>{latestCheckpoint.nextPlannedAction}</p>
-        {/if}
-        <Row wrap gap="2">
-          {#if latestCheckpoint.agentId}<Chip label={roleLabel(latestCheckpoint.agentId)} tone="neutral" />{/if}
-          {#if latestCheckpoint.step}<Chip label={`Step ${latestCheckpoint.step}`} tone="neutral" />{/if}
-          {#if latestCheckpoint.filesTouched?.length}
-            <Chip label={`${latestCheckpoint.filesTouched.length} file${latestCheckpoint.filesTouched.length === 1 ? '' : 's'}`} tone="neutral" />
-          {/if}
-        </Row>
-      </Stack>
-    </Card>
-  {/if}
-
-  {#if reviewPlan}
-    <Card title="Review plan">
-      <Stack gap="3">
-        <Row wrap gap="2">
-          {#if reviewPlan.effort}<Chip label={`${token(reviewPlan.effort)} review`} tone="ok" />{/if}
-          {#if reviewPlan.depth}<Chip label={`${token(reviewPlan.depth)} depth`} tone="neutral" />{/if}
-          <Chip label={`${reviewerGroupCount} reviewer group${reviewerGroupCount === 1 ? '' : 's'}`} tone="neutral" />
-          <Chip label={`${reviewLaneCount} lane${reviewLaneCount === 1 ? '' : 's'}`} tone="neutral" />
-        </Row>
-        {#if reviewPlan.selectedLanes?.length}
-          <div class="lane-list" aria-label="Selected review lanes">
-            {#each reviewPlan.selectedLanes.slice(0, 6) as lane (lane)}
-              <Chip label={token(lane)} tone="neutral" />
-            {/each}
-            {#if reviewPlan.selectedLanes.length > 6}
-              <Chip label={`+${reviewPlan.selectedLanes.length - 6} more`} tone="neutral" />
-            {/if}
-          </div>
-        {/if}
-        {#if reviewPlan.requiredArtifacts?.length}
-          <p class="muted">Evidence needed: {reviewPlan.requiredArtifacts.join(', ')}</p>
-        {/if}
-      </Stack>
-    </Card>
-  {/if}
 </Stack>
 
 <style>
@@ -538,8 +431,7 @@
     margin-top: var(--s-1);
   }
   .link-list,
-  .child-list,
-  .factor-list {
+  .child-list {
     margin: 0;
     padding-left: var(--s-4);
   }
@@ -552,15 +444,6 @@
   }
   .child-list strong {
     display: block;
-  }
-  .factor-list {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-body);
-  }
-  .lane-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
   }
   .primitive-list {
     display: flex;

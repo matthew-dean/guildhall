@@ -34,6 +34,17 @@ export const TaskRuntimeState = z.object({
   workerRecovery: z.object({
     noProgressAttempts: z.number().int().nonnegative().optional(),
     dirtyTimeoutRetries: z.number().int().nonnegative().optional(),
+    // The worker stream is the authority for this small state machine. It
+    // captures an implementation attempt that appeared on disk and then
+    // disappeared before a durable handoff, without storing a transcript.
+    worktreeObservation: z.object({
+      state: z.enum(['dirty', 'lost']),
+      observedAt: z.string(),
+      files: z.array(z.string()).max(12),
+    }).optional(),
+    // An owner-directed pause can preserve the same isolated worktree edits as
+    // a timeout. Keep that fact typed so every owner surface can explain it.
+    ownerPauseWithSavedWorkAt: z.string().optional(),
     likelyTargetTimeoutRetries: z.number().int().nonnegative().optional(),
     noVisibleProgressTimeoutRetries: z.number().int().nonnegative().optional(),
   }).optional(),

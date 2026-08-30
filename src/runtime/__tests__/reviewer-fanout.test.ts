@@ -20,6 +20,13 @@ function withMachineResult(
     riskItems?: string[]
     followUpItems?: string[]
     advisoryScores?: Record<string, string>
+    findings?: Array<{
+      targetKind: 'acceptance_criterion' | 'proof_evidence'
+      targetId: string
+      disposition: 'satisfied' | 'unsatisfied' | 'advisory'
+      evidenceRefs: string[]
+      workerInstruction?: string
+    }>
   } = {},
 ): string {
   return `${prose}\n\n**Machine result:**\n\`\`\`json\n${JSON.stringify({
@@ -30,6 +37,7 @@ function withMachineResult(
     riskItems: extras.riskItems ?? [],
     followUpItems: extras.followUpItems ?? [],
     advisoryScores: extras.advisoryScores ?? {},
+    ...(extras.findings ? { findings: extras.findings } : {}),
   })}\n\`\`\``
 }
 
@@ -209,12 +217,8 @@ describe('parsePersonaOutput', () => {
       ],
     }), hints)
     expect(v.verdict).toBe('revise')
-    expect(v.revisionItems).toEqual([
-      'Add a versioned prefix to the route (e.g., /v1/...).',
-      'Introduce an Idempotency-Key header for the POST operation.',
-      'Add schema validation for the id router parameter.',
-      'Add observability to the handler with trace spans and metric counters.',
-    ])
+    expect(v.failureCode).toBe('invalid_review_contract')
+    expect(v.revisionItems).toEqual([])
     expect(v.followUpItems).toEqual([])
   })
 
@@ -246,9 +250,8 @@ describe('parsePersonaOutput', () => {
       revisionItems: ['Add a schema validation step for the id router parameter before it is used in Supabase queries.'],
     }), hints)
     expect(v.verdict).toBe('revise')
-    expect(v.revisionItems).toEqual([
-      'Add a schema validation step for the id router parameter before it is used in Supabase queries.',
-    ])
+    expect(v.failureCode).toBe('invalid_review_contract')
+    expect(v.revisionItems).toEqual([])
     expect(v.followUpItems).toEqual([])
   })
 
@@ -287,9 +290,8 @@ describe('parsePersonaOutput', () => {
       revisionItems: ['Execute the proof command `npx guildhall run --task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat` and capture its output.'],
     }), hints)
     expect(v.verdict).toBe('revise')
-    expect(v.revisionItems).toEqual([
-      'Execute the proof command `npx guildhall run --task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat` and capture its output.',
-    ])
+    expect(v.failureCode).toBe('invalid_review_contract')
+    expect(v.revisionItems).toEqual([])
     expect(v.followUpItems).toEqual([])
   })
 
@@ -325,10 +327,8 @@ describe('parsePersonaOutput', () => {
       ],
     }), hints)
     expect(v.verdict).toBe('revise')
-    expect(v.revisionItems).toEqual([
-      'Remove the deleteTrashRes variable from the destructuring assignment.',
-      'Add a versioned prefix to the route (e.g., /v1/...).',
-    ])
+    expect(v.failureCode).toBe('invalid_review_contract')
+    expect(v.revisionItems).toEqual([])
     expect(v.followUpItems).toEqual([])
   })
 })
@@ -344,6 +344,13 @@ describe('aggregateFanout', () => {
       followUpItems: ['Audit adjacent surfaces later.'],
       acceptedCriteriaIds: ['ac-1'],
       proofEvidenceIds: ['proof-1'],
+      findings: [{
+        targetKind: 'acceptance_criterion' as const,
+        targetId: 'ac-1',
+        disposition: 'unsatisfied' as const,
+        evidenceRefs: ['diff:button'],
+        workerInstruction: 'Use the shared button primitive.',
+      }],
       rawOutput: '',
     }
 
@@ -388,6 +395,13 @@ describe('aggregateFanout', () => {
           riskItems: ['Contrast remains below threshold.'],
           followUpItems: ['Consider auditing muted text tokens globally.'],
           advisoryScores: { recommendationPriority: 'high', expectedValue: 'medium', deferredRisk: 'medium' },
+          findings: [{
+            targetKind: 'acceptance_criterion',
+            targetId: 'ac-contrast',
+            disposition: 'unsatisfied',
+            evidenceRefs: ['gate:contrast'],
+            workerInstruction: 'Fix color.text.muted.',
+          }],
         }),
       ),
     ])
@@ -400,7 +414,7 @@ describe('aggregateFanout', () => {
     expect(agg.combinedFeedback).toContain('Recommendation priority: high')
     expect(agg.combinedFeedback).toContain('Risk if accepted as-is')
     expect(agg.combinedFeedback).toContain('Contrast remains below threshold.')
-    expect(agg.combinedFeedback).toContain('Recommended task-local revisions')
+    expect(agg.combinedFeedback).toContain('Required target inspections')
     expect(agg.combinedFeedback).toContain('Non-blocking follow-up ideas')
     expect(agg.combinedFeedback).toContain('Consider auditing muted text tokens globally')
   })
@@ -411,12 +425,26 @@ describe('aggregateFanout', () => {
         componentDesigner,
         withMachineResult('**Reasoning:** margin leak.', 'revise', [], [], {
           revisionItems: ['Remove mt-4 from Button root.'],
+          findings: [{
+            targetKind: 'acceptance_criterion',
+            targetId: 'ac-spacing',
+            disposition: 'unsatisfied',
+            evidenceRefs: ['diff:button'],
+            workerInstruction: 'Remove mt-4 from Button root.',
+          }],
         }),
       ),
       parsePersonaOutput(
         a11y,
         withMachineResult('**Reasoning:** no focus ring.', 'revise', [], [], {
           revisionItems: ['Add focus-visible style.'],
+          findings: [{
+            targetKind: 'acceptance_criterion',
+            targetId: 'ac-focus',
+            disposition: 'unsatisfied',
+            evidenceRefs: ['diff:focus'],
+            workerInstruction: 'Add focus-visible style.',
+          }],
         }),
       ),
     ])
@@ -434,6 +462,13 @@ describe('aggregateFanout', () => {
         componentDesigner,
         withMachineResult('**Reasoning:** margin leak.', 'revise', [], [], {
           revisionItems: ['Remove mt-4 from Button root.'],
+          findings: [{
+            targetKind: 'acceptance_criterion',
+            targetId: 'ac-spacing',
+            disposition: 'unsatisfied',
+            evidenceRefs: ['diff:button'],
+            workerInstruction: 'Remove mt-4 from Button root.',
+          }],
         }),
       ),
       parsePersonaOutput(

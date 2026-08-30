@@ -63,7 +63,7 @@ describe('project projection freshness watcher', () => {
     watcher.dispose()
   })
 
-  it('schedules a repository invalidation when the injected signature changes', () => {
+  it('refreshes repository state on its first sample and when the signature changes', () => {
     let repositorySignature = 'head-1:clean'
     const schedule = vi.fn()
     const readRepositorySignature = vi.fn(() => repositorySignature)
@@ -76,6 +76,12 @@ describe('project projection freshness watcher', () => {
     watchers.push(watcher)
 
     watcher.poll()
+    expect(schedule).toHaveBeenCalledWith({
+      projectRoot: '/tmp/project',
+      revision: 7,
+      domains: ['repository'],
+    })
+    schedule.mockClear()
     repositorySignature = 'head-2:dirty'
     watcher.poll()
 

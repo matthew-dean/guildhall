@@ -229,6 +229,7 @@ export interface OrientationScopeRow {
   taskId: string
   nodeId: string
   title: string
+  parentTaskId?: string
   scope: 'included' | 'deferred'
   eligibilityReason: string
   hierarchyRole: string
@@ -237,6 +238,8 @@ export interface OrientationScopeRow {
   blocksStart: boolean
   blocksRelease: boolean
   humanBlocking: boolean
+  dependencyBlocked?: boolean
+  dependencyTaskIds?: string[]
   sourceRefs: string[]
 }
 
@@ -1401,6 +1404,7 @@ function scopeRowsFromProjection(projection: ProjectScopeProjection | null | und
     taskId: row.taskId,
     nodeId: taskNodeId(row.taskId),
     title: row.title,
+    ...(row.parentTaskId ? { parentTaskId: row.parentTaskId } : {}),
     scope: row.scope,
     eligibilityReason: row.eligibilityReason,
     hierarchyRole: row.hierarchyRole,
@@ -1409,6 +1413,10 @@ function scopeRowsFromProjection(projection: ProjectScopeProjection | null | und
     blocksStart: row.blocksStart,
     blocksRelease: row.blocksRelease,
     humanBlocking: row.humanBlocking,
+    dependencyBlocked: row.dependencyBlocked === true,
+    ...(row.dependencyTaskIds?.length
+      ? { dependencyTaskIds: [...row.dependencyTaskIds] }
+      : {}),
     sourceRefs: [...row.sourceRefs],
   }))
 }

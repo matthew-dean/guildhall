@@ -17,6 +17,7 @@ import { readProjectTaskQueueForMutationSync } from '@guildhall/runtime/project-
 import {
   appendTaskEvidence,
   inferProjectRootFromMemoryDir,
+  inferProjectRootFromSystemStatePath,
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   readTaskEvidence,
   upsertTaskRuntimeState,
@@ -114,10 +115,7 @@ export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueR
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
 
-    const stateDir = path.dirname(parsed.tasksPath)
-    const projectRoot = path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)
-      ? task.projectPath
-      : inferProjectRootFromMemoryDir(stateDir)
+    const projectRoot = inferProjectRootFromSystemStatePath(parsed.tasksPath, task.projectPath)
     const existingIssueEvidence = await readTaskEvidence(projectRoot, task.id, { kind: 'agent_issue' })
     const now = new Date().toISOString()
     const issue: AgentIssue = {
@@ -239,7 +237,7 @@ export async function resolveIssue(input: ResolveIssueInput): Promise<ResolveIss
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
 
-    const projectRoot = inferProjectRootFromMemoryDir(path.dirname(parsed.tasksPath))
+    const projectRoot = inferProjectRootFromSystemStatePath(parsed.tasksPath, task.projectPath)
     const existingIssueEvidence = await readTaskEvidence(projectRoot, task.id, { kind: 'agent_issue' })
     const issue = latestIssuesById(task, existingIssueEvidence).get(parsed.issueId)
     if (!issue) {

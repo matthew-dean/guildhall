@@ -70,6 +70,40 @@ function effectiveAcceptanceCriteria(task: Task) {
   return task.acceptanceCriteria
 }
 
+function currentLifecycleHardGates(task: Task): Task['gateResults'] {
+  const latestById = new Map<string, Task['gateResults'][number]>()
+  for (const gate of task.gateResults) {
+    if (gate.type === 'hard') latestById.set(gate.gateId, gate)
+  }
+
+  const state = task as Task & {
+    proofRecovery?: { reopenedAt?: unknown }
+    currentLifecycle?: { reopenedAt?: unknown }
+    runtime?: {
+      proofRecovery?: { reopenedAt?: unknown }
+      currentLifecycle?: { reopenedAt?: unknown }
+    }
+  }
+  const lifecycleBoundaries = [
+    state.proofRecovery?.reopenedAt,
+    state.runtime?.proofRecovery?.reopenedAt,
+    state.currentLifecycle?.reopenedAt,
+    state.runtime?.currentLifecycle?.reopenedAt,
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => Date.parse(value))
+    .filter(Number.isFinite)
+  const reopenedAt = lifecycleBoundaries.length > 0
+    ? Math.max(...lifecycleBoundaries)
+    : Number.NaN
+  if (!Number.isFinite(reopenedAt)) return [...latestById.values()]
+
+  return [...latestById.values()].filter((gate) => {
+    const checkedAt = Date.parse(gate.checkedAt)
+    return Number.isFinite(checkedAt) && checkedAt > reopenedAt
+  })
+}
+
 function reviewTargetsForTask(task: Task) {
   return {
     acceptanceCriterionIds: effectiveAcceptanceCriteria(task).map(criterion => criterion.id),
@@ -93,13 +127,13 @@ export function shouldAdvanceToGateCheckPendingHardGates(
   if (failingSignals.some((signal) => signal !== 'no-regressions')) return false
   const acs = effectiveAcceptanceCriteria(task)
   if (acs.length === 0 || !acs.every((criterion) => criterion.met)) return false
-  return !task.gateResults.some((gate) => gate.type === 'hard')
+  return currentLifecycleHardGates(task).length === 0
 }
 
 export function shouldAdvanceToGateCheckPendingAutomatedVerification(
   task: Task,
 ): boolean {
-  if (task.gateResults.some((gate) => gate.type === 'hard')) return false
+  if (currentLifecycleHardGates(task).length > 0) return false
   const acs = effectiveAcceptanceCriteria(task)
   if (acs.length === 0) return false
 
@@ -170,7 +204,7 @@ export function deterministicReview(
     )
   }
 
-  const hardGates = task.gateResults.filter((g) => g.type === 'hard')
+  const hardGates = currentLifecycleHardGates(task)
   const scopedHardGateDisposition = context
     ? summarizeScopedHardGateDisposition(
         {
@@ -263,6 +297,7 @@ export interface ApplyDeterministicVerdictInput {
   verdict: DeterministicVerdict
   now: string
   llmError?: string
+  llmFailureCode?: NonNullable<ReviewVerdict['failureCode']>
   policyVersion?: string
   reviewerId?: string
 }
@@ -318,7 +353,7 @@ export function applyDeterministicVerdict(
     ...(acceptedCriteriaIds.length > 0 ? { acceptedCriteriaIds } : {}),
     ...(proofEvidenceIds.length > 0 ? { proofEvidenceIds } : {}),
     ...(input.llmError !== undefined ? { llmError: input.llmError } : {}),
-    ...(input.llmError !== undefined ? { failureCode: 'provider_unavailable' as const } : {}),
+    ...(input.llmFailureCode !== undefined ? { failureCode: input.llmFailureCode } : {}),
     recordedAt: input.now,
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
@@ -371,9 +406,9 @@ function extractLlmReviewerStructured(task: Task): unknown {
 
 export function recordApprovedReviewProof(
   task: Task,
-  now: string,
-  recordedBy = 'reviewer-agent',
-  proofEvidenceIds?: readonly string[],
+  _now: string,
+  _recordedBy = 'reviewer-agent',
+  _proofEvidenceIds?: readonly string[],
 ): void {
   const proofPaths = (task as unknown as { proofPaths?: Array<Record<string, unknown>> }).proofPaths
   if (!Array.isArray(proofPaths)) return
@@ -398,49 +433,9 @@ export function recordApprovedReviewProof(
     // them before recording evidence so the persisted contract has stable
     // evidence IDs that proof-health can match on every later read.
     proofPath.expectedEvidence = expectedEvidence
-    if (expectedEvidence.length === 0) continue
-
-    const existingRecords = Array.isArray(proofPath.verificationRecords)
-      ? proofPath.verificationRecords.filter((record): record is Record<string, unknown> =>
-          Boolean(record) && typeof record === 'object' && !Array.isArray(record),
-        )
-      : []
-    const currentRecords = [...existingRecords]
-
-    const latestApproved = [...(task.reviewVerdicts ?? [])]
-      .reverse()
-      .find(verdict => verdict.verdict === 'approve')
-    const effectiveProofEvidenceIds = proofEvidenceIds ?? (
-      latestApproved?.reviewerPath === 'llm' ? latestApproved.proofEvidenceIds ?? [] : undefined
-    )
-    const allowedEvidenceIds = effectiveProofEvidenceIds === undefined ? null : new Set(effectiveProofEvidenceIds)
-    expectedEvidence.forEach((evidence, index) => {
-      if (evidence.required === false) return
-      const evidenceId = typeof evidence.id === 'string' && evidence.id.trim()
-        ? evidence.id.trim()
-        : `${proofPathId}-evidence-${index}`
-      if (allowedEvidenceIds && !allowedEvidenceIds.has(evidenceId)) return
-      const description = typeof evidence.description === 'string' && evidence.description.trim()
-        ? evidence.description.trim()
-        : evidenceId
-      const withoutCurrentRecord = currentRecords.filter((record) => record.evidenceId !== evidenceId)
-      withoutCurrentRecord.push({
-        id: `review-proof-${evidenceId}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
-        evidenceId,
-        kind: 'manual',
-        status: 'passed',
-        summary: `Approved review verified: ${description}`,
-        recordedAt: now,
-        recordedBy,
-        evidenceRefs: [],
-      })
-      currentRecords.splice(0, currentRecords.length, ...withoutCurrentRecord)
-    })
-
-    proofPath.verificationRecords = currentRecords
-    proofPath.status = 'verified'
-    proofPath.updatedAt = now
-    proofPath.updatedBy = 'reviewer-agent'
+    // The proof path is the expectation contract. The approving
+    // ReviewVerdict carries the observed stable evidence IDs and is persisted
+    // as typed evidence by the task-state boundary.
   }
 }
 

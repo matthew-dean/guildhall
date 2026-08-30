@@ -9,6 +9,8 @@ export interface ProjectActionStartReadiness {
   focusTaskTitle?: string
   focusKind?: string
   count?: number
+  progressState?: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss'
+  repositoryOperation?: 'push_branch' | 'open_pull_request'
   executionScope?: {
     id: string
     label: string
@@ -17,6 +19,37 @@ export interface ProjectActionStartReadiness {
     taskCount?: number
     deferredTaskCount?: number
   }
+}
+
+export function isFocusedOwnerInputTaskReview(
+  readiness: Pick<ProjectActionStartReadiness, 'code' | 'focusKind' | 'focusTaskId'> | null | undefined,
+): boolean {
+  return readiness?.code === 'owner_input_required' &&
+    Boolean(readiness.focusTaskId?.trim()) &&
+    readiness.focusKind !== 'setup'
+}
+
+export function projectTaskActionHref(
+  readiness: Pick<ProjectActionStartReadiness, 'code' | 'focusKind' | 'focusTaskId'>,
+  projectId?: string,
+): string {
+  const projectRoot = projectId ? `/projects/${encodeURIComponent(projectId)}` : ''
+  const taskId = readiness.focusTaskId?.trim()
+  if (readiness.code === 'owner_review_required') {
+    return taskId
+      ? `${projectRoot}/task/${encodeURIComponent(taskId)}`
+      : `${projectRoot}/work`
+  }
+  const reviewInThread = readiness.focusKind === 'spec_review' ||
+    isFocusedOwnerInputTaskReview(readiness)
+  if (reviewInThread) {
+    return taskId
+      ? `${projectRoot}/thread?thread=${encodeURIComponent(`task:${taskId}`)}`
+      : `${projectRoot}/thread`
+  }
+  return taskId
+    ? `${projectRoot}/work?task=${encodeURIComponent(taskId)}`
+    : `${projectRoot}/work`
 }
 
 /**
@@ -80,6 +113,21 @@ export interface ProjectActionTask {
   }
 }
 
+export interface ProjectWorkSummaryModel {
+  total: number
+  agentActive: number
+  paused: number
+  waiting: number
+  reviewWaiting: number
+  gatesWaiting: number
+  shaping: number
+  specRevisionQueued: number
+  readyForWorker: number
+  needsSpecCleanup: number
+  awaitingApproval: number
+  done: number
+}
+
 export interface ProjectActionThreadTurn {
   id: string
   kind?: string
@@ -115,10 +163,27 @@ export interface ProjectActionScopeAuthorityRequest {
 
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
+export type ProjectActionOperation = 'start_focused' | 'repair_spec' | 'push_branch' | 'open_pull_request'
+export type ProjectActionOwnerHeading =
+  | 'What needs your attention'
+  | 'Project update required'
+  | 'Spec repair needed'
+  | 'Worker needs a fresh pass'
+  | 'Worker discarded its edits'
+  | 'Work paused'
+  | 'Work is underway'
+  | 'Ready to start'
+  | 'Review ready to continue'
+  | 'Automated review needs retry'
+  | 'Branch is ready to share'
+  | 'Pull request is ready to open'
+  | 'Release is ready'
 
 export interface ProjectAction {
   source: ProjectActionSource
   label: string
+  ownerHeading?: ProjectActionOwnerHeading
+  taskLabel?: string
   detail?: string
   content?: string
   buttonLabel: string
@@ -127,6 +192,27 @@ export interface ProjectAction {
   code?: string
   taskId?: string
   inboxKind?: string
+  operation?: ProjectActionOperation
+}
+
+function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): ProjectActionOwnerHeading {
+  if (action.operation === 'repair_spec') return 'Spec repair needed'
+  if (action.operation === 'push_branch') return 'Branch is ready to share'
+  if (action.operation === 'open_pull_request') return 'Pull request is ready to open'
+  switch (action.code) {
+    case 'required_migration_pending': return 'Project update required'
+    case 'paused_live_work': return 'Work paused'
+    case 'worker_recovery': return 'Worker needs a fresh pass'
+    case 'review_retry': return 'Automated review needs retry'
+    case 'running': return 'Work is underway'
+    case 'ready_work': return 'Ready to start'
+    case 'release_ready': return 'Release is ready'
+    default: return 'What needs your attention'
+  }
+}
+
+function presentOwnerAction(action: ProjectAction): ProjectAction {
+  return { ...action, ownerHeading: action.ownerHeading ?? ownerHeadingForAction(action) }
 }
 
 export interface ProjectRunControlModel {
@@ -161,6 +247,7 @@ export interface ProjectActionModel {
   runControl: ProjectRunControlModel
   ownerInput: ProjectOwnerInputModel
   setup: ProjectSetupModel
+  workSummary?: ProjectWorkSummaryModel
 }
 
 export interface BuildProjectActionModelInput {
@@ -168,12 +255,46 @@ export interface BuildProjectActionModelInput {
   ownerInput?: ProjectOwnerInputModel | null
   inbox?: { items?: ProjectActionInboxItem[] } | null
   tasks?: ProjectActionTask[]
+  summaryTasks?: ProjectActionTask[]
   thread?: ProjectActionThread | null
   scopeAuthorityRequests?: ProjectActionScopeAuthorityRequest[]
   runStatus?: string | null
   runMode?: string | null
   availability?: ProjectAvailabilityModel | null
   releaseLifecycleState?: string | null
+}
+
+function buildProjectWorkSummary(tasks: ProjectActionTask[], running: boolean): ProjectWorkSummaryModel {
+  const visible = tasks.filter(task =>
+    !['task-meta-intake', 'task-workspace-import'].includes(task.id) &&
+    !['archived', 'cancelled'].includes(task.status ?? ''),
+  )
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const waiting = (task: ProjectActionTask): boolean => {
+    const dependencies = task.dependsOn ?? []
+    return dependencies.length > 0 && dependencies.some(id => tasksById.get(id)?.status !== 'done')
+  }
+  const ready = visible.filter(task => task.status === 'ready' && !waiting(task))
+  return {
+    total: visible.length,
+    agentActive: visible.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
+    paused: visible.filter(task => !running && ['exploring', 'in_progress'].includes(task.status ?? '') && !waiting(task)).length,
+    waiting: visible.filter(waiting).length,
+    reviewWaiting: visible.filter(task => task.status === 'review' && !waiting(task)).length,
+    gatesWaiting: visible.filter(task => task.status === 'gate_check' && !waiting(task)).length,
+    shaping: visible.filter(task => running && ['import_draft', 'exploring'].includes(task.status ?? '') && !waiting(task)).length,
+    specRevisionQueued: 0,
+    readyForWorker: ready.filter(task => !needsBriefCleanup(task)).length,
+    needsSpecCleanup: ready.filter(needsBriefCleanup).length,
+    awaitingApproval: visible.filter(task => task.status === 'spec_review' && !waiting(task)).length,
+    done: visible.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
+  }
+}
+
+function currentOwnerApprovalCount(readiness: ProjectActionStartReadiness | null | undefined): number {
+  return readiness?.code === 'owner_review_required'
+    ? Math.max(1, readiness.count ?? 1)
+    : 0
 }
 
 function hasApprovedProductBrief(task: ProjectActionTask): boolean {
@@ -227,9 +348,18 @@ function workHrefForTask(taskId: string | undefined): string {
 }
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
-  if (readiness.code === 'required_migration_pending') return 'Migrate project'
+  if (readiness.progressState === 'worker_retry_recommended' || readiness.progressState === 'worker_edit_loss') return 'Retry worker'
+  if (readiness.focusKind === 'review_retry' || readiness.code === 'review_retry') return 'Retry review'
+  if (readiness.focusKind === 'review_work') return 'Resume review'
+  if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Open task'
+  if (readiness.code === 'required_migration_pending') return 'Review project update'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
+  if (readiness.code === 'owner_review_required') {
+    return readiness.count && readiness.count > 1 ? 'Review next spec' : 'Review spec'
+  }
   if (readiness.code === 'owner_input_required') {
+    if (readiness.focusKind === 'brief_cleanup') return 'Review brief'
+    if (readiness.focusKind === 'spec_review') return 'Review spec'
     return 'Open Thread'
   }
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
@@ -238,8 +368,8 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
   if (readiness.code === 'scope_source_conflict') return 'Open map'
   if (readiness.code === 'repository_followup_required') return 'Open release'
-  if (readiness.code === 'ready_work') return 'Open Work'
-  if (readiness.code === 'paused_live_work') return 'Open Work'
+  if (readiness.code === 'ready_work') return 'Start work'
+  if (readiness.code === 'paused_live_work') return 'Resume work'
   if (readiness.code === 'no_unattended_progress') {
     if (readiness.focusKind === 'blocked_work') return 'Open Work'
     if (readiness.focusKind === 'brief_cleanup') return 'Review brief'
@@ -252,7 +382,12 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
 function runControlLabel(readiness: ProjectActionStartReadiness | null | undefined, running: boolean, stopping: boolean): string {
   if (stopping) return 'Stopping'
   if (running) return 'Pause'
+  if (readiness?.focusKind === 'review_retry' || readiness?.code === 'review_retry') return 'Retry review'
+  if (readiness?.focusKind === 'review_work') return 'Resume review'
+  if (readiness?.code === 'ready_work') return 'Start'
+  if (readiness?.progressState === 'worker_retry_recommended' || readiness?.progressState === 'worker_edit_loss') return 'Retry worker'
   if (!readiness || readiness.canStart) return 'Resume'
+  if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'required_migration_pending') return 'Migrate'
   if (isProviderReadinessCode(readiness.code)) return 'Needs provider'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
@@ -263,6 +398,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (readiness.code === 'scope_source_conflict') return 'Review conflict'
   if (readiness.code === 'repository_followup_required') return 'Repo follow-up'
   if (readiness.code === 'paused_live_work') return 'Resume'
+  if (readiness.code === 'owner_review_required') return 'Review needed'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'brief_cleanup') return 'Review brief'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'spec_review') return 'Review needed'
@@ -278,7 +414,19 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 }
 
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
+  if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') {
+    return readiness.focusTaskTitle?.trim() || 'Blocked work'
+  }
+  if (readiness.code === 'owner_review_required') {
+    return readiness.focusTaskTitle?.trim() || 'Spec review pending'
+  }
+  if (readiness.code === 'owner_input_required') {
+    if (readiness.focusKind === 'brief_cleanup') return readiness.focusTaskTitle?.trim() || 'Review task brief'
+    if (readiness.focusKind === 'spec_review') return readiness.focusTaskTitle?.trim() || 'Review spec'
+    return 'Answer in Thread'
+  }
   if (readiness.code === 'ready_work') return readiness.focusTaskTitle?.trim() || readiness.message || 'Ready work'
+  if (readiness.code === 'review_retry') return readiness.focusTaskTitle?.trim() || 'Automated review needs retry'
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
@@ -323,11 +471,14 @@ function ownerInputDetail(detail: string | null | undefined): string {
 
 function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefined, turn: ProjectActionThreadTurn | null): ProjectOwnerInputModel {
   if (readiness?.code === 'owner_input_required') {
+    const focusedSpecReview = readiness.focusKind === 'spec_review' && readiness.focusTaskId
     return {
       active: true,
-      label: 'Answer in Thread',
+      label: startReadinessActionLabel(readiness),
       detail: ownerInputDetail(turn?.question?.prompt ?? readiness.message),
-      href: readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
+      href: focusedSpecReview
+        ? taskHrefForTask(readiness.focusTaskId)
+        : readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
     }
   }
   if (!turn || !isOwnerQuestionTurn(turn)) {
@@ -372,7 +523,7 @@ function inboxButtonLabel(item: ProjectActionInboxItem): string {
     case 'workspace_import_pending': return 'Review import'
     case 'proof_reconciliation': return 'Review proof'
     case 'bootstrap_missing': return 'Open readiness checks'
-    case 'setup_pending': return 'Open setup'
+    case 'setup_pending': return 'Start setup'
     case 'import_draft_queue': return item.taskId === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'
     case 'required_migration': return 'Migrate project'
     case 'lever_questions': return 'Open advanced'
@@ -421,6 +572,12 @@ function taskBlockedReason(task: ProjectActionTask): string | null {
   return reason.length > 0 ? reason : null
 }
 
+function ownerBlockDetail(reason: string): string {
+  return /^[a-z_]+:/.test(reason)
+    ? 'This task stopped before it could make visible progress. Choose its recovery action to continue.'
+    : reason
+}
+
 function hasExecutionChildren(task: ProjectActionTask, tasks: readonly ProjectActionTask[]): boolean {
   const explicitChildren = task.hierarchy?.childIds ?? []
   if (explicitChildren.length > 0) return true
@@ -463,43 +620,128 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
     !hasSpecDraft(task)
   const blockedReason = taskBlockedReason(task)
   const blocked = task.status === 'blocked' || blockedReason !== null
+  const currentBriefIntent = hasCompleteProductBrief(task)
+    ? task.productBrief?.userJob?.trim()
+    : ''
   return {
     source: 'task',
     label: taskLabel(task),
     detail: blockedReason
-      ? blockedReason
+      ? ownerBlockDetail(blockedReason)
       : approvedBriefNeedsSpec
       ? 'Guildhall is shaping a source-backed spec from the approved brief.'
       : cleanup
       ? 'Needs brief: finish the handoff before a worker can start.'
-      : task.description,
-    buttonLabel: task.status === 'spec_review' ? 'Review in Thread' : 'Open Work',
-    href: task.status === 'spec_review' ? threadHrefForTask(task.id) : workHrefForTask(task.id),
+      : currentBriefIntent
+        ? `Current brief: ${currentBriefIntent}`
+        : task.description,
+    // A blocked item is a recovery decision, not more work to browse. Send
+    // the owner straight to the task's compact recovery surface.
+    buttonLabel: task.status === 'spec_review' ? 'Review spec' : blocked ? 'Open task' : 'Open Work',
+    href: task.status === 'spec_review' || blocked ? taskHrefForTask(task.id) : workHrefForTask(task.id),
     tone: cleanup || blocked || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',
+    ...(blockedReason ? { code: 'blocked_work' } : {}),
+    ...(running ? { code: 'running' } : {}),
     taskId: task.id,
   }
 }
 
-function threadHrefForTask(taskId: string | undefined): string {
-  return taskId ? `/thread?thread=${encodeURIComponent(`task:${taskId}`)}` : '/thread'
+function taskHrefForTask(taskId: string | undefined): string {
+  return taskId ? `/task/${encodeURIComponent(taskId)}` : '/work'
 }
 
 function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAction {
-  const label = readiness.code === 'owner_input_required' ? 'Answer in Thread' : startReadinessActionLabel(readiness)
-  const detail = readiness.code === 'ready_work'
-    ? undefined
-    : readiness.message && readiness.message !== label
+  const ownerReview = readiness.code === 'owner_review_required'
+  const focusedSpecReview = ownerReview || readiness.focusKind === 'spec_review'
+  const pausedWork = readiness.code === 'paused_live_work' || readiness.focusKind === 'paused_work'
+  const runnableWork = readiness.code === 'ready_work' ||
+    readiness.code === 'paused_live_work' ||
+    readiness.code === 'worker_recovery'
+  const specRepair = readiness.focusKind === 'spec_repair'
+  const reviewWork = readiness.focusKind === 'review_work'
+  const reviewRetry = readiness.focusKind === 'review_retry' || readiness.code === 'review_retry'
+  const repositoryOperation = readiness.repositoryOperation
+  const repositoryFollowup = readiness.code === 'repository_followup_required'
+  const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
+  const workerRetryRecommended = readiness.progressState === 'worker_retry_recommended'
+  const workerEditLoss = readiness.progressState === 'worker_edit_loss'
+  const pausedSavedWorkDetail = readiness.focusTaskTitle?.trim()
+    ? `"${readiness.focusTaskTitle.trim()}" is paused with saved work. Resume continues the same task.`
+    : 'Work is paused with saved progress. Resume continues the same task.'
+  const operation = repositoryOperation ?? (readiness.canStart && readiness.focusTaskId && (runnableWork || reviewRetry)
+    ? (specRepair ? 'repair_spec' : 'start_focused')
+    : undefined)
+  const label = repositoryOperation === 'push_branch'
+    ? 'Branch is ready to share'
+    : repositoryOperation === 'open_pull_request'
+      ? 'Pull request is ready to open'
+    : workerEditLoss
+    ? 'Worker discarded its edits'
+    : workerRetryRecommended
+    ? 'Worker needs a fresh pass'
+    : reviewWork
+    ? 'Review ready to continue'
+    : reviewRetry
+    ? 'Automated review needs retry'
+    : specRepair
+    ? 'Repair this spec'
+    : ownerReview
+    ? 'Review a spec'
+    : runnableWork
+      ? (readiness.code === 'paused_live_work' ? 'Work paused' : 'Work ready to start')
+      : startReadinessActionLabel(readiness)
+  const taskLabel = ownerReview || runnableWork || reviewRetry || repositoryFollowup ? readiness.focusTaskTitle?.trim() : undefined
+  // The selected task is the decision. A review-queue count is operational
+  // context, not an explanation that competes with that task on every surface.
+  const detail = repositoryOperation === 'push_branch'
+    ? 'The completed change is local. Push its branch so Guildhall can prepare the release handoff.'
+    : repositoryOperation === 'open_pull_request'
+      ? 'The completed branch is shared. Open its pull request to continue the release handoff.'
+    : workerEditLoss
+    ? `Guildhall saw this worker's edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.`
+    : workerRetryRecommended
+    ? 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.'
+    : reviewWork
+    ? 'The implementation is saved. Resume review to have Guildhall check the current change.'
+    : reviewRetry
+    ? 'Guildhall could not complete its automated review. The saved change is intact; retry review starts that check again.'
+    : readiness.progressState === 'partial_work_saved'
+    ? pausedSavedWorkDetail
+    : pausedWork
+    ? readiness.message
+    : blockedWork
+    ? 'This task stopped and needs its recovery action before it can continue.'
+    : !ownerReview && !runnableWork && readiness.message && readiness.message !== label
       ? readiness.message
       : undefined
   return {
     source: readiness.code === 'owner_input_required' ? 'owner_input' : 'start_readiness',
     label,
+    ...(taskLabel ? { taskLabel } : {}),
     detail,
-    buttonLabel: startReadinessButtonLabel(readiness),
-    href: readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
-    tone: readiness.code === 'required_migration_pending' ? 'danger' : readiness.code === 'ready_work' ? 'accent' : 'warn',
-    code: readiness.code,
+    buttonLabel: repositoryOperation === 'push_branch'
+      ? 'Push branch'
+      : repositoryOperation === 'open_pull_request'
+        ? 'Open pull request'
+        : specRepair ? 'Repair spec' : startReadinessButtonLabel(readiness),
+    href: (focusedSpecReview || blockedWork) && readiness.focusTaskId
+      ? taskHrefForTask(readiness.focusTaskId)
+      : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
+    tone: readiness.code === 'required_migration_pending'
+      ? 'danger'
+      : workerRetryRecommended || workerEditLoss || reviewRetry
+        ? 'warn'
+      : readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
+        ? 'accent'
+        : 'warn',
+    code: workerRetryRecommended || workerEditLoss ? 'worker_recovery' : readiness.code,
+    ...(reviewWork ? { ownerHeading: 'Review ready to continue' as const } : {}),
+    ...(reviewRetry ? { ownerHeading: 'Automated review needs retry' as const } : {}),
+    ...(workerEditLoss ? { ownerHeading: 'Worker discarded its edits' as const } : {}),
+    ...(repositoryOperation === 'push_branch' ? { ownerHeading: 'Branch is ready to share' as const } : {}),
+    ...(repositoryOperation === 'open_pull_request' ? { ownerHeading: 'Pull request is ready to open' as const } : {}),
     ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
+    ...(operation ? { operation } : {}),
   }
 }
 
@@ -536,6 +778,9 @@ function setupModel(
     }
   }
   if (!readiness?.canStart && readiness?.code === 'owner_input_required') {
+    if (isFocusedOwnerInputTaskReview(readiness)) {
+      return { state: 'ready', freshIntakeNeeded: false }
+    }
     return {
       state: 'blocked',
       freshIntakeNeeded: false,
@@ -559,6 +804,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const tasks = input.tasks ?? []
   const running = input.runStatus === 'running'
   const stopping = input.runStatus === 'stopping'
+  const runActive = running || stopping
   const availabilityPaused = input.availability?.status === 'paused'
   const activeTurn = activeThreadTurn(input.thread)
   const scopeOwnerInput = scopeAuthorityOwnerInput(input.scopeAuthorityRequests ?? [])
@@ -567,6 +813,17 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const shippedTerminal = input.releaseLifecycleState === 'shipped'
   const blockingInboxItem = setupBlockingInboxItem(inboxItems)
   const setup = setupModel(startReadiness, tasks, activeTurn, blockingInboxItem)
+  const rawWorkSummary = input.summaryTasks ? buildProjectWorkSummary(input.summaryTasks, runActive) : undefined
+  // This compact summary sits beside the owner's next action. A raw
+  // spec_review status can be Guildhall-owned repair work, deferred scope, or
+  // an otherwise non-current record; only start readiness can certify that an
+  // approval is actually waiting on the owner now.
+  const workSummary = rawWorkSummary
+    ? {
+        ...rawWorkSummary,
+        awaitingApproval: currentOwnerApprovalCount(startReadiness),
+      }
+    : undefined
   if (shippedTerminal) {
     return {
       primaryAction: null,
@@ -580,6 +837,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       },
       ownerInput: { active: false },
       setup: blockingInboxItem ? setup : { state: 'ready', freshIntakeNeeded: false },
+      ...(workSummary ? { workSummary } : {}),
     }
   }
   const setupBlocksStart = setup.state === 'blocked' && (tasks.length === 0 || blockingInboxItem !== null)
@@ -593,11 +851,17 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const taskAction = startReadiness?.code === 'all_terminal'
     ? null
     : focusedRunTaskId
-      ? bestTaskAction(tasks.filter(task => task.id === focusedRunTaskId), running)
-      : bestTaskAction(tasks, running)
+      ? bestTaskAction(tasks.filter(task => task.id === focusedRunTaskId), runActive)
+      : bestTaskAction(tasks, runActive)
   const candidates: ProjectAction[] = []
+  // Compact summary input also carries a synthetic focused row for paused
+  // live work. Only a recorded block reason is evidence that this task must
+  // outrank a resumable recommendation.
+  const taskActionIsBlocked = Boolean(taskAction?.taskId && tasks.some(task =>
+    task.id === taskAction.taskId && taskBlockedReason(task) !== null,
+  ))
 
-  if (startReadiness?.code === 'all_terminal') {
+  if (startReadiness?.code === 'all_terminal' && startReadiness.executionScope) {
     candidates.push({
       source: 'start_readiness',
       label: 'Release is ready',
@@ -610,24 +874,35 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   }
   if (startReadiness && !startReadiness.canStart && startReadiness.code !== 'all_terminal') {
     candidates.push(
-      startReadiness.code === 'owner_input_required' && ownerInput.href
+      startReadiness.code === 'owner_input_required' && ownerInput.href && startReadiness.focusKind !== 'spec_review'
         ? {
             ...startReadinessAction(startReadiness),
             detail: ownerInputDetail(activeTurn?.question?.prompt ?? startReadiness.message),
             href: ownerInput.href,
-            buttonLabel: 'Open Thread',
+            buttonLabel: startReadinessButtonLabel(startReadiness),
           }
         : startReadinessAction(startReadiness),
     )
   }
-  if (setupInboxAction && !running) candidates.push(setupInboxAction)
+  if (setupInboxAction && !runActive) candidates.push(setupInboxAction)
+  // A recorded block is a concrete owner handoff. Do not let a saved
+  // resumable-work recommendation send the owner to an unrelated task first.
+  if (taskActionIsBlocked && taskAction) candidates.push(taskAction)
   // Start readiness owns whether work is runnable. Compact summaries omit
   // brief/spec detail, so task ranking must never reinterpret a ready item as
   // blocked or incomplete merely because that detail is intentionally absent.
-  if (startReadiness?.canStart && startReadiness.code === 'ready_work') {
+  if (
+    startReadiness?.canStart &&
+    (
+      startReadiness.code === 'ready_work' ||
+      startReadiness.code === 'paused_live_work' ||
+      startReadiness.code === 'worker_recovery' ||
+      startReadiness.code === 'review_retry'
+    )
+  ) {
     candidates.push(startReadinessAction(startReadiness))
   }
-  if (running && startReadiness?.focusTaskId && !taskAction) {
+  if (runActive && startReadiness?.focusTaskId && !taskAction) {
     candidates.push({
       source: 'start_readiness',
       label: startReadiness.focusTaskTitle?.trim() || 'Current work',
@@ -635,6 +910,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       buttonLabel: 'Open Work',
       href: startReadiness.actionHref ?? workHrefForTask(startReadiness.focusTaskId),
       tone: 'running',
+      code: 'running',
       taskId: startReadiness.focusTaskId,
     })
   }
@@ -649,7 +925,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     })
   }
   if (scopeAction) candidates.push(scopeAction)
-  if (taskAction) candidates.push(taskAction)
+  if (taskAction && !taskActionIsBlocked) candidates.push(taskAction)
   candidates.push(...inboxActions)
   if (
     activeTurn &&
@@ -672,34 +948,90 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     })
   }
 
-  const primaryAction = candidates[0] ?? null
-  const secondaryActions = candidates.slice(1, 4)
+  const selectedPrimaryAction = candidates[0] ?? null
+  const primaryAction = selectedPrimaryAction ? presentOwnerAction(selectedPrimaryAction) : null
+  const secondaryActions = candidates
+    .slice(1)
+    .filter(action => {
+      if (!primaryAction) return true
+      if (primaryAction.taskId && action.taskId === primaryAction.taskId) return false
+      return action.href !== primaryAction.href
+    })
+    .slice(0, 3)
   const blockedButRunnable = startReadiness?.code === 'proof_evidence_missing'
-  const disabledReason = !running && startReadiness?.canStart === false && !blockedButRunnable
-    ? startReadiness.message
-    : stopping
-      ? 'Pause requested. Guildhall is waiting for active work to stop.'
-    : !running && setupBlocksStart
-      ? setup.detail ?? ownerInput.detail ?? 'Finish setup before starting work.'
-      : undefined
+  // A recorded blocked task is more specific than a stale ready-work
+  // recommendation. Its recovery action owns the next owner decision and
+  // must therefore also own the run control.
+  const blockedWork = startReadiness?.code === 'blocked_work' ||
+    startReadiness?.focusKind === 'blocked_work' ||
+    primaryAction?.code === 'blocked_work'
+  const disabledReason = stopping
+    ? 'Pause requested. Guildhall is waiting for active work to stop.'
+    : !runActive && blockedWork
+      ? 'Open the blocked task to choose its recovery action.'
+      : !runActive && startReadiness?.canStart === false && !blockedButRunnable
+        ? startReadiness.message
+      : !runActive && setupBlocksStart
+        ? setup.detail ?? ownerInput.detail ?? 'Finish setup before starting work.'
+        : undefined
   return {
     primaryAction,
     secondaryActions,
     runControl: {
       label: setupBlocksStart && !running && !stopping
         ? 'Waiting on setup'
+        : blockedWork && !running && !stopping
+          ? 'Needs recovery'
+        : primaryAction?.code === 'worker_recovery' && !running && !stopping
+          ? 'Retry worker'
         : availabilityPaused && !running && !stopping
           ? 'Resume'
         : ownerInput.active && !running && !stopping
           ? 'Waiting on answer'
           : runControlLabel(startReadiness, running, stopping),
-      startEnabled: availabilityPaused || running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart),
-      pauseEnabled: !availabilityPaused && !stopping && !setupBlocksStart,
+      startEnabled: !blockedWork && (availabilityPaused || running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart)),
+      // Pause is an execution command, never a generic red treatment for a
+      // blocked project. A stopped project has a next action, not something
+      // to pause.
+      pauseEnabled: running,
       disabledReason,
-      href: startReadiness?.actionHref ?? setup.href,
+      href: blockedWork ? primaryAction?.href ?? startReadiness?.actionHref ?? setup.href : startReadiness?.actionHref ?? setup.href,
     },
     ownerInput,
     setup,
+    ...(workSummary ? { workSummary } : {}),
+  }
+}
+
+/**
+ * A fleet card may have saved owner attention before its compact project
+ * summary has a primary action. Promote that already-prioritized attention
+ * through the same action-model builder used by every project surface.
+ */
+export function buildFleetAttentionActionModel(input: {
+  stored?: ProjectActionModel | null
+  items?: ProjectActionInboxItem[]
+  runStatus?: string | null
+}): ProjectActionModel | null {
+  if (input.stored) return input.stored
+  const items = input.items ?? []
+  if (items.length === 0) return null
+  const model = buildProjectActionModel({
+    inbox: { items },
+    tasks: [],
+    runStatus: input.runStatus,
+  })
+  if (!model.primaryAction) return null
+  if (input.runStatus === 'running' || input.runStatus === 'stopping') return model
+  return {
+    ...model,
+    runControl: {
+      label: model.primaryAction.buttonLabel,
+      startEnabled: false,
+      pauseEnabled: false,
+      disabledReason: model.primaryAction.detail,
+      href: model.primaryAction.href,
+    },
   }
 }
 
@@ -718,6 +1050,12 @@ export function resolveProjectActionModel(input: {
   releaseLifecycleState?: string | null
 }): ProjectActionModel {
   const readiness = input.startReadiness ?? null
+  const storedWorkSummary = input.stored?.workSummary
+    ? {
+        ...input.stored.workSummary,
+        awaitingApproval: currentOwnerApprovalCount(readiness),
+      }
+    : undefined
   if (input.releaseLifecycleState === 'shipped') {
     const resolved = buildProjectActionModel({
       startReadiness: readiness,
@@ -730,12 +1068,10 @@ export function resolveProjectActionModel(input: {
     return {
       ...resolved,
       setup: input.stored?.setup ?? resolved.setup,
+      ...(storedWorkSummary ? { workSummary: storedWorkSummary } : {}),
     }
   }
-  const hasResolvedReadiness = Boolean(
-    readiness?.code &&
-    (readiness.canStart || readiness.code !== 'all_terminal'),
-  )
+  const hasResolvedReadiness = Boolean(readiness?.code)
   if (!hasResolvedReadiness) {
     return input.stored ?? buildProjectActionModel({
       startReadiness: readiness,
@@ -753,6 +1089,17 @@ export function resolveProjectActionModel(input: {
     tasks: [],
     releaseLifecycleState: input.releaseLifecycleState,
   })
+  const focusedTaskReview = isFocusedOwnerInputTaskReview(readiness)
+  const candidateSecondaryActions = readiness?.code === 'all_terminal'
+    ? resolved.secondaryActions
+    : resolved.secondaryActions.length > 0
+    ? resolved.secondaryActions
+    : input.stored?.secondaryActions ?? []
+  const secondaryActions = candidateSecondaryActions.filter(action => {
+    if (!resolved.primaryAction) return true
+    if (resolved.primaryAction.taskId && action.taskId === resolved.primaryAction.taskId) return false
+    return action.href !== resolved.primaryAction.href
+  })
   return {
     ...(input.stored ?? resolved),
     primaryAction: resolved.primaryAction,
@@ -761,9 +1108,8 @@ export function resolveProjectActionModel(input: {
     // Setup state depends on the task inventory, which a compact current-state
     // refresh deliberately does not reload. Keep its saved projection instead
     // of deriving a false "fresh intake" state from an empty placeholder list.
-    setup: input.stored?.setup ?? resolved.setup,
-    secondaryActions: resolved.secondaryActions.length > 0
-      ? resolved.secondaryActions
-      : input.stored?.secondaryActions ?? [],
+    setup: focusedTaskReview ? resolved.setup : input.stored?.setup ?? resolved.setup,
+    secondaryActions,
+    ...(storedWorkSummary ? { workSummary: storedWorkSummary } : {}),
   }
 }

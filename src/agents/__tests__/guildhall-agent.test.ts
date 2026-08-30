@@ -376,6 +376,12 @@ describe('agent factories', () => {
     expect(a.name).toBe('spec-agent')
   })
 
+  it('createSpecAgent budgets enough turns to inspect source and save a blueprint', () => {
+    const agent = createSpecAgent(llm)
+    expect((agent as unknown as { engine: { getMaxTurns(): number | null } }).engine.getMaxTurns())
+      .toBe(16)
+  })
+
   it('spec guidance forbids guessed executable proof commands', () => {
     const agent = createSpecAgent(llm)
     const prompt = (agent as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
@@ -411,6 +417,15 @@ describe('agent factories', () => {
     expect(prompt).toContain('deterministic validator')
     expect(prompt).toContain('matches what was actually asked for')
     expect(prompt).toContain('deep intake')
+  })
+
+  it('createSpecAgent keeps database-authoritative tasks out of raw TASKS.json inspection', () => {
+    const agent = createSpecAgent(llm)
+    const prompt = (agent as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('injected current-task packet as authoritative')
+    expect(prompt).toContain('Never open, edit, or reconstruct TASKS.json with filesystem tools')
+    expect(prompt).toContain('compatibility file may intentionally')
+    expect(prompt).toContain('update-task with the exact injected current task ID')
   })
 
   it('createSpecAgent uses Corpus Map entries as the starting abstraction inventory', () => {

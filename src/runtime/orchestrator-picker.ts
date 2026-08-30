@@ -20,7 +20,7 @@ import { workSubtreeIds } from './work-hierarchy.js'
 import { taskEligibleForSelectedScope, taskNodeId, type OrientationScope } from './project-orientation-spine.js'
 import { selectedProjectScopeForQueue } from './project-scope-projection.js'
 import { deriveWorkExecutionState } from './work-execution-state.js'
-import { specReviewNeedsRepair, specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { specReviewIsReadyForOwnerApproval } from './spec-review-ownership.js'
 import { hasImportedExecutionBlueprint } from './task-readiness.js'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
@@ -215,7 +215,7 @@ export function pickNextTask(
     !(task.status === 'spec_review' && (
       task.id === META_INTAKE_TASK_ID ||
       task.id === WORKSPACE_IMPORT_TASK_ID ||
-      (specReviewRequiresOwnerApproval(task) && !specReviewNeedsRepair(task))
+      specReviewIsReadyForOwnerApproval(task)
     )) &&
     !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
     matchesLane(task) &&

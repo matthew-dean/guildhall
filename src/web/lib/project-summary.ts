@@ -42,6 +42,7 @@ export interface ProjectCardSummary {
   }
   ticker: ProjectActivityLine
   actionLabel: string
+  openHref: string | null
   runActionLabel: string | null
   canOpen: boolean
   canStart: boolean
@@ -105,12 +106,17 @@ function actionModelStage(project: ServiceProjectSummary): string | null {
   const actionModel = project.actionModel
   if (!actionModel) return null
   if (actionModel.ownerInput?.active) return 'Needs you'
-  const code = actionModel.primaryAction?.code ?? project.startReadiness?.code
+  const primaryAction = actionModel.primaryAction
+  if (primaryAction?.source === 'inbox' && (primaryAction.tone === 'warn' || primaryAction.tone === 'danger')) {
+    return 'Needs you'
+  }
+  const code = primaryAction?.code ?? project.startReadiness?.code
   if (code === 'all_terminal') return 'Scope done'
   if (code === 'required_migration_pending') return 'Needs migration'
   if (code === 'no_provider' || code === 'no_loaded_model' || code === 'model_unavailable' || code === 'provider_unavailable') {
     return 'Needs provider'
   }
+  if (code === 'ready_work') return 'Ready to resume'
   return null
 }
 
@@ -161,6 +167,20 @@ function statusLabel(project: ServiceProjectSummary, counts: ProjectCardSummary[
 function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
   if (project.projectStatusError) return project.projectStatusError
   if (project.initializationNeeded) return 'Needs first-time Guildhall setup.'
+  const primaryAction = project.actionModel?.primaryAction
+  if (primaryAction?.code === 'owner_review_required' && primaryAction.taskLabel) {
+    return primaryAction.taskLabel
+  }
+  if (primaryAction?.code === 'ready_work') {
+    const taskLabel = primaryAction.taskLabel?.trim()
+    const actionLabel = primaryAction.label?.trim()
+    return taskLabel && taskLabel !== actionLabel
+      ? taskLabel
+      : 'Work is ready to resume.'
+  }
+  if (primaryAction) {
+    return primaryAction.taskLabel ?? primaryAction.label
+  }
   if (project.startReadiness?.canStart === false && project.startReadiness.message) {
     return project.startReadiness.message
   }
@@ -282,6 +302,14 @@ function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['co
     return {
       maturityLabel: 'Setup',
       maturityDescription: 'The basic project setup contract is still missing.',
+    }
+  }
+  if (project.actionModel?.primaryAction?.code === 'ready_work') {
+    return {
+      maturityLabel: 'Ready to resume',
+      maturityDescription: project.actionModel.primaryAction.taskLabel
+        ? `${project.actionModel.primaryAction.taskLabel} is the next work item.`
+        : 'The current work item is ready to continue.',
     }
   }
   if (counts.total === 0) {
@@ -406,6 +434,7 @@ export function summarizeProjectCard(
       taskActivity: project.taskActivity ?? emptyTaskActivity(),
       ticker: buildProjectCardTicker(project),
       actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
+      openHref: null,
       runActionLabel: null,
       canOpen: true,
       canStart: false,
@@ -447,7 +476,10 @@ export function summarizeProjectCard(
     counts,
     taskActivity: project.taskActivity ?? emptyTaskActivity(),
     ticker: buildProjectCardTicker(project),
-    actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
+    actionLabel: initializationNeeded
+      ? 'Open setup'
+      : project.actionModel?.primaryAction?.buttonLabel ?? 'Open project',
+    openHref: initializationNeeded ? null : project.actionModel?.primaryAction?.href ?? null,
     runActionLabel: initializationNeeded
       ? null
       : running

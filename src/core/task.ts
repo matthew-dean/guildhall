@@ -147,6 +147,8 @@ export const GateResult = z.object({
   type: z.enum(['hard', 'soft']),
   passed: z.boolean(),
   output: z.string().optional(),
+  /** Checkout where the command was actually observed. */
+  executionRoot: z.enum(['task_worktree', 'project_checkout']).optional(),
   checkedAt: z.string(), // ISO timestamp
 })
 export type GateResult = z.infer<typeof GateResult>

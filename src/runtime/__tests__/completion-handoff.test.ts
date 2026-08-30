@@ -6,14 +6,14 @@ import {
   recordCompletionHandoff,
   reviewCompletionHandoff,
 } from '../completion-handoff.js'
-import { ProofPath } from '../proof-paths.js'
+import { ProofPath, VerificationRecord } from '../proof-paths.js'
 
 const proofPath = ProofPath.parse({
   id: 'task-1-proof-path',
   scope: { type: 'task', id: 'task-1' },
   title: 'Verify task 1',
   summary: 'Run tests and inspect the UI.',
-  status: 'verified',
+  status: 'planned',
   launchSteps: [
     { id: 'test', kind: 'copy_command', title: 'Run tests', command: 'pnpm test -- task-1' },
     { id: 'ui', kind: 'open_url', title: 'Open UI', url: 'http://localhost:5173/task-1' },
@@ -23,32 +23,34 @@ const proofPath = ProofPath.parse({
     { id: 'browser', kind: 'manual', description: 'Journey renders proof handoff.', required: true },
     { id: 'preview', kind: 'provider', description: 'Preview deployment is healthy.', required: false },
   ],
-  verificationRecords: [
-    {
-      id: 'unit-run',
-      evidenceId: 'unit',
-      kind: 'automated',
-      status: 'passed',
-      summary: 'Focused tests passed.',
-      command: 'pnpm test -- task-1',
-      recordedAt: '2026-05-27T12:00:00.000Z',
-      recordedBy: 'worker-agent',
-    },
-    {
-      id: 'browser-check',
-      evidenceId: 'browser',
-      kind: 'manual',
-      status: 'passed',
-      summary: 'Journey proof section rendered in browser.',
-      url: 'http://localhost:5173/task-1',
-      recordedAt: '2026-05-27T12:05:00.000Z',
-      recordedBy: 'reviewer-agent',
-    },
-  ],
+  verificationRecords: [],
   createdAt: '2026-05-27T11:00:00.000Z',
   updatedAt: '2026-05-27T12:05:00.000Z',
   createdBy: 'spec-agent',
 })
+
+const observedEvidence = [
+  VerificationRecord.parse({
+    id: 'unit-run',
+    evidenceId: 'unit',
+    kind: 'automated',
+    status: 'passed',
+    summary: 'Focused tests passed.',
+    command: 'pnpm test -- task-1',
+    recordedAt: '2026-05-27T12:00:00.000Z',
+    recordedBy: 'gate-checker-agent',
+  }),
+  VerificationRecord.parse({
+    id: 'browser-check',
+    evidenceId: 'browser',
+    kind: 'manual',
+    status: 'passed',
+    summary: 'Journey proof section rendered in browser.',
+    url: 'http://localhost:5173/task-1',
+    recordedAt: '2026-05-27T12:05:00.000Z',
+    recordedBy: 'reviewer-agent',
+  }),
+]
 
 describe('completion handoff', () => {
   it('summarizes automated, manual, and provider proof without overclaiming provider evidence', () => {
@@ -58,6 +60,7 @@ describe('completion handoff', () => {
       completedBy: 'gate-checker-agent',
       summary: 'Task 1 is ready to inspect.',
       proofPaths: [proofPath],
+      observedEvidence,
       residualRisk: 'Provider preview was optional and not required for this slice.',
     })
 
@@ -96,23 +99,21 @@ describe('completion handoff', () => {
     expect(missing.ok).toBe(false)
     expect(missing.issues).toContain('Completion handoff is missing a task-scoped proof path.')
 
-    const incompleteProof = ProofPath.parse({
-      ...proofPath,
-      verificationRecords: proofPath.verificationRecords.filter((record) => record.kind !== 'manual'),
-    })
     const handoff = buildCompletionHandoff({
       taskId: 'task-1',
       completedAt: '2026-05-27T12:10:00.000Z',
       completedBy: 'gate-checker-agent',
       summary: 'Task 1 is ready.',
-      proofPaths: [incompleteProof],
+      proofPaths: [proofPath],
+      observedEvidence: observedEvidence.filter((record) => record.kind !== 'manual'),
       residualRisk: 'None.',
     })
 
     const result = reviewCompletionHandoff({
       taskId: 'task-1',
-      proofPaths: [incompleteProof],
+      proofPaths: [proofPath],
       handoff,
+      observedEvidence: observedEvidence.filter((record) => record.kind !== 'manual'),
     })
 
     expect(result.ok).toBe(false)

@@ -45,6 +45,18 @@ async function execGh(args: readonly string[], opts: { cwd: string; maxBuffer?: 
   return await execFileP(GH_BIN, [...args], opts)
 }
 
+async function execGitRecoveringStaleIndexLock(
+  args: readonly string[],
+  opts: { cwd: string; maxBuffer?: number },
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execGit(args, opts)
+  } catch (err) {
+    if (!await pruneStaleGitIndexLockFromError(errorDetail(err))) throw err
+    return await execGit(args, opts)
+  }
+}
+
 function errorDetail(err: unknown): string {
   if (err && typeof err === 'object') {
     const message = err instanceof Error ? err.message : String(err)
@@ -92,6 +104,93 @@ function isIgnorableGuildhallStatePath(file: string): boolean {
     file === '.guildhall' ||
     file.startsWith('.guildhall/')
   )
+}
+
+async function workingPathsDifferFromBranchTarget(
+  gitRoot: string,
+  branch: string,
+  files: readonly string[],
+): Promise<string[]> {
+  if (files.length === 0) return []
+  let differingPaths: string[]
+  try {
+    const { stdout } = await execGit(
+      ['diff', '--name-only', '-z', branch, '--', ...files],
+      { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
+    )
+    const differing = new Set(stdout.split('\0').filter(Boolean))
+    differingPaths = files.filter(file => differing.has(file))
+  } catch {
+    // A comparison failure must not discard task work from the landing patch.
+    return [...files]
+  }
+
+  if (differingPaths.length === 0) return []
+
+  // `git diff <branch>` does not compare untracked files with paths added by
+  // the branch. Reconcile all reported paths in two batched Git calls so an
+  // identical owner file is preserved without returning to per-path probes.
+  try {
+    const { stdout: treeOutput } = await execGit(
+      ['ls-tree', '-z', branch, '--', ...differingPaths],
+      { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
+    )
+    const targetEntries = new Map<string, { mode: string; hash: string }>()
+    for (const rawEntry of treeOutput.split('\0').filter(Boolean)) {
+      const tab = rawEntry.indexOf('\t')
+      if (tab < 0) continue
+      const [mode, , hash] = rawEntry.slice(0, tab).split(/\s+/)
+      const file = rawEntry.slice(tab + 1)
+      if (mode && hash && file) targetEntries.set(file, { mode, hash })
+    }
+
+    const hashPaths: string[] = []
+    const currentModes = new Map<string, string>()
+    const matchingDeletions = new Set<string>()
+    for (const file of differingPaths) {
+      const target = targetEntries.get(file)
+      let stat: Awaited<ReturnType<typeof fs.lstat>>
+      try {
+        stat = await fs.lstat(path.join(gitRoot, file))
+      } catch (err) {
+        if (!target && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+          matchingDeletions.add(file)
+        }
+        continue
+      }
+      if (!target || target.mode === '160000') continue
+      const currentMode = stat.isSymbolicLink()
+        ? '120000'
+        : stat.isFile()
+          ? (stat.mode & 0o100) !== 0 ? '100755' : '100644'
+          : null
+      if (!currentMode) continue
+      currentModes.set(file, currentMode)
+      hashPaths.push(file)
+    }
+
+    const currentHashes = new Map<string, string>()
+    if (hashPaths.length > 0) {
+      const { stdout: hashOutput } = await execGit(
+        ['hash-object', '--', ...hashPaths],
+        { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
+      )
+      const hashes = hashOutput.split('\n').map(value => value.trim()).filter(Boolean)
+      if (hashes.length !== hashPaths.length) return differingPaths
+      hashPaths.forEach((file, index) => currentHashes.set(file, hashes[index]!))
+    }
+
+    return differingPaths.filter((file) => {
+      if (matchingDeletions.has(file)) return false
+      const target = targetEntries.get(file)
+      return !target ||
+        currentModes.get(file) !== target.mode ||
+        currentHashes.get(file) !== target.hash
+    })
+  } catch {
+    // Unreadable tree entries or working files remain in the landing patch.
+    return differingPaths
+  }
 }
 
 async function resolveGitTopLevel(repoRoot: string): Promise<string> {
@@ -237,8 +336,10 @@ export interface GitDriver {
   ): Promise<WorktreeSyncResult>
   /** Inspect whether a reusable worktree still has an active merge. */
   worktreeMergeState(worktreePath: string, baseBranch: string): Promise<WorktreeMergeState>
-  /** Remove a worktree (and its branch ref). Safe to call on missing paths. */
+  /** Remove a worktree. Safe to call on missing paths. */
   removeWorktree(repoRoot: string, worktreePath: string): Promise<void>
+  /** Remove a disposable Guildhall task branch after its worktree is gone. */
+  deleteBranch(repoRoot: string, branch: string): Promise<void>
   /** Package dirty shared-checkout changes into a task branch commit. */
   checkpointDirtyWork(
     repoRoot: string,
@@ -256,7 +357,7 @@ export interface GitDriver {
     branch: string,
     baseBranch: string,
   ): Promise<MergeResult>
-  /** Push `branch` to `origin`. */
+  /** Push `branch` to `origin` and establish its tracking ref when needed. */
   push(repoRoot: string, branch: string): Promise<PushResult>
   /** Open a PR via `gh` CLI (or return `ok:false` with a graceful detail). */
   openPullRequest(
@@ -540,6 +641,22 @@ export class NodeGitDriver implements GitDriver {
     })
   }
 
+  async deleteBranch(repoRoot: string, branch: string): Promise<void> {
+    const normalizedBranch = branch.trim()
+    if (!normalizedBranch.startsWith('guildhall/task-')) {
+      throw new Error(`Refusing to delete non-Guildhall task branch: ${branch}`)
+    }
+    try {
+      await execGit(['branch', '--delete', '--force', normalizedBranch], {
+        cwd: resolveRuntimePath(repoRoot),
+      })
+    } catch (err) {
+      const detail = errorDetail(err)
+      if (/not found|not a valid branch name|not a branch/i.test(detail)) return
+      throw err
+    }
+  }
+
   async checkpointDirtyWork(
     repoRoot: string,
     { branch, baseBranch, commitMessage }: CheckpointDirtyWorkOptions,
@@ -695,8 +812,8 @@ export class NodeGitDriver implements GitDriver {
   ): Promise<MergeResult> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
-      await execGit(['checkout', baseBranch], { cwd: gitRoot })
-      const { stdout } = await execGit(['rev-list', '--reverse', `${baseBranch}..${branch}`],
+      await execGitRecoveringStaleIndexLock(['checkout', baseBranch], { cwd: gitRoot })
+      const { stdout } = await execGitRecoveringStaleIndexLock(['rev-list', '--reverse', `${baseBranch}..${branch}`],
         { cwd: gitRoot },
       )
       const commits = stdout
@@ -704,40 +821,44 @@ export class NodeGitDriver implements GitDriver {
         .map((line) => line.trim())
         .filter(Boolean)
       if (commits.length === 0) {
-        const { stdout: head } = await execGit(['rev-parse', 'HEAD'], {
+        const { stdout: head } = await execGitRecoveringStaleIndexLock(['rev-parse', 'HEAD'], {
           cwd: gitRoot,
         })
         return { ok: true, commitSha: head.trim() }
       }
 
-      const { stdout: changedStdout } = await execGit(['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
+      const { stdout: changedStdout } = await execGitRecoveringStaleIndexLock(['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
         { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
       )
-      const meaningfulPaths = changedStdout
+      const candidatePaths = changedStdout
         .split('\0')
-        .map((file) => file.trim())
         .filter(Boolean)
         .filter((file) => !isIgnorableGuildhallStatePath(file.replace(/\/$/, '')))
+      const meaningfulPaths = await workingPathsDifferFromBranchTarget(
+        gitRoot,
+        branch,
+        candidatePaths,
+      )
 
       if (meaningfulPaths.length > 0) {
         const diffArgs = ['diff', '--binary', `${baseBranch}..${branch}`, '--', ...meaningfulPaths]
-        const { stdout: patch } = await execGit(diffArgs, {
+        const { stdout: patch } = await execGitRecoveringStaleIndexLock(diffArgs, {
           cwd: gitRoot,
           maxBuffer: 50 * 1024 * 1024,
         })
         const patchPath = path.join(gitRoot, '.git', 'guildhall-cherry-pick.patch')
         await fs.writeFile(patchPath, patch, 'utf8')
         try {
-          await execGit(['apply', '--check', patchPath], { cwd: gitRoot })
-          await execGit(['apply', '--index', patchPath], { cwd: gitRoot })
+          await execGitRecoveringStaleIndexLock(['apply', '--check', patchPath], { cwd: gitRoot })
+          await execGitRecoveringStaleIndexLock(['apply', '--index', patchPath], { cwd: gitRoot })
         } finally {
           await fs.rm(patchPath, { force: true })
         }
-        await execGit(['commit', '--no-verify', '-m', `Guildhall: land ${branch}`],
+        await execGitRecoveringStaleIndexLock(['commit', '--no-verify', '-m', `Guildhall: land ${branch}`],
           { cwd: gitRoot },
         )
       }
-      const { stdout: head } = await execGit(['rev-parse', 'HEAD'], {
+      const { stdout: head } = await execGitRecoveringStaleIndexLock(['rev-parse', 'HEAD'], {
         cwd: gitRoot,
       })
       return { ok: true, commitSha: head.trim() }
@@ -750,7 +871,7 @@ export class NodeGitDriver implements GitDriver {
 
   async push(repoRoot: string, branch: string): Promise<PushResult> {
     try {
-      await execGit(['push', 'origin', branch], { cwd: resolveRuntimePath(repoRoot) })
+      await execGit(['push', '--set-upstream', 'origin', branch], { cwd: resolveRuntimePath(repoRoot) })
       return { ok: true }
     } catch (err) {
       return {
@@ -845,6 +966,7 @@ export interface InMemoryGitDriverState {
   worktreeSyncs: Array<{ worktreePath: string; baseBranch: string; commitMessage: string; result: WorktreeSyncResult }>
   checkpoints: Array<CheckpointDirtyWorkOptions & { result: CheckpointResult }>
   removedWorktrees: string[]
+  deletedBranches: string[]
   merges: { branch: string; baseBranch: string; result: MergeResult }[]
   cherryPicks: { branch: string; baseBranch: string; result: MergeResult }[]
   pushes: { branch: string; result: PushResult }[]
@@ -888,6 +1010,7 @@ export class InMemoryGitDriver implements GitDriver {
       worktreeSyncs: [],
       checkpoints: [],
       removedWorktrees: [],
+      deletedBranches: [],
       merges: [],
       cherryPicks: [],
       pushes: [],
@@ -1041,6 +1164,10 @@ export class InMemoryGitDriver implements GitDriver {
 
   async removeWorktree(_repoRoot: string, worktreePath: string): Promise<void> {
     this.state.removedWorktrees.push(worktreePath)
+  }
+
+  async deleteBranch(_repoRoot: string, branch: string): Promise<void> {
+    this.state.deletedBranches.push(branch)
   }
 
   async checkpointDirtyWork(

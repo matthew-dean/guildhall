@@ -249,7 +249,7 @@ describe('CurrentTab', () => {
     expect(props.onApproveSpec).toHaveBeenCalledOnce()
   })
 
-  it('surfaces live escalation activity without making a separate task state', () => {
+  it('surfaces live escalation detail and activity without making a separate task state', () => {
     renderCurrent([
       {
         id: 'turn-escalation',
@@ -270,7 +270,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Worker is stuck')).toBeTruthy()
+    expect(screen.getByText('Recovery needed')).toBeTruthy()
     expect(screen.getByText('Component import could not be resolved.')).toBeTruthy()
     expect(screen.getByText('Finished write checkpoint')).toBeTruthy()
   })
@@ -657,7 +657,7 @@ describe('CurrentTab', () => {
         liveAgent: {
           name: 'worker-agent',
           startedAt: now,
-          lastEventLabel: 'Waiting for the local model to respond.',
+          lastEventLabel: 'Waiting for the model to respond.',
           lastEventKind: 'provider_wait',
           providerKind: 'local',
           lastEventAt: now,
@@ -667,7 +667,7 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getByText('Working')).toBeTruthy()
-    expect(screen.getByText(/Local model is still loading or generating/i)).toBeTruthy()
+    expect(screen.getByText(/The model is still loading or generating/i)).toBeTruthy()
   })
 
   it('labels queued spec revisions, reviews, and gate checks with the right resume action', async () => {

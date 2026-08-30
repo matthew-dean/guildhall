@@ -347,6 +347,8 @@ export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task
     shelveReason: _shelveReason,
     proofRecovery: _proofRecovery,
     currentLifecycle: _currentLifecycle,
+    openEscalationIds: _openEscalationIds,
+    openIssueIds: _openIssueIds,
     doneSummaryBundle: _doneSummaryBundle,
     worktreePath: _worktreePath,
     branchName: _branchName,
@@ -399,6 +401,22 @@ export async function buildEffectiveTask(
     allowLegacyState: !databaseAuthority,
     includeLegacyEvidence: !databaseAuthority,
   })
+}
+
+/** Build one effective task from an already captured database point snapshot. */
+export function buildEffectiveTaskFromDatabaseOverlay(
+  task: Task,
+  overlay: ProjectStateDatabaseTaskOverlay | null,
+  additionalEvidence: readonly TaskEvidenceEvent[] = [],
+): EffectiveTask {
+  if (overlay === null) throw new Error(`Normalized task state is unavailable for promoted task ${task.id}`)
+  return buildEffectiveTaskFromState(
+    task,
+    runtimeStoreFromOverlay(task.id, overlay),
+    workspaceStoreFromOverlay(task.id, overlay),
+    [...currentEvidenceProjectionToEvents(task.id, overlay.evidenceCurrent), ...additionalEvidence],
+    { allowLegacyState: false, includeLegacyEvidence: false },
+  )
 }
 
 export async function buildEffectiveTasks(
@@ -564,7 +582,7 @@ function buildEffectiveTaskFromState(
     title: effectiveTaskTitle(definitionTask) ?? task.title,
     ...projected,
     ...(effectiveRuntime?.assignedTo !== undefined ? { assignedTo: effectiveRuntime.assignedTo } : {}),
-    ...(effectiveRuntime?.revisionCount !== undefined ? { revisionCount: effectiveRuntime.revisionCount } : {}),
+    revisionCount: effectiveRuntime?.revisionCount ?? task.revisionCount ?? 0,
     ...(effectiveRuntime?.retryWindow !== undefined ? { retryWindow: effectiveRuntime.retryWindow } : {}),
     ...(effectiveRuntime?.remediationAttempts !== undefined ? { remediationAttempts: effectiveRuntime.remediationAttempts } : {}),
     ...(effectiveRuntime?.workerRecovery !== undefined ? { workerRecovery: effectiveRuntime.workerRecovery } : {}),

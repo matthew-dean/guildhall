@@ -68,8 +68,9 @@ export interface GitStoryClassificationInput {
 /**
  * A merge record is a current repository follow-up only while the task still
  * has an unresolved landing surface. A skipped landing attempt is historical
- * once the task has durable completion proof and its isolated worktree is
- * gone; the repository snapshot remains the authority for current Git state.
+ * once its isolated worktree is gone; missing task proof remains a task/proof
+ * concern, not a fictional repository action. The repository snapshot remains
+ * the authority for current Git state.
  */
 export function gitStoryFollowupIsActive(input: {
   status?: string
@@ -82,11 +83,7 @@ export function gitStoryFollowupIsActive(input: {
   if (input.status === 'pending_pr') return true
   if (input.mergeRecordResult === 'conflict') return true
   if (input.mergeRecordResult !== 'skipped') return false
-  return !(
-    input.status === 'done' &&
-    input.hasCompletionProof === true &&
-    input.hasTaskWorktree !== true
-  )
+  return input.hasTaskWorktree === true
 }
 
 export function classifyGitStoryState(input: GitStoryClassificationInput): GitStoryClosureState {
@@ -94,7 +91,6 @@ export function classifyGitStoryState(input: GitStoryClassificationInput): GitSt
   if (input.override === 'deferred') return 'deferred'
   if (input.mergeRecordResult === 'conflict') return 'conflict'
   if (input.mergeRecordResult === 'reconciled') return 'merged'
-  if (input.mergeRecordResult === 'skipped') return 'unknown'
   if (input.mergeRecordResult === 'pending_pr') return 'pr_open'
   if (input.changedCount > 0 || input.untrackedCount > 0) return 'dirty_uncommitted'
   if (!input.hasUpstream) return 'no_upstream'

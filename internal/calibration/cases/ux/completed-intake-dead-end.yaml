@@ -1,0 +1,41 @@
+id: completed-intake-dead-end
+title: Completed intake with no work handoff
+domain: ux
+productType: project-management
+surfaceType: web-app
+userGoal: Finish release intake and continue into the work that intake created.
+scenario: A release intake accepts every answer, reports completion, creates no linked task or release, and selects older unrelated work.
+artifacts:
+  - id: completed-intake-state
+    kind: copy_snippet
+    description: Visible state after the final intake answer.
+    content: "Your answers are saved. Review the older spec draft."
+reviewLanes:
+  - ux_comprehension
+  - data_integrity
+knownFindings:
+  - id: intake-handoff-missing
+    lane: data_integrity
+    severity: critical
+    summary: Completion has no typed transition into actionable work.
+    impact: The owner cannot tell whether the release request was saved, queued, lost, or replaced.
+    minimumUsefulFix: Materialize one idempotently linked task and focus its Thread chain after the final answer.
+    matchHints:
+      - intake complete
+      - no linked task
+      - stale work selected
+falsePositiveTraps:
+  - id: deliberate-note-only-intake
+    summary: Do not fail a flow explicitly presented as note capture when no work creation was promised.
+source:
+  kind: production_miss
+  citation: Narrative Harness Stage 2 release intake, 2026-08-08.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-08-08T18:10:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2027-02-08
+  reason: Completion handoff semantics are a stable workflow contract.

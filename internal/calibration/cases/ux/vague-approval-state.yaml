@@ -25,12 +25,23 @@ knownFindings:
       - approval of what
       - owner
       - next action
+  - id: dependency-review-resurrection
+    lane: ux_comprehension
+    severity: critical
+    summary: Approval cards behind an unfinished prerequisite appear as parallel owner actions.
+    impact: Users are asked to review work that cannot advance and cannot tell which single decision actually unlocks the release.
+    minimumUsefulFix: Derive review ownership from the shared dependency-aware next action and render downstream drafts as waiting.
+    matchHints:
+      - waiting on prerequisite
+      - dependency
+      - parallel approvals
+      - single next action
 falsePositiveTraps:
   - id: dont-only-rename-button
     summary: Changing the button label is not enough if the item state still fails to name what approval is pending.
 source:
   kind: production_miss
-  citation: Generalized from Guildhall Thread/work-list approval-language feedback on 2026-06-15.
+  citation: Generalized from Guildhall Thread/work-list approval-language feedback on 2026-06-15 and the Narrative Harness Stage 2 flow audit on 2026-08-08.
 labelGovernance:
   labeledBy: product-review
   labeledAt: 2026-06-15T19:20:00.000Z

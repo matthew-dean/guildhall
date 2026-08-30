@@ -49,6 +49,7 @@ import {
   compactProjectStateDatabaseEvidence,
   vacuumProjectStateDatabase,
   readProjectStateDatabaseTaskEvidenceAuthority,
+  readProjectStateDatabaseTaskEvidenceOutbox,
   readProjectStateDatabaseTaskOverlayStores,
   readTaskRuntimeStore,
   replaceProjectStateDatabaseTaskRuntimes,
@@ -59,7 +60,7 @@ import {
   writeProjectStateDatabaseTaskBatchMutation,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
-import { Task as TaskSchema, TaskQueue, TaskRuntimeState, type ProjectRelease, type TaskQueue as TaskQueueModel } from '@guildhall/core'
+import { Escalation as EscalationSchema, Task as TaskSchema, TaskQueue, TaskRuntimeState, type Escalation, type ProjectRelease, type TaskQueue as TaskQueueModel } from '@guildhall/core'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
@@ -74,6 +75,9 @@ import {
   migrateDatabaseTaskEvidenceHistoryToCompressed,
   migrateLegacyTaskEvidenceHistoryToDatabase,
   appendTaskEvidence,
+  readTaskEvidence,
+  flushTaskEvidenceOutboxForTasksPath,
+  TASK_EVIDENCE_RETENTION,
   runtimeStatePath,
   taskWorkspaceStatePath,
 } from '@guildhall/sessions'
@@ -103,15 +107,14 @@ import {
   prepareProjectSummaryProjectionFromUnknownQueue,
   readProjectSummaryProjection,
   readProjectSummaryProjectionForMigration,
-  writeProjectSummaryProjection,
   writeProjectSummaryProjectionFromIndexedState,
 } from './project-summary-projection.js'
-import { readProjectCanonicalCurrentState, writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import { readProjectCanonicalCurrentState, writeProjectTaskQueueWithSummary, writePromotedTaskDetailMutation } from './project-state-boundary.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from './delivery-read-projection.js'
 import { effectiveTaskTitle } from '@guildhall/shared'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import type { Task } from '@guildhall/core'
-import { buildProofSetupTaskContract, isProofSetupTask, materializeProofSetupTask } from '@guildhall/tools'
+import { buildProofSetupTaskContract, isProofSetupTask, materializeProofSetupTask, raiseEscalation, resolveEscalation } from '@guildhall/tools'
 import { taskDoneButProofMissing, taskDoneButProofMissingForScope, taskHasScriptProofPath } from './proof-health.js'
 import {
   inspectEmptyMastraDatabase,
@@ -119,6 +122,7 @@ import {
   removeEmptyMastraThreadShells,
   retireEmptyMastraDatabase,
 } from '@guildhall/memory-core'
+import { migrateHistoricalProofPathEvidence } from './historical-proof-path-evidence-migration.js'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
 export type MigrationSafety = 'automatic' | 'prompt' | 'manual' | 'required'
@@ -241,6 +245,12 @@ const RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID = '0.13.66/release-membership-sna
 const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
 const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
+const COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID = '0.13.100/compact-spec-review-readiness'
+const ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.101/active-release-progress-reprojection'
+const SPEC_REPAIR_ACTION_REPROJECTION_MIGRATION_ID = '0.13.102/spec-repair-action-reprojection'
+const COLLAPSED_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.103/collapsed-release-progress-reprojection'
+const NESTED_TASK_EVIDENCE_ROOT_REPAIR_MIGRATION_ID = '0.13.104/nested-task-evidence-root-repair'
+const UNPROVEN_GATE_FAILURE_RECOVERY_MIGRATION_ID = '0.13.105/unproven-gate-failure-recovery'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
 const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
@@ -248,6 +258,7 @@ const NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID = '0.13.73/named-release-member-co
 const INCLUDED_RELEASE_DISPOSITION_COUNT_MIGRATION_ID = '0.13.74/included-release-disposition-counts'
 const CANONICAL_RELEASE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.75/canonical-release-membership-summary'
 const SELECTED_RELEASE_NODE_MEMBERSHIP_SUMMARY_MIGRATION_ID = '0.13.76/selected-release-node-membership-summary'
+const PROOF_VERIFICATION_EVIDENCE_AUTHORITY_MIGRATION_ID = '0.13.77/proof-verification-evidence-authority'
 const RELEASE_MEMBERSHIP_READ_BOUNDARY_MIGRATION_ID = '0.13.99/release-membership-read-boundary'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
@@ -260,6 +271,33 @@ interface FinalProjectStateMigrationResult {
   removedPaths: string[]
   queueTaskCount: number
   summaryFreshness: string
+}
+
+interface UnprovenGateFailureRepair {
+  taskId: string
+  escalationId: string
+}
+
+async function findUnprovenGateFailureRepairs(projectRoot: string): Promise<UnprovenGateFailureRepair[]> {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return []
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const queueRead = readProjectStateDatabaseQueueWithRevision(tasksPath)
+  if (!queueRead) return []
+  const tasks = await buildEffectiveTasks(projectRoot, queueRead.definition.tasks as unknown as Task[], {
+    evidence: 'current',
+  }) as unknown as Task[]
+  const repairs: UnprovenGateFailureRepair[] = []
+  for (const task of tasks) {
+    const hasRecordedFailure = (task.gateResults ?? []).some(gate =>
+      gate.type === 'hard' && gate.passed === false,
+    )
+    if (hasRecordedFailure) continue
+    for (const escalation of task.escalations ?? []) {
+      if (escalation.resolvedAt || escalation.reason !== 'gate_hard_failure') continue
+      repairs.push({ taskId: task.id, escalationId: escalation.id })
+    }
+  }
+  return repairs
 }
 
 function taskIsImportedSourceWork(task: Task): boolean {
@@ -362,6 +400,31 @@ function compactSpecReviewAuthorityNeedsMigration(projectRoot: string): boolean 
     savedCount !== ownerReviewTasks.length ||
     savedTaskId !== (ownerReviewTasks[0]?.id ?? null) ||
     (ownerReviewTasks.length > 0 && decisionReview?.state !== 'required')
+}
+
+function compactSpecReviewReadinessNeedsMigration(projectRoot: string): boolean {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return false
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+  const inventory = readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })
+  if (!queue || !inventory) return false
+  const expectedByTaskId = new Map(
+    queue.tasks
+      .filter(task => task.status === 'spec_review')
+      .map(task => {
+        const summary = projectStateDatabaseTaskSummary(task).currentSummary
+        const ready = isRecord(summary) && typeof summary.specReviewReadyForOwnerApproval === 'boolean'
+          ? summary.specReviewReadyForOwnerApproval
+          : false
+        return [String(task.id), ready] as const
+      }),
+  )
+  return inventory.tasks.some(task => {
+    const expected = expectedByTaskId.get(task.id)
+    if (expected === undefined) return false
+    const currentSummary = isRecord(task.currentSummary) ? task.currentSummary : null
+    return currentSummary?.specReviewReadyForOwnerApproval !== expected
+  })
 }
 
 function migrateProofSetupTaskKind(task: Task): boolean {
@@ -1078,6 +1141,10 @@ function scopeRowsForEffectiveTasks(
     humanBlocking: row.humanBlocking,
     ...(row.countInProjectTotals === false ? { countInProjectTotals: false } : {}),
     proofBlocked: row.proofBlocked,
+    dependencyBlocked: row.dependencyBlocked === true,
+    ...(row.dependencyTaskIds?.length
+      ? { dependencyTaskIds: [...row.dependencyTaskIds] }
+      : {}),
     ...(row.blockerSummary ? { blockerSummary: row.blockerSummary } : {}),
     sourceRefs: [...row.sourceRefs],
   }))
@@ -1123,6 +1190,10 @@ async function realignPromotedSummaryWithEffectiveState(projectRoot: string): Pr
       ...task,
       title: typeof effective.title === 'string' ? effective.title : task.title,
       status: typeof effective.status === 'string' ? effective.status : task.status,
+      ...(typeof effective.semanticKind === 'string' ? { semanticKind: effective.semanticKind } : {}),
+      ...(typeof effective.proofForReleaseId === 'string'
+        ? { proofForReleaseId: effective.proofForReleaseId }
+        : {}),
       updatedAt: typeof effective.updatedAt === 'string' ? effective.updatedAt : task.updatedAt,
       completedAt: typeof effective.completedAt === 'string' ? effective.completedAt : task.completedAt,
       ...(currentSummary && typeof currentSummary === 'object' && !Array.isArray(currentSummary)
@@ -1651,6 +1722,54 @@ function inspectIndexedReleaseSummaryReprojection(projectRoot: string): {
     before,
     after,
   }
+}
+
+function sameOpenEscalation(
+  left: Escalation,
+  right: Escalation,
+): boolean {
+  return left.agentId === right.agentId &&
+    left.reason === right.reason &&
+    (left.recoveryCode ?? null) === (right.recoveryCode ?? null) &&
+    left.summary.trim() === right.summary.trim()
+}
+
+async function findNestedTaskEvidenceRootRepairs(projectRoot: string): Promise<Array<{
+  taskId: string
+  escalation: Escalation
+}>> {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return []
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+  const repairs: Array<{ taskId: string; escalation: Escalation }> = []
+
+  for (const rawTask of queue?.tasks ?? []) {
+    const parsedTask = TaskSchema.safeParse(rawTask)
+    if (!parsedTask.success) continue
+    const task = parsedTask.data
+    if (
+      task.status !== 'blocked' ||
+      !path.isAbsolute(task.projectPath) ||
+      path.resolve(task.projectPath) === path.resolve(projectRoot)
+    ) continue
+
+    const canonicalEvidence = await readTaskEvidence(projectRoot, task.id, { kind: 'escalation' })
+    const canonicalOpen = canonicalEvidence.flatMap(event => {
+      const escalation = EscalationSchema.safeParse(event.payload)
+      return escalation.success && !escalation.data.resolvedAt ? [escalation.data] : []
+    })
+    const nestedEvidence = await readTaskEvidence(task.projectPath, task.id, { kind: 'escalation' })
+    for (const event of nestedEvidence) {
+      const parsedEscalation = EscalationSchema.safeParse(event.payload)
+      if (!parsedEscalation.success || parsedEscalation.data.resolvedAt) continue
+      const escalation = parsedEscalation.data
+      if (escalation.handling === 'guildhall_recovery') continue
+      if (task.blockReason !== `${escalation.reason}: ${escalation.summary}`) continue
+      if (canonicalOpen.some(current => sameOpenEscalation(current, escalation))) continue
+      repairs.push({ taskId: task.id, escalation })
+    }
+  }
+  return repairs
 }
 
 const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
@@ -4872,15 +4991,9 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
     async apply(projectRoot) {
-      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const projection = backfillProjectSummaryProjection(tasksPath, {
-        projectId: path.basename(projectRoot),
-        projectRoot,
-      })
+      const projection = await realignPromotedSummaryWithEffectiveState(projectRoot)
       return {
-        summary: projection.freshness === 'current'
-          ? `Reprojected release readiness for ${projection.counts.total} scoped task${projection.counts.total === 1 ? '' : 's'} using the selected release's proof children.`
-          : 'Recorded an unavailable release readiness projection because the authoritative project state could not be read.',
+        summary: `Reprojected release readiness for ${projection.taskCount} task${projection.taskCount === 1 ? '' : 's'} from current typed evidence and the selected release's proof children.`,
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
@@ -5117,6 +5230,47 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID,
+    title: 'Materialize compact spec review readiness',
+    introducedIn: '0.13.100',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Backfills the typed ready-for-owner-approval fact for spec reviews, so compact project views cannot ask for approval before the durable spec contract is complete.',
+    async detect(projectRoot) {
+      const needed = compactSpecReviewReadinessNeedsMigration(projectRoot)
+      return {
+        needed,
+        affectedPaths: needed
+          ? [projectStateDatabasePath(projectRoot), 'compact spec-review readiness points and shared summary']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped compact spec-review readiness backfill because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const summaries = queue.tasks.map(task => ({
+        taskId: String(task.id),
+        summary: projectStateDatabaseTaskSummary(task),
+      }))
+      const rewritten = rewriteProjectStateDatabaseTaskSummaries(projectRoot, summaries)
+      const projection = backfillProjectSummaryProjection(tasksPath, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+      })
+      return {
+        summary: `Materialized compact review readiness for ${rewritten.updatedCount} task point${rewritten.updatedCount === 1 ? '' : 's'} and refreshed the shared project decision (${projection.decision.primaryAction.kind}).`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: ATOMIC_DECISION_FOCUS_MIGRATION_ID,
     title: 'Rebuild project decisions with atomic focus references',
     introducedIn: '0.13.70',
@@ -5217,6 +5371,100 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
         summary: before.needed
           ? 'Rebuilt the release summary and shared decision from normalized release membership and scope rows.'
           : 'Release summary already matched normalized release membership and scope rows.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID,
+    title: 'Refresh active release progress state',
+    introducedIn: '0.13.101',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the compact release summary so resumable work is represented as active while retaining separate release blockers.',
+    async detect() {
+      // This semantic projection change must run once for every persisted
+      // current-state database; the migration ledger makes the refresh
+      // idempotent after application.
+      return {
+        needed: true,
+        affectedPaths: ['compact release summary and shared decision packet'],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The active release summary could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: 'Refreshed the active release progress state and retained its recorded blockers.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: SPEC_REPAIR_ACTION_REPROJECTION_MIGRATION_ID,
+    title: 'Refresh focused spec-repair actions',
+    introducedIn: '0.13.102',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the shared project decision so an incomplete spec review is presented as one executable repair action instead of a generic work link.',
+    async detect() {
+      // Existing summaries may retain an older ready-work focus after the
+      // current indexed task has become a non-owner spec-repair state.
+      return {
+        needed: true,
+        affectedPaths: ['compact project decision and shared owner action'],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The focused spec-repair action could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: 'Refreshed focused spec-repair actions from the current project state.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: COLLAPSED_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID,
+    title: 'Refresh release progress from visible work items',
+    introducedIn: '0.13.103',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Rebuilds the shared release summary so containing tasks do not inflate the owner-visible progress total.',
+    async detect() {
+      // The corrected hierarchy rule must refresh every existing summary once;
+      // the migration ledger keeps subsequent reads and restarts idempotent.
+      return {
+        needed: true,
+        affectedPaths: ['compact release summary and shared owner progress'],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      markProjectStateDatabaseStale(projectRoot)
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection) {
+        throw new Error('The owner-visible release progress could not be rebuilt from normalized indexed state.')
+      }
+      return {
+        summary: 'Refreshed release progress from the visible work items in the selected release.',
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
@@ -5525,14 +5773,11 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Rebuilds the saved proof and release projection after proof-setup contract normalization so task detail, release readiness, and compact project views share the same current answer.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
-      const ledger = await readProjectMigrationLedger(projectRoot)
-      const applied = ledger.records.some(record => record.id === PROOF_SETUP_PROJECTION_REFRESH_MIGRATION_ID && record.status === 'applied')
-      return {
-        needed: !applied,
-        affectedPaths: !applied
-          ? [projectStateDatabasePath(projectRoot), 'saved proof and release projection']
-          : [],
-      }
+      // The immediately following effective-projection migration subsumes
+      // this raw-queue refresh. Running both can publish two different
+      // canonical decisions for one project revision, which the append-only
+      // claim ledger correctly rejects.
+      return { needed: false, affectedPaths: [] }
     },
     async apply(projectRoot) {
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
@@ -5566,17 +5811,9 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
     async apply(projectRoot) {
-      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-      const current = await readProjectCanonicalCurrentState(projectRoot)
-      const projection = writeProjectSummaryProjection(tasksPath, {
-        projectId: path.basename(projectRoot),
-        projectRoot,
-        queue: current.rawQueue as never,
-        projectionTasks: current.tasks as never,
-        currentStateAuthority: 'database',
-      })
+      const projection = await realignPromotedSummaryWithEffectiveState(projectRoot)
       return {
-        summary: `Reprojected proof and release readiness from current typed evidence (${projection.releaseSummary.state}).`,
+        summary: `Reprojected proof and release readiness from current typed evidence for ${projection.taskCount} task${projection.taskCount === 1 ? '' : 's'} (${projection.doneCount} done).`,
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
@@ -5689,6 +5926,170 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: PROOF_VERIFICATION_EVIDENCE_AUTHORITY_MIGRATION_ID,
+    title: 'Move historical proof-path results into typed task evidence',
+    introducedIn: '0.13.77',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Moves observed command and review results into typed task evidence, then returns proof paths to expectation-only state.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskCount = (queue?.tasks ?? []).filter(task => {
+        const parsed = TaskSchema.safeParse(task)
+        return parsed.success && migrateHistoricalProofPathEvidence(parsed.data).changed
+      }).length
+      const pendingOutbox = readProjectStateDatabaseTaskEvidenceAuthority(projectRoot) === 'compressed'
+        ? readProjectStateDatabaseTaskEvidenceOutbox(tasksPath)
+            .filter(event => event.id.startsWith('proof-verification-migration:')).length
+        : 0
+      const needed = taskCount > 0 || pendingOutbox > 0
+      return {
+        needed,
+        affectedPaths: needed
+          ? [
+              projectStateDatabasePath(projectRoot),
+              `${taskCount} task${taskCount === 1 ? '' : 's'} with proof-path result state`,
+              ...(pendingOutbox > 0 ? [`${pendingOutbox} pending compressed-history event${pendingOutbox === 1 ? '' : 's'}`] : []),
+            ]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const evidenceAuthority = readProjectStateDatabaseTaskEvidenceAuthority(projectRoot)
+      if (evidenceAuthority === 'compressed') await flushTaskEvidenceOutboxForTasksPath(tasksPath)
+
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) throw new Error('Historical proof evidence migration requires a readable promoted task queue')
+      let taskCount = 0
+      let evidenceCount = 0
+
+      for (const queuedTask of queue.tasks) {
+        const parsed = TaskSchema.safeParse(queuedTask)
+        if (!parsed.success) continue
+        const prepared = migrateHistoricalProofPathEvidence(parsed.data)
+        if (!prepared.changed) continue
+        const preparedEvidenceSignature = JSON.stringify(prepared.evidence)
+        const committed = writePromotedTaskDetailMutation(tasksPath, parsed.data.id, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          mutate(current) {
+            const currentTask = current as unknown as Pick<Task, 'id' | 'updatedAt' | 'proofPaths'>
+            const currentMigration = migrateHistoricalProofPathEvidence(currentTask)
+            if (!currentMigration.changed || JSON.stringify(currentMigration.evidence) !== preparedEvidenceSignature) {
+              throw new Error(`Historical proof state changed while migrating ${currentTask.id}; retry the migration`)
+            }
+            return { ...currentTask, proofPaths: currentMigration.proofPaths }
+          },
+          evidence: prepared.evidence.map(event => ({
+            event,
+            retention: TASK_EVIDENCE_RETENTION[event.kind],
+            history: evidenceAuthority === 'compressed' ? 'outbox' : 'database',
+          })),
+        })
+        if (!committed) throw new Error(`Promoted task ${parsed.data.id} could not be committed through the atomic task boundary`)
+        if (evidenceAuthority === 'compressed') await flushTaskEvidenceOutboxForTasksPath(tasksPath, parsed.data.id)
+        taskCount += 1
+        evidenceCount += prepared.evidence.length
+      }
+
+      return {
+        summary: `Moved ${evidenceCount} historical proof result${evidenceCount === 1 ? '' : 's'} into typed evidence for ${taskCount} task${taskCount === 1 ? '' : 's'} and reset proof paths to expectations.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: NESTED_TASK_EVIDENCE_ROOT_REPAIR_MIGRATION_ID,
+    title: 'Repair nested task evidence ownership',
+    introducedIn: '0.13.104',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Restores an owner-required task escalation to its workspace when an older build stored it with a nested code checkout.',
+    async detect(projectRoot) {
+      const repairs = await findNestedTaskEvidenceRootRepairs(projectRoot)
+      return {
+        needed: repairs.length > 0,
+        affectedPaths: repairs.length > 0
+          ? [projectStateDatabasePath(projectRoot), `${repairs.length} owner escalation${repairs.length === 1 ? '' : 's'} awaiting workspace recovery`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const repairs = await findNestedTaskEvidenceRootRepairs(projectRoot)
+      let restored = 0
+      for (const repair of repairs) {
+        const result = await raiseEscalation({
+          tasksPath,
+          taskId: repair.taskId,
+          agentId: repair.escalation.agentId,
+          reason: repair.escalation.reason,
+          handling: repair.escalation.handling,
+          ...(repair.escalation.recoveryCode ? { recoveryCode: repair.escalation.recoveryCode } : {}),
+          summary: repair.escalation.summary,
+          ...(repair.escalation.details ? { details: repair.escalation.details } : {}),
+          ...(repair.escalation.externalChecklist ? { externalChecklist: repair.escalation.externalChecklist } : {}),
+        })
+        if (!result.success) throw new Error(`Could not restore owner escalation for ${repair.taskId}: ${result.error ?? 'unknown error'}`)
+        restored += 1
+      }
+      return {
+        summary: `Restored ${restored} owner escalation${restored === 1 ? '' : 's'} to the workspace task state.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: UNPROVEN_GATE_FAILURE_RECOVERY_MIGRATION_ID,
+    title: 'Repair unsupported gate blockers',
+    introducedIn: '0.13.105',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Reopens a task only when an older hard-gate blocker has no recorded failed gate result, so work can continue to its real next check.',
+    async detect(projectRoot) {
+      const repairs = await findUnprovenGateFailureRepairs(projectRoot)
+      return {
+        needed: repairs.length > 0,
+        affectedPaths: repairs.length > 0
+          ? [projectStateDatabasePath(projectRoot), `${repairs.length} unsupported gate blocker${repairs.length === 1 ? '' : 's'}`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const repairs = await findUnprovenGateFailureRepairs(projectRoot)
+      for (const repair of repairs) {
+        const result = await resolveEscalation({
+          tasksPath,
+          taskId: repair.taskId,
+          escalationId: repair.escalationId,
+          resolution: "Auto-repaired because no durable failed hard-gate result was recorded. Guildhall will continue from this task's own verification path.",
+          resolvedBy: 'system',
+          nextStatus: 'ready',
+        })
+        if (!result.success) {
+          throw new Error(`Could not repair unsupported gate blocker for ${repair.taskId}: ${result.error ?? 'unknown error'}`)
+        }
+      }
+      if (repairs.length > 0) {
+        markProjectStateDatabaseStale(projectRoot)
+        const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+          projectId: path.basename(projectRoot),
+        })
+        if (!projection) throw new Error('The shared project decision could not be refreshed after unsupported gate blocker repair.')
+      }
+      return {
+        summary: `Reopened ${repairs.length} task${repairs.length === 1 ? '' : 's'} whose hard-gate blocker had no recorded failed gate result.`,
+        affectedPaths: repairs.length > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -5752,6 +6153,8 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.12.41/task-evidence-history-authority': 'migrations.test.ts: imports bounded legacy task evidence into SQLite and removes files only after retention-aware verification',
   '0.12.42/task-evidence-history-compression': 'migrations.test.ts: moves SQLite history into compressed ledgers before emptying the aggregate database',
   [COMPLETION_SUMMARY_EVIDENCE_MIGRATION_ID]: 'workspace-importer.test.ts: preserves a durable completion timestamp after promoted task-definition compaction',
+  [NESTED_TASK_EVIDENCE_ROOT_REPAIR_MIGRATION_ID]: 'migrations.test.ts: restores a nested-checkout escalation through the canonical workspace task handle without duplicating a later retry',
+  [UNPROVEN_GATE_FAILURE_RECOVERY_MIGRATION_ID]: 'migrations.test.ts: reopens only an unsupported gate blocker and leaves a recorded failed hard gate unchanged',
   [LEGACY_LIVE_STATE_CLEANUP_MIGRATION_ID]: 'migrations.test.ts: removes legacy live-state files even when the SQLite cutover was already recorded',
   [EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID]: 'migrations.test.ts: realigns promoted summary and scope from current evidence without reading compatibility files',
   [CURRENT_STATUS_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: materializes the shared current task status rule into indexed rows',
@@ -5786,8 +6189,12 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [DIAGNOSTIC_READINESS_TASK_IDENTITY_MIGRATION_ID]: 'migrations.test.ts: attaches task identity to legacy diagnostic blockers only when the task inventory proves it',
   [SCRIPT_ONLY_PROOF_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects a completed script-only task without proof as a release blocker',
   [SOURCE_CAPABILITY_SUMMARY_MIGRATION_ID]: 'project-summary-projection.test.ts: publishes source-catalog status from the canonical SQLite catalog',
+  [PROOF_VERIFICATION_EVIDENCE_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: moves historical proof-path verification records into typed evidence and leaves a second application unchanged',
   [SPEC_REVIEW_GATE_MIGRATION_ID]: 'migrations.test.ts: backfills only legacy spec-review gates and remains idempotent after canonical task writes',
   [DURABLE_SPEC_HANDOFF_MIGRATION_ID]: 'migrations.test.ts: settles only an approved, structurally valid spec handoff and never auto-approves it',
+  [COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID]: 'migrations.test.ts: backfills compact owner-review readiness from structured task contracts and leaves task detail unchanged',
+  [ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects an existing current summary so paused work is active while release blockers remain recorded',
+  [COLLAPSED_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID]: 'project-summary-projection.test.ts: keeps owner-visible release totals aligned with collapsed execution rows',
   [DURABLE_DECISION_SNAPSHOT_MIGRATION_ID]: 'migrations.test.ts: rebuilds a missing revision-bound decision packet from normalized state',
   [INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID]: 'migrations.test.ts: reprojects stale current release counts from normalized indexed membership',
   [NAMED_RELEASE_MEMBER_COUNT_MIGRATION_ID]: 'migrations.test.ts: aligns named release counts to selected membership when child execution rows are present',
@@ -5888,11 +6295,12 @@ export async function getProjectMigrationStatus(input: { projectRoot: string; on
 
 function shouldApplyMigration(
   migration: ProjectMigrationDefinition,
-  input: { includePrompt?: boolean; only?: string[] },
+  input: { includePrompt?: boolean; includeRequired?: boolean; only?: string[] },
 ): boolean {
   if (migration.safety === 'manual') return false
   if (input.only?.includes(migration.id)) return true
   if (input.only && input.only.length > 0) return false
+  if (migration.requirement === 'required' || migration.safety === 'required') return input.includeRequired === true
   if (migration.safety === 'automatic') return true
   return input.includePrompt === true && migration.safety === 'prompt'
 }
@@ -5907,6 +6315,7 @@ async function appendLedgerRecord(projectRoot: string, record: MigrationLedgerRe
 export async function applyProjectMigrations(input: {
   projectRoot: string
   includePrompt?: boolean
+  includeRequired?: boolean
   only?: string[]
   appVersion?: string
   now?: () => Date

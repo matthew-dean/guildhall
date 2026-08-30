@@ -95,6 +95,7 @@ async function writeQueue(queue: TaskQueue): Promise<void> {
   writeProjectTaskQueue(tasksPath, queue, {
     projectRoot: tmpDir,
     expectedQueueRevision: current.expectedQueueRevision,
+    expectedProjectRevision: current.expectedProjectRevision,
   })
 }
 

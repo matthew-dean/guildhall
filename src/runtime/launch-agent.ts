@@ -52,6 +52,31 @@ export interface MacosPackageManifest {
   cliEntrypointRelativePath: string
 }
 
+export interface LaunchAgentLifecycleTarget {
+  plistPath: string
+  domainTarget: string
+  serviceTarget: string
+}
+
+export function resolveLaunchAgentLifecycleTarget(
+  opts: { homeDir?: string; uid?: number; platform?: NodeJS.Platform; port?: number } = {},
+): LaunchAgentLifecycleTarget | null {
+  const currentPlatform = opts.platform ?? process.platform
+  const uid = opts.uid ?? process.getuid?.()
+  const port = opts.port ?? DEFAULT_PACKAGED_SERVICE_PORT
+  if (currentPlatform !== 'darwin' || uid === undefined || port !== DEFAULT_PACKAGED_SERVICE_PORT) {
+    return null
+  }
+
+  const paths = resolveMacosPackagePaths(opts.homeDir)
+  const domainTarget = `gui/${uid}`
+  return {
+    plistPath: paths.launchAgentPath,
+    domainTarget,
+    serviceTarget: `${domainTarget}/${DEFAULT_LAUNCH_AGENT_LABEL}`,
+  }
+}
+
 export function resolveMacosPackagePaths(homeDir = homedir()): MacosPackagePaths {
   const guildhallHomeDir = join(homeDir, '.guildhall')
   const currentInstallDir = join(guildhallHomeDir, 'app', 'current')

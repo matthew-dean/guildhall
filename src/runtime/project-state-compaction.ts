@@ -682,6 +682,7 @@ async function compactTasks(
   parsed: unknown | null,
   dryRun: boolean,
   expectedQueueRevision?: number | null,
+  expectedProjectRevision?: number | null,
 ): Promise<{
   active: number
   archived: number
@@ -769,6 +770,7 @@ async function compactTasks(
         projectId: path.basename(projectRoot),
         projectRoot,
         ...(expectedQueueRevision !== undefined ? { expectedQueueRevision } : {}),
+        ...(expectedProjectRevision !== undefined ? { expectedProjectRevision } : {}),
       })
     } else {
       // A project that has not yet been promoted still has one current queue
@@ -941,7 +943,14 @@ export async function compactProjectState(
   let progressHeartbeatCompaction = await compactProjectProgressHeartbeats(heartbeatPath, { dryRun })
   const bytesBefore = await fileSize(tasksPath) + await fileSize(progressPath) + await fileSize(codebaseMapPath)
   const taskCompaction = databaseAuthority || repoStateMode === 'thin'
-    ? await compactTasks(projectRoot, tasksPath, parsedTasks, dryRun, databaseQueueRead?.revision)
+    ? await compactTasks(
+        projectRoot,
+        tasksPath,
+        parsedTasks,
+        dryRun,
+        databaseQueueRead?.revision,
+        databaseQueueRead?.projectRevision,
+      )
     : null
   if (repoStateMode === 'off') {
     const tasks = queueTasks(parsedTasks)

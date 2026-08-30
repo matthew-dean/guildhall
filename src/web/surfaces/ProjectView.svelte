@@ -16,25 +16,24 @@
   import Modal from '../lib/Modal.svelte'
   import AlertBand from '../../../packages/ui/src/components/AlertBand.svelte'
   import NoticeBand from '../../../packages/ui/src/components/NoticeBand.svelte'
-  import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
-  import DoThisNext from './DoThisNext.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
+  import { toast } from '../lib/toast.svelte.js'
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
   import { currentProjectHref, projectActionHref, projectFetch } from '../lib/project-routes.js'
-  import { buildProjectTicker } from '../lib/project-activity.js'
   import { dedupeProjectAttention } from '../lib/project-attention.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
+  import { taskDisplayKey } from '../lib/identifier-labels.js'
   import { isWorkerRunnableStatus } from '../lib/task-state.js'
   import { activeEscalations } from '../lib/escalation.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
-  import type { AgentQuestion, EventEnvelope, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, StartReadiness, Task } from '../lib/types.js'
+import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, StartReadiness, Task } from '../lib/types.js'
 
   type MigrationApplyStage = 'idle' | 'applying' | 'refreshing-project' | 'refreshing-inbox' | 'checking-status' | 'complete'
   type MigrationApplyResult = {
@@ -43,18 +42,24 @@
     failed?: Array<ProjectMigrationStatusItem & { error?: string }>
   }
 
-  const loadProjectOverviewTab = () => import('./project/ProjectOverviewTab.svelte')
-  const loadThreadTab = () => import('./project/ThreadTab.svelte')
-  const loadNeedsYouTab = () => import('./project/NeedsYouTab.svelte')
-  const loadWorkTab = () => import('./project/WorkTab.svelte')
-  const loadWorkspaceImportTab = () => import('./project/WorkspaceImportTab.svelte')
-  const loadProjectAttachFlow = () => import('./project/ProjectAttachFlow.svelte')
-  const loadFactsTab = () => import('./project/FactsTab.svelte')
-  const loadTimelineTab = () => import('./project/TimelineTab.svelte')
-  const loadReleaseTab = () => import('./project/ReleaseTab.svelte')
-  const loadSettingsTab = () => import('./project/SettingsTab.svelte')
-  const loadProjectMapTab = () => import('./project/ProjectMapTab.svelte')
-  const loadProjectStructurePanel = () => import('./project/structure/ProjectStructurePanel.svelte')
+  function loadOnce<T>(loader: () => Promise<T>): () => Promise<T> {
+    let module: Promise<T> | null = null
+    return () => module ??= loader()
+  }
+
+  // Owner routes refresh while the project summary changes. An await block must
+  // keep the same import promise through those updates or it can remain on its
+  // loading shell indefinitely.
+  const loadProjectOverviewTab = loadOnce(() => import('./project/ProjectOverviewTab.svelte'))
+  const loadThreadTab = loadOnce(() => import('./project/ThreadTab.svelte'))
+  const loadNeedsYouTab = loadOnce(() => import('./project/NeedsYouTab.svelte'))
+  const loadWorkTab = loadOnce(() => import('./project/WorkTab.svelte'))
+  const loadWorkspaceImportTab = loadOnce(() => import('./project/WorkspaceImportTab.svelte'))
+  const loadProjectAttachFlow = loadOnce(() => import('./project/ProjectAttachFlow.svelte'))
+  const loadReleaseTab = loadOnce(() => import('./project/ReleaseTab.svelte'))
+  const loadSettingsTab = loadOnce(() => import('./project/SettingsTab.svelte'))
+  const loadProjectMapTab = loadOnce(() => import('./project/ProjectMapTab.svelte'))
+  const loadProjectUpdateGate = loadOnce(() => import('./project/ProjectUpdateGate.svelte'))
 
   interface ShellAttentionNotice {
     id: string
@@ -75,6 +80,7 @@
     if (!readiness) return null
     if (readiness.code === 'no_unattended_progress') return readiness.focusKind ?? null
     if (readiness.code === 'owner_input_required') return 'awaiting_human'
+    if (readiness.code === 'owner_review_required') return 'owner_review'
     return null
   }
 
@@ -82,11 +88,18 @@
     initialView?: ProjectView
     initialSub?: string | null
     projectId?: string | null
+    drawerOpen?: boolean
   }
 
   const props = $props<Props>()
 
-  const currentView = $derived<ProjectView>(props.initialView ?? 'overview')
+  const currentView = $derived<ProjectView>(
+    props.initialView === 'facts'
+      ? 'map'
+      : props.initialView === 'timeline'
+        ? 'overview'
+        : props.initialView ?? 'overview',
+  )
   const currentSub = $derived<string | null>(props.initialSub ?? null)
   const routeProjectId = $derived(props.projectId?.trim() || null)
   const activeProjectId = $derived(routeProjectId)
@@ -125,8 +138,6 @@
   let inboxError = $state<string | null>(null)
   let inboxLoadInFlight = false
   let inboxLoadQueued = false
-  let latestTickerEvent = $state<EventEnvelope | null>(null)
-  let tickerNow = $state(Date.now())
   const detail = $derived.by(() => {
     const current = project.detail
     if (!current) return null
@@ -140,18 +151,48 @@
     currentView === 'thread' ? 'surface-fill' : 'document',
   )
   const projectDetailSurface = $derived<'overview' | 'work' | 'map' | null>(
-    currentView === 'overview' ? 'overview' : currentView === 'work' ? 'work' : currentView === 'map' ? 'map' : null,
+    currentView === 'overview'
+      ? 'overview'
+      : currentView === 'work'
+        ? 'work'
+        : currentView === 'map' || currentView === 'structure'
+          ? 'map'
+          : null,
   )
   const surfaceDetailPending = $derived.by(() => {
     if (!project.surfaceLoading || !detail) return false
-    if (currentView === 'overview' || currentView === 'map') {
+    if (currentView === 'overview') {
+      // The Overview decision card may only render after the shared action
+      // packet arrives. A partial surface read otherwise looks like a settled
+      // "nothing needs you" state, then flips to the real running action.
+      return !detail.actionModel
+    }
+    if (currentView === 'map') {
       return !detail.orientationSpine && !detail.tasks
     }
-    if (currentView === 'work' || currentView === 'planner') return !('tasks' in detail)
+    if (currentView === 'work' || currentView === 'planner') {
+      // Overview and Work intentionally carry different bounded inventories.
+      // Never render Overview rows while Work is still loading: their order
+      // is valid for different jobs and visibly reorders the list on arrival.
+      return Boolean(detail.taskPayload?.surface && detail.taskPayload.surface !== 'work')
+    }
     return false
   })
+  const activeWorkTitle = $derived(
+    detail?.startReadiness?.focusTaskTitle?.trim() ||
+    detail?.actionModel?.primaryAction?.taskLabel?.trim() ||
+    'Guildhall is working',
+  )
+  const activeWorkProgress = $derived.by(() => {
+    const releaseLabel = detail?.releaseSummary?.release?.label?.trim()
+    const counts = detail?.releaseSummary?.counts
+    if (releaseLabel && typeof counts?.done === 'number' && typeof counts.total === 'number') {
+      return `${releaseLabel} · ${counts.done} of ${counts.total} complete. Nothing is waiting on you.`
+    }
+    return 'Nothing is waiting on you.'
+  })
   const routeFocusedTaskId = $derived.by(() => {
-    path.value
+    path.href
     if (currentView !== 'work' || typeof window === 'undefined') return null
     const params = new URL(window.location.href).searchParams
     return params.get('task') ?? params.get('work') ?? null
@@ -217,21 +258,6 @@
   $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
-      if (
-        t === 'agent_started' ||
-        t === 'agent_finished' ||
-        t === 'task_transition' ||
-        t === 'tool_started' ||
-        t === 'tool_completed' ||
-        t === 'assistant_complete' ||
-        t === 'line_complete' ||
-        t === 'error' ||
-        t === 'escalation_raised' ||
-        t === 'provider_health_changed' ||
-        t.startsWith('supervisor_')
-      ) {
-        latestTickerEvent = pickLatestEvent(latestTickerEvent, ev)
-      }
       // Refresh on anything that might change inbox state.
       if (
         t.startsWith('task_') ||
@@ -247,14 +273,48 @@
   })
 
   $effect(() => {
-    path.value
+    path.href
     void project.refresh(routeProjectId, projectDetailSurface, routeFocusedTaskId)
   })
+
+  function refreshVisibleProject(): Promise<ProjectDetail | null> {
+    return project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
+  }
+
+  async function reconcileRunState(refreshInbox = false): Promise<ProjectDetail | null> {
+    const refreshed = await refreshVisibleProject()
+    // A one-task pass can begin and finish before the first scheduled refresh.
+    // Once that authoritative refresh succeeds, its run state is the only one
+    // chrome should render instead of the temporary start prediction.
+    if (!project.error) optimisticRunStatus = null
+    if (refreshInbox) await loadInbox()
+    return refreshed
+  }
+
+  function scheduleStartedRunReconciliation(mode: 'continuous' | 'one_task'): void {
+    if (mode === 'one_task') {
+      let attemptsRemaining = 4
+      const poll = async (): Promise<void> => {
+        const refreshed = await reconcileRunState()
+        if (project.error || refreshed?.run?.status !== 'running' || attemptsRemaining === 0) {
+          void loadInbox()
+          return
+        }
+        attemptsRemaining -= 1
+        setTimeout(() => void poll(), 200)
+      }
+      setTimeout(() => void poll(), 300)
+      return
+    }
+    for (const delay of [300, 1500, 3200]) {
+      setTimeout(() => void reconcileRunState(delay >= 1500), delay)
+    }
+  }
 
   $effect(() => {
     if (refreshHandle) clearInterval(refreshHandle)
     refreshHandle = setInterval(() => {
-      void project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
+      void refreshVisibleProject()
     }, 5000)
     return () => {
       if (refreshHandle) {
@@ -403,7 +463,7 @@
   $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
-      if (t.startsWith('supervisor_') || t === 'provider_health_changed') void project.refresh(activeProjectId)
+      if (t.startsWith('supervisor_') || t === 'provider_health_changed') void refreshVisibleProject()
     })
     return off
   })
@@ -421,6 +481,9 @@
   const needsMeta = $derived(
     (project.detail?.coordinatorCount ?? project.detail?.config?.coordinators?.length ?? 0) === 0,
   )
+  const threadIsCurrentDecision = $derived(
+    currentView === 'thread' || project.detail?.actionModel?.ownerInput?.active === true,
+  )
   const entries = $derived<NavEntry[]>([
     {
       id: 'project',
@@ -431,11 +494,9 @@
         { id: 'overview', label: 'Overview', path: currentProjectHref('/overview', activeProjectId) },
         { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
         { id: 'map', label: 'Map', path: currentProjectHref('/map', activeProjectId) },
-        { id: 'facts', label: 'Facts', path: currentProjectHref('/facts', activeProjectId) },
-        { id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) },
       ],
     },
-    { id: 'thread', label: 'Threads', icon: 'sparkles', suffix: '/thread' },
+    ...(threadIsCurrentDecision ? [{ id: 'thread' as const, label: 'Threads', icon: 'sparkles' as const, suffix: '/thread' }] : []),
     {
       id: 'work',
       label: 'Work',
@@ -444,17 +505,6 @@
       subs: [
         { id: 'queue', label: 'Queue', path: currentProjectHref('/work?view=list', activeProjectId) },
         { id: 'board', label: 'Board', path: currentProjectHref('/work?view=board', activeProjectId) },
-      ],
-    },
-    { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
-    {
-      id: 'release',
-      label: 'Release',
-      icon: 'check-circle-2',
-      suffix: '/release',
-      subs: [
-        { id: 'verdict', label: 'Summary', path: currentProjectHref('/release', activeProjectId) },
-        { id: 'criteria', label: 'Checks', path: currentProjectHref('/release/criteria', activeProjectId) },
       ],
     },
   ])
@@ -486,9 +536,7 @@
 
     if (sectionId === 'project') {
       if (currentView === 'overview') return currentSub === 'inbox' ? subId === 'inbox' : subId === 'overview'
-      if (currentView === 'map') return subId === 'map'
-      if (currentView === 'facts') return subId === 'facts'
-      if (currentView === 'structure') return subId === 'structure'
+      if (currentView === 'map' || currentView === 'structure') return subId === 'map'
     }
 
     if (sectionId === 'work' && currentView === 'work') {
@@ -527,7 +575,7 @@
     }
   }
 
-  async function start(mode: 'continuous' | 'one_task' = 'continuous') {
+  async function start(mode: 'continuous' | 'one_task' = 'continuous', taskId?: string) {
     busy = true
     optimisticRunStatus = 'running'
     runError = null
@@ -535,7 +583,7 @@
       const res = await projectFetch('/api/project/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, ...(taskId ? { taskId, scope: 'work_item' } : {}) }),
       }, activeProjectId)
       if (!res.ok) {
         try {
@@ -547,15 +595,35 @@
         optimisticRunStatus = null
         return
       }
-      setTimeout(() => void project.refresh(activeProjectId), 300)
-      setTimeout(() => {
-        void project.refresh(activeProjectId)
-        void loadInbox()
-      }, 1500)
-      setTimeout(() => {
-        void project.refresh(activeProjectId)
-        void loadInbox()
-      }, 3200)
+      scheduleStartedRunReconciliation(mode)
+    } finally {
+      busy = false
+    }
+  }
+
+  async function runRepositoryAction(
+    taskId: string,
+    operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>,
+  ) {
+    busy = true
+    runError = null
+    try {
+      const closureAction = operation === 'push_branch' ? 'push' : 'open-pr'
+      const res = await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/git-story/${closureAction}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        // Clicking this explicit owner action is the project-policy confirmation.
+        body: JSON.stringify({ confirmed: true }),
+      }, activeProjectId)
+      const body = await res.json().catch(() => ({})) as { error?: string; url?: string }
+      if (!res.ok) {
+        runError = body.error ?? `Repository action failed (HTTP ${res.status})`
+        return
+      }
+      toast.success(operation === 'push_branch' ? 'Branch pushed.' : body.url ? 'Pull request opened.' : 'Pull request opened.')
+      await project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
+    } catch (err) {
+      runError = err instanceof Error ? err.message : String(err)
     } finally {
       busy = false
     }
@@ -577,7 +645,7 @@
         optimisticRunStatus = null
         return
       }
-      setTimeout(() => void project.refresh(activeProjectId), 300)
+      setTimeout(() => void reconcileRunState(), 300)
     } finally {
       busy = false
     }
@@ -608,7 +676,26 @@
   function closeMigrationModal(): void {
     if (migrationApplyBusy) return
     migrationModalOpen = false
+    if (!migrationRepairIntent || typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('repair')
+    nav(`${url.pathname}${url.search}${url.hash}`)
   }
+
+  function continueAfterMigration(): void {
+    const href = migrationCompletionAction?.href ?? currentProjectHref('/overview', activeProjectId)
+    migrationModalOpen = false
+    migrationAppliedMessage = null
+    migrationApplyResult = null
+    nav(href)
+  }
+
+  $effect(() => {
+    path.href
+    if (typeof window === 'undefined') return
+    if (new URL(window.location.href).searchParams.get('repair') !== 'migration') return
+    void openMigrationModal()
+  })
 
   async function applyRequiredMigration(): Promise<void> {
     const migration = primaryRequiredMigration
@@ -622,7 +709,7 @@
       const res = await projectFetch('/api/project/migrations/apply', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ includePrompt: true, migrationId: migration.id }),
+        body: JSON.stringify({ includeRequired: true }),
       }, activeProjectId)
       const body = (await res.json().catch(() => ({}))) as {
         error?: string
@@ -636,7 +723,7 @@
       migrationStatus = body.status ?? null
       migrationApplyResult = body.result ?? null
       migrationApplyStage = 'refreshing-project'
-      await project.refresh(activeProjectId)
+      await refreshVisibleProject()
       migrationApplyStage = 'refreshing-inbox'
       await loadInbox()
       if (!body.status) {
@@ -644,7 +731,11 @@
         await loadMigrationStatus()
       }
       migrationApplyStage = 'complete'
-      migrationAppliedMessage = 'Migration complete.'
+      const remaining = (body.status ?? migrationStatus)?.blocked?.length ?? 0
+      migrationAppliedMessage = remaining > 0
+        ? 'Update applied. Another project update is required.'
+        : 'Migration complete.'
+      if (remaining === 0) toast.success('Project update complete.')
     } catch (err) {
       migrationError = err instanceof Error ? err.message : String(err)
       migrationApplyStage = 'idle'
@@ -671,19 +762,6 @@
     return lines.find(line => /\berror\b|failed|Cannot find module|command not found|spawn ENOENT/i.test(line)) ?? lines[0] ?? null
   }
 
-  function eventAtMillis(event: EventEnvelope | null | undefined): number {
-    const at = event?.at
-    if (!at) return -1
-    const value = Date.parse(at)
-    return Number.isFinite(value) ? value : -1
-  }
-
-  function pickLatestEvent(current: EventEnvelope | null, candidate: EventEnvelope | null): EventEnvelope | null {
-    if (!candidate) return current
-    if (!current) return candidate
-    return eventAtMillis(candidate) >= eventAtMillis(current) ? candidate : current
-  }
-
   function hasVisibleUnansweredQuestion(task: Task): boolean {
     const status = task.status ?? ''
     if (['done', 'shelved', 'blocked', 'pending_pr'].includes(status)) return false
@@ -694,18 +772,6 @@
     return status === 'done' || status === 'shelved' || status === 'pending_pr'
   }
 
-  $effect(() => {
-    latestTickerEvent = (detail?.recentEvents ?? []).reduce<EventEnvelope | null>(
-      (current, candidate) => pickLatestEvent(current, candidate),
-      null,
-    )
-  })
-  $effect(() => {
-    const handle = setInterval(() => {
-      tickerNow = Date.now()
-    }, 5000)
-    return () => clearInterval(handle)
-  })
   const actualRunStatus = $derived(detail?.run?.status ?? 'stopped')
   const runStatus = $derived(optimisticRunStatus ?? actualRunStatus)
   $effect(() => {
@@ -719,7 +785,34 @@
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
-  const selectedReleaseShipped = $derived(detail?.decision?.release?.lifecycleState === 'shipped')
+  // A focused work item, recovery, or repository handoff has its own direct
+  // command in the content area. The shell must not offer a second generic
+  // run control, especially a disabled status-shaped button.
+  const directTaskPrimaryAction = $derived(
+    (primaryAction?.code === 'ready_work' ||
+      primaryAction?.code === 'paused_live_work' ||
+      primaryAction?.code === 'review_retry' ||
+      primaryAction?.code === 'worker_recovery' ||
+      primaryAction?.code === 'blocked_work' ||
+      primaryAction?.code === 'repository_followup_required') &&
+      Boolean(primaryAction.taskId),
+  )
+  const primaryActionOwnsAttention = $derived(
+    Boolean(
+      primaryAction &&
+      primaryAction.source === 'inbox' &&
+      primaryAction.inboxKind === 'setup_pending' &&
+      actionRunControl?.startEnabled === false,
+    ),
+  )
+  // Both fields are projections of the selected release. Older compact reads
+  // may omit `decision`, so lifecycle truth must not depend on that optional
+  // presentation field and resurrect stale owner urgency after shipment.
+  const selectedReleaseShipped = $derived(
+    detail?.decision?.release?.lifecycleState === 'shipped' ||
+    detail?.releaseReadiness?.release?.state === 'shipped' ||
+    detail?.releaseReadiness?.scope?.state === 'shipped',
+  )
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
   const providerDecisionText = $derived(
@@ -748,9 +841,20 @@
   const allTerminalStart = $derived(startReadiness?.code === 'all_terminal')
   const requiredMigrationBlocked = $derived(startReadiness?.code === 'required_migration_pending')
   const primaryRequiredMigration = $derived<ProjectMigrationStatusItem | null>(migrationStatus?.blocked?.[0] ?? null)
+  const migrationRepairIntent = $derived.by(() => {
+    path.href
+    if (typeof window === 'undefined') return false
+    return new URL(window.location.href).searchParams.get('repair') === 'migration'
+  })
+  const migrationSequenceContinues = $derived(Boolean(migrationAppliedMessage && primaryRequiredMigration))
+  const migrationHandoffReady = $derived(
+    Boolean(migrationAppliedMessage) || Boolean(
+      migrationRepairIntent && migrationStatus && !migrationStatusLoading && !migrationError && !primaryRequiredMigration,
+    ),
+  )
   const migrationProgressLabel = $derived.by(() => {
     switch (migrationApplyStage) {
-      case 'applying': return 'Applying migration'
+      case 'applying': return 'Applying required updates'
       case 'refreshing-project': return 'Refreshing project state'
       case 'refreshing-inbox': return 'Refreshing Needs You'
       case 'checking-status': return 'Checking remaining migrations'
@@ -758,9 +862,31 @@
       default: return null
     }
   })
-  const migrationChangedPaths = $derived.by(() => {
-    const paths = migrationApplyResult?.applied?.flatMap(item => item.affectedPaths ?? []) ?? []
-    return [...new Set(paths)].slice(0, 8)
+  const migrationCompletionAction = $derived.by(() => {
+    if (!migrationHandoffReady || migrationSequenceContinues) return null
+    if (primaryAction?.href) {
+      return {
+        href: projectActionHref(primaryAction.href, activeProjectId),
+        label: primaryAction.buttonLabel ?? 'Continue',
+      }
+    }
+    return {
+      href: currentProjectHref('/overview', activeProjectId),
+      label: 'Continue to project',
+    }
+  })
+  const migrationCompletionSummary = $derived.by(() => {
+    if (!migrationHandoffReady || migrationSequenceContinues) return null
+    const applied = migrationApplyResult?.applied?.length ?? 0
+    const updateSummary = migrationAppliedMessage
+      ? applied === 1
+        ? 'Guildhall applied 1 required update.'
+        : applied > 1
+          ? `Guildhall applied ${applied} required updates.`
+          : 'Guildhall confirmed that this project is current.'
+      : 'Guildhall checked this project. No project update is blocking this release.'
+    if (primaryAction?.label) return `${updateSummary} The project is unblocked. Next: ${primaryAction.label}.`
+    return `${updateSummary} The project is unblocked.`
   })
   function orientationLabel(value: unknown): string | null {
     if (typeof value === 'string') {
@@ -804,7 +930,6 @@
         ? startReadiness?.message ?? 'All tasks are already finished.'
       : null,
   )
-  const projectTicker = $derived(buildProjectTicker(detail, latestTickerEvent, new Date(tickerNow)))
   const currentScopedTasks = $derived.by(() => {
     const tasks = detail?.tasks ?? []
     const includedRows = detail?.orientationSpine?.scopeRows?.filter(row => row.scope === 'included') ?? []
@@ -1012,7 +1137,7 @@
     runStopSummary?.stopReason === 'awaiting_human'
       ? primaryAction?.buttonLabel ?? startReadinessActionLabel(startReadiness)
       : runStopSummary?.stopReason === 'required_migration_pending'
-        ? 'Migrate project'
+        ? 'Review project update'
       : runStopSummary?.stopReason === 'blocked_only'
         ? 'Open Overview'
         : null,
@@ -1021,9 +1146,6 @@
     detail?.bootstrapStatus?.success === false
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
       : null,
-  )
-  const showDoThisNext = $derived(
-    currentView !== 'overview' && currentView !== 'thread' && currentView !== 'inbox',
   )
   const startReadinessNoticeHref = $derived.by(() => {
     if (selectedReleaseShipped || !startReadiness || startReadiness.canStart || allTerminalStart || requiredMigrationBlocked) return null
@@ -1041,10 +1163,20 @@
     if (blockers.bootstrap) return 'Open readiness checks'
     return startReadinessActionLabel(startReadiness)
   })
+  const routeOwnsPrimaryDecision = $derived(
+    Boolean(primaryAction) && (
+      currentView === 'work' ||
+      currentView === 'thread' ||
+      currentView === 'release'
+    ),
+  )
   const shellAttentionNotices = $derived.by(() => {
-    if (!detail || selectedReleaseShipped) return []
+    // Overview owns the project-level decision. Repeating it in shell chrome
+    // turns one action into competing instructions before the owner reaches
+    // the surface that can actually explain and complete it.
+    if (!detail || selectedReleaseShipped || currentView === 'overview') return []
     const notices: ShellAttentionNotice[] = []
-    if (startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
+    if (!routeOwnsPrimaryDecision && startReadinessNoticeHref && startReadinessNoticeLabel && startReadiness?.message) {
       notices.push({
         id: 'start-readiness',
         code: startReadiness.code,
@@ -1059,7 +1191,10 @@
         actionLabel: startReadinessNoticeLabel,
       })
     }
-    if (runStopSummaryText) {
+    // A required migration already owns the visible run control outside
+    // Overview. Repeating an older stop snapshot produces a second command
+    // that only navigates back to the same repair flow.
+    if (runStopSummaryText && !requiredMigrationBlocked) {
       const runStopTone = shellAlertTone(runStopSummarySeverity)
       notices.push({
         id: 'run-stop-summary',
@@ -1149,6 +1284,16 @@
   const awaitingApprovalCount = $derived(
     taskList.filter(t => (t as { status?: string }).status === 'spec_review').length,
   )
+  const repairReturnTask = $derived.by(() => {
+    const href = path.href?.trim()
+    if (!href) return null
+    const taskId = new URL(href, 'http://localhost').searchParams.get('task')
+    const task = taskId ? taskList.find(candidate => candidate.id === taskId) : null
+    if (!task) return null
+    return {
+      displayKey: taskDisplayKey(task, taskList, activeProjectId),
+    }
+  })
 
   const startDisabledReason = $derived(
     actionRunControl?.startEnabled === false
@@ -1174,25 +1319,21 @@
   )
   const showRunButton = $derived(
     !selectedReleaseShipped &&
+      !primaryActionOwnsAttention &&
+      // A migration-gated route owns its one repair action in the content area.
+      // The shell must not turn it into a second competing command.
+      !requiredMigrationBlocked &&
       (
-        availabilityPaused ||
         runStatus === 'running' ||
         runStatus === 'stopping' ||
-        (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start'))
+        (!directTaskPrimaryAction &&
+          (availabilityPaused ||
+            (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start'))))
       ),
   )
   const runControlPauses = $derived(
     runStatus === 'running' ||
-      runStatus === 'stopping' ||
-      (
-        !availabilityPaused &&
-        actionRunControl?.pauseEnabled === true &&
-        actionRunControl?.startEnabled === false &&
-        !requiredMigrationBlocked
-      ),
-  )
-  const pausedBlockedControl = $derived(
-    runControlPauses && runStatus !== 'running' && runStatus !== 'stopping',
+      runStatus === 'stopping',
   )
   const runButtonIdleLabel = $derived(
     actionRunControl?.label && actionRunControl.startEnabled === false
@@ -1204,7 +1345,7 @@
       : 'Resume',
   )
   const showAdvanceOneTaskAction = $derived(
-    !selectedReleaseShipped && !allTerminalStart,
+    !selectedReleaseShipped && !allTerminalStart && !directTaskPrimaryAction && !primaryActionOwnsAttention,
   )
 
   function startReadinessActionLabel(readiness: StartReadiness | null | undefined): string {
@@ -1497,7 +1638,7 @@
           {/if}
           {#if detail && showRunButton}
             <Button
-              variant={runControlPauses ? (pausedBlockedControl ? 'secondary' : 'danger') : requiredMigrationBlocked ? 'human' : 'agent'}
+              variant={runControlPauses ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
               size="sm"
               iconOnly={topbarLabelsCollapsed}
               disabled={busy || migrationApplyBusy || runStatus === 'stopping' || (!runControlPauses && startDisabledReason !== null && !requiredMigrationBlocked)}
@@ -1506,24 +1647,24 @@
                 runStatus === 'stopping'
                   ? 'Pausing'
                   : runControlPauses
-                  ? (pausedBlockedControl ? 'Pause project processing' : runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
+                  ? (runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
                   : requiredMigrationBlocked
-                  ? 'Migrate project'
+                  ? 'Review project update'
                   : (startDisabledReason ?? runButtonIdleLabel)
               }
               title={
                 runStatus === 'stopping'
                   ? 'Pausing the run'
                 : runControlPauses
-                  ? (pausedBlockedControl ? 'Pause Guildhall on this project' : runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
+                  ? (runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
                   : requiredMigrationBlocked
-                  ? 'Migrate project'
+                  ? 'Review project update'
                   : (startDisabledReason ?? runButtonIdleLabel)
               }
             >
               <Icon name={runControlPauses ? 'pause' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
               {#if !topbarLabelsCollapsed}
-                {runStatus === 'stopping' ? 'Pausing...' : runControlPauses ? (pausedBlockedControl ? 'Pause' : runMode === 'one_task' ? 'Pause 1' : 'Pause') : runButtonIdleLabel}
+                {runStatus === 'stopping' ? 'Pausing...' : runControlPauses ? (runMode === 'one_task' ? 'Pause 1' : 'Pause') : runButtonIdleLabel}
               {/if}
             </Button>
           {/if}
@@ -1564,6 +1705,14 @@
                       <span>Advance one task</span>
                     </button>
                   {/if}
+                  <button
+                    type="button"
+                    class="actions-menu-item"
+                    onclick={() => { closeActionsMenu(); go(currentProjectHref('/release', activeProjectId)) }}
+                  >
+                    <Icon name="check-circle-2" size={16} />
+                    <span>Release details</span>
+                  </button>
                 </div>
               {/if}
             </div>
@@ -1679,54 +1828,25 @@
           </AlertBand>
         {/each}
     {/snippet}
-        {#if detail && showDoThisNext}
-          <DoThisNext />
-        {/if}
-
         <div class="body">
-          {#if !detail}
-            {#if currentView === 'thread'}
-              {#await loadThreadTab()}
-                <div class="page-centered page-centered-inline">
-                  <p class="muted">Loading project...</p>
-                </div>
-              {:then module}
-                {@const ThreadTab = module.default}
-                <ThreadTab projectId={activeProjectId} />
-              {/await}
-            {:else if currentView === 'inbox'}
-              {#await loadNeedsYouTab()}
-                <div class="page-centered page-centered-inline">
-                  <p class="muted">Loading project...</p>
-                </div>
-              {:then module}
-                {@const NeedsYouTab = module.default}
-                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
-              {/await}
-            {:else if currentView === 'release'}
-              {#await loadReleaseTab()}
-                <div class="page-centered page-centered-inline">
-                  <p class="muted">Loading project...</p>
-                </div>
-              {:then module}
-                {@const ReleaseTab = module.default}
-                <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} />
-              {/await}
-            {:else}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {/if}
+          {#if props.drawerOpen}
+            <div class="drawer-background" aria-hidden="true"></div>
+          {:else if !detail}
+            <div class="page-centered page-centered-inline">
+              <p class="muted">Loading project...</p>
+            </div>
           {:else if surfaceDetailPending}
             <div class="page-centered page-centered-inline">
               <NoticeBand
                 tone="neutral"
                 role="status"
                 density="compact"
-                label="Project summary ready"
-                title={detail.name ?? detail.id ?? 'Project'}
+                label={runStatus === 'running' ? 'Work is underway' : 'Current work updated'}
+                title={runStatus === 'running' ? activeWorkTitle : 'Checking what changed'}
               >
-                {detail.summary ?? 'The current project summary is ready.'} Loading the selected view...
+                {runStatus === 'running'
+                  ? activeWorkProgress
+                  : 'Guildhall finished the last pass and is loading the next decision.'}
               </NoticeBand>
             </div>
           {:else if currentView === 'overview'}
@@ -1737,7 +1857,7 @@
                 </div>
               {:then module}
                 {@const NeedsYouTab = module.default}
-                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} onRunTask={(taskId) => start('one_task', taskId)} onRunRepositoryAction={runRepositoryAction} {busy} />
               {/await}
             {:else}
               {#await loadProjectOverviewTab()}
@@ -1751,9 +1871,12 @@
                   {inboxItems}
                   {inboxLoaded}
                   {inboxError}
-                  {projectTicker}
                   {activeProjectId}
                   onMigrate={openMigrationModal}
+                  onStartNextRelease={newTask}
+                  onRunTask={(taskId) => start('one_task', taskId)}
+                  onRunRepositoryAction={runRepositoryAction}
+                  busy={busy}
                 />
               {/await}
             {/if}
@@ -1764,7 +1887,7 @@
               </div>
             {:then module}
               {@const ThreadTab = module.default}
-              <ThreadTab projectId={activeProjectId} />
+              <ThreadTab projectId={activeProjectId} onRunRepositoryAction={runRepositoryAction} {busy} />
             {/await}
           {:else if currentView === 'inbox'}
             {#await loadNeedsYouTab()}
@@ -1773,7 +1896,7 @@
               </div>
             {:then module}
               {@const NeedsYouTab = module.default}
-              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} primaryAction={primaryAction} onRunTask={(taskId) => start('one_task', taskId)} onRunRepositoryAction={runRepositoryAction} {busy} />
             {/await}
           {:else if currentView === 'workspace-import'}
             {#await loadWorkspaceImportTab()}
@@ -1785,32 +1908,45 @@
               <WorkspaceImportTab />
             {/await}
           {:else if currentView === 'work'}
-            {#await loadWorkTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const WorkTab = module.default}
-              <WorkTab {detail} mode="list" />
-            {/await}
+            {#if requiredMigrationBlocked}
+              {#await loadProjectUpdateGate()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project update...</p>
+                </div>
+              {:then module}
+                {@const ProjectUpdateGate = module.default}
+                <ProjectUpdateGate onReview={openMigrationModal} returnTo={repairReturnTask} />
+              {/await}
+            {:else}
+              {#await loadWorkTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const WorkTab = module.default}
+                <WorkTab {detail} mode="list" />
+              {/await}
+            {/if}
           {:else if currentView === 'planner'}
-            {#await loadWorkTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const WorkTab = module.default}
-              <WorkTab {detail} mode="board" />
-            {/await}
-          {:else if currentView === 'facts'}
-            {#await loadFactsTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const FactsTab = module.default}
-              <FactsTab />
-            {/await}
+            {#if requiredMigrationBlocked}
+              {#await loadProjectUpdateGate()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project update...</p>
+                </div>
+              {:then module}
+                {@const ProjectUpdateGate = module.default}
+                <ProjectUpdateGate onReview={openMigrationModal} returnTo={repairReturnTask} />
+              {/await}
+            {:else}
+              {#await loadWorkTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const WorkTab = module.default}
+                <WorkTab {detail} mode="board" />
+              {/await}
+            {/if}
           {:else if currentView === 'map'}
             {#await loadProjectMapTab()}
               <div class="page-centered page-centered-inline">
@@ -1825,22 +1961,17 @@
               />
             {/await}
           {:else if currentView === 'structure'}
-            {#await loadProjectStructurePanel()}
+            {#await loadProjectMapTab()}
               <div class="page-centered page-centered-inline">
                 <p class="muted">Loading project...</p>
               </div>
             {:then module}
-              {@const ProjectStructurePanel = module.default}
-              <ProjectStructurePanel />
-            {/await}
-          {:else if currentView === 'timeline'}
-            {#await loadTimelineTab()}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {:then module}
-              {@const TimelineTab = module.default}
-              <TimelineTab {detail} />
+              {@const ProjectMapTab = module.default}
+              <ProjectMapTab
+                {detail}
+                activeProjectId={activeProjectId}
+                onReleaseSelected={() => project.refresh(activeProjectId, 'map')}
+              />
             {/await}
           {:else if currentView === 'release'}
             {#await loadReleaseTab()}
@@ -1849,7 +1980,7 @@
               </div>
             {:then module}
               {@const ReleaseTab = module.default}
-              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} />
+              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} projectDetail={detail} onRunTask={(taskId) => start('one_task', taskId)} onRunRepositoryAction={runRepositoryAction} {busy} />
             {/await}
         {:else if currentView === 'settings'}
           {#await loadSettingsTab()}
@@ -1862,35 +1993,6 @@
           {/await}
         {/if}
         </div>
-
-    {#snippet footer()}
-      <div class="project-ticker ticker-{projectTicker.tone}" aria-label="Live project ticker">
-        <div class="project-ticker-main">
-          <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
-          <span class="project-ticker-actor">{projectTicker.actorLabel ?? projectTicker.label}</span>
-          <span class="project-ticker-message">
-            {projectTicker.message}
-            {#if projectTicker.detail}
-              {' - '}{projectTicker.detail}
-            {/if}
-          </span>
-        </div>
-        <div class="project-ticker-side">
-          {#if runStatus === 'running' || runStatus === 'stopping'}
-            <a
-              class="project-ticker-link"
-              href={currentProjectHref('/timeline', activeProjectId)}
-              onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/timeline', activeProjectId)) }}
-            >
-              View live stream
-            </a>
-          {/if}
-          {#if projectTicker.timeLabel}
-            <span class="project-ticker-time">{projectTicker.timeLabel}</span>
-          {/if}
-        </div>
-      </div>
-    {/snippet}
 
   {#if intakeOpen}
     <IntakeModal onClose={() => setTimeout(() => (intakeOpen = false), 160)} />
@@ -1922,24 +2024,18 @@
           <li class:active={migrationApplyStage === 'refreshing-inbox'} class:done={['checking-status', 'complete'].includes(migrationApplyStage)}>Refresh Needs You</li>
           <li class:active={migrationApplyStage === 'checking-status'} class:done={migrationApplyStage === 'complete'}>Check remaining migrations</li>
         </ol>
-      {:else if migrationAppliedMessage}
+      {:else if migrationHandoffReady}
         <NoticeBand
-          tone="ok"
+          tone={migrationSequenceContinues ? 'neutral' : 'ok'}
           role="status"
           density="compact"
-          label="Migration complete"
-          title={migrationAppliedMessage}
-        />
-        {#if migrationChangedPaths.length}
-          <div class="migration-card migration-card-complete">
-            <Chip label="Changed paths" tone="ok" />
-            <div class="migration-paths" aria-label="Migration changed paths">
-              {#each migrationChangedPaths as affectedPath}
-                <code>{affectedPath}</code>
-              {/each}
-            </div>
-          </div>
-        {/if}
+          label={migrationSequenceContinues ? 'Project update applied' : migrationAppliedMessage ? 'Migration complete' : 'Project ready'}
+          title={migrationAppliedMessage ?? 'No project update is blocking this release.'}
+        >
+          {#if !migrationSequenceContinues && migrationCompletionSummary}
+            <p>{migrationCompletionSummary}</p>
+          {/if}
+        </NoticeBand>
       {/if}
       {#if migrationStatusLoading}
         <p class="muted">Checking migrations...</p>
@@ -1952,15 +2048,8 @@
           {#if primaryRequiredMigration.summary}
             <p>{primaryRequiredMigration.summary}</p>
           {/if}
-          {#if primaryRequiredMigration.affectedPaths?.length}
-            <div class="migration-paths" aria-label="Affected paths">
-              {#each primaryRequiredMigration.affectedPaths as affectedPath}
-                <code>{affectedPath}</code>
-              {/each}
-            </div>
-          {/if}
         </div>
-      {:else if !migrationAppliedMessage}
+      {:else if !migrationHandoffReady}
         <NoticeBand
           tone="ok"
           role="status"
@@ -1974,13 +2063,19 @@
       <Button variant="secondary" disabled={migrationApplyBusy} onclick={closeMigrationModal}>
         Close
       </Button>
+      {#if migrationCompletionAction}
+        <Button variant="human" onclick={continueAfterMigration}>
+          {migrationCompletionAction.label}
+          <Icon name="arrow-right" size={16} />
+        </Button>
+      {/if}
       <Button
         variant="human"
         disabled={migrationStatusLoading || migrationApplyBusy || !primaryRequiredMigration}
         onclick={() => { void applyRequiredMigration() }}
       >
         <Icon name="refresh-cw" size={16} />
-        {migrationApplyBusy ? 'Applying migration...' : 'Apply required migration'}
+        {migrationApplyBusy ? 'Applying updates...' : 'Apply required updates'}
       </Button>
     {/snippet}
   </Modal>
@@ -2132,9 +2227,6 @@
     font-weight: var(--gh-type-weight-strong);
   }
 
-  .main {
-    min-width: 0;
-  }
   .topbar {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -2231,11 +2323,6 @@
   .rail-status {
     display: flex;
   }
-  .btn-inner {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
   .actions-menu {
     position: relative;
   }
@@ -2308,10 +2395,6 @@
     font-size: var(--gh-type-size-panel-title);
     line-height: var(--gh-type-line-height-tight);
   }
-  .migration-card-complete {
-    border-color: color-mix(in srgb, var(--gh-color-feedback-ok) 36%, var(--border));
-    background: color-mix(in srgb, var(--gh-color-feedback-ok) 14%, var(--bg-raised-2));
-  }
   .migration-steps {
     display: grid;
     gap: var(--s-2);
@@ -2349,19 +2432,6 @@
     border-color: var(--gh-color-feedback-ok);
     background: var(--gh-color-feedback-ok);
   }
-  .migration-paths {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-  }
-  .migration-paths code {
-    padding: 0.2rem 0.45rem;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--bg-base) 62%, transparent);
-    color: var(--text);
-    font-size: var(--gh-type-size-meta);
-  }
 
   @media (max-width: 900px) {
     :global(.rail-pin) {
@@ -2388,11 +2458,6 @@
     }
   }
 
-  .band {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-2);
-  }
   .page-centered {
   }
   .body {
@@ -2400,74 +2465,8 @@
     flex-direction: column;
     gap: var(--s-5);
   }
-  .project-ticker {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--s-3);
-    min-width: 0;
-    padding: var(--s-2) var(--s-5);
-    border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--bg-raised) 94%, black 6%);
-  }
-  .project-ticker-main {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-  }
-  .project-ticker-side {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    min-width: 0;
-  }
-  .project-ticker-link {
-    color: var(--accent);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    text-decoration: none;
-    white-space: nowrap;
-  }
-  .project-ticker-link:hover {
-    text-decoration: underline;
-  }
-  .project-ticker-actor {
-    flex: 0 1 auto;
-    min-width: 0;
-    color: var(--text);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    overflow-wrap: anywhere;
-  }
-  .project-ticker-message {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .project-ticker-time {
-    flex: none;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    white-space: nowrap;
-  }
-  .ticker-active .project-ticker-actor,
-  .ticker-ok .project-ticker-actor {
-    color: var(--accent-2);
-  }
-  .ticker-warn .project-ticker-actor {
-    color: var(--warn);
-  }
-  .ticker-danger .project-ticker-actor {
-    color: var(--danger);
+  .drawer-background {
+    min-block-size: 100%;
   }
   .muted {
     color: var(--text-muted);
@@ -2524,23 +2523,6 @@
     }
     .body {
       gap: var(--s-4);
-    }
-    .project-ticker {
-      padding: var(--s-2) var(--s-4);
-    }
-    .project-ticker-main {
-      align-items: flex-start;
-      flex-wrap: wrap;
-    }
-    .project-ticker-actor {
-      flex-basis: 100%;
-      line-height: var(--gh-type-line-height-caption);
-    }
-    .project-ticker-side {
-      display: none;
-    }
-    .project-ticker-message {
-      white-space: normal;
     }
   }
   @media (max-width: 520px) {

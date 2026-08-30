@@ -269,9 +269,10 @@ function normalizeEscalations(task: RecordLike, value: unknown, now: string): un
 }
 
 /**
- * Migration-only adapter. Current runtime readers never call this function;
- * the final current-state boundary must receive already-materialized SQLite
- * rows instead of repairing old queue shapes during a request.
+ * Compatibility adapter for legacy queue definitions before they cross a
+ * current TaskQueue schema boundary. It must remain deterministic for
+ * read-only projection callers; only an explicit mutation may advance queue
+ * freshness.
  */
 export function normalizeLegacyTaskQueueForMigration(parsed: unknown, now = new Date().toISOString()): unknown {
   const normalizeTask = (task: unknown): unknown => {
@@ -297,7 +298,22 @@ export function normalizeLegacyTaskQueueForMigration(parsed: unknown, now = new 
     }
   }
 
-  if (Array.isArray(parsed)) return parsed.map(normalizeTask)
+  if (Array.isArray(parsed)) {
+    const lastUpdated = parsed.reduce<string>((latest, task) => {
+      if (!isRecord(task)) return latest
+      const candidate = typeof task.updatedAt === 'string'
+        ? task.updatedAt
+        : typeof task.createdAt === 'string'
+          ? task.createdAt
+          : ''
+      return candidate > latest ? candidate : latest
+    }, '1970-01-01T00:00:00.000Z')
+    return {
+      version: 1,
+      lastUpdated,
+      tasks: parsed.map(normalizeTask),
+    }
+  }
   if (isRecord(parsed) && Array.isArray(parsed.tasks)) {
     // Releases are optional. Older queue writers serialized the absence of a
     // selected release as null, while the runtime schema represents absence

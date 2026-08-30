@@ -11,6 +11,7 @@ export type InboxItemKind =
   | 'contract_result_review'
   | 'lever_questions'
   | 'spec_fill_pending'
+  | 'project_action'
 
 export interface InboxItem {
   id?: string
@@ -42,6 +43,7 @@ export interface InboxItem {
   missingSteps?: string[]
   deliveryStepTitle?: string
   containingWorkTitle?: string
+  buttonLabel?: string
   blocking?: boolean
   dismissible?: boolean
   source?: { system?: string; id?: string }

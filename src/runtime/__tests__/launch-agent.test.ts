@@ -7,6 +7,7 @@ import {
   buildLaunchAgentSpec,
   buildMacosPackageManifest,
   renderLaunchAgentPlist,
+  resolveLaunchAgentLifecycleTarget,
   resolveMacosPackagePaths,
 } from '../launch-agent.js'
 
@@ -56,6 +57,26 @@ describe('buildLaunchAgentSpec', () => {
     expect(plist).toContain('<key>PATH</key>')
     expect(plist).toContain(`<string>${DEFAULT_LAUNCH_AGENT_PATH}</string>`)
     expect(plist).toContain('<key>KeepAlive</key>')
+  })
+})
+
+describe('resolveLaunchAgentLifecycleTarget', () => {
+  it('uses launchctl for the packaged macOS service on its owned port', () => {
+    expect(resolveLaunchAgentLifecycleTarget({
+      homeDir: '/Users/tester',
+      uid: 501,
+      platform: 'darwin',
+      port: 7777,
+    })).toEqual({
+      plistPath: '/Users/tester/Library/LaunchAgents/io.guildhall.agent.plist',
+      domainTarget: 'gui/501',
+      serviceTarget: 'gui/501/io.guildhall.agent',
+    })
+  })
+
+  it('leaves non-packaged ports and non-macOS hosts on the portable daemon path', () => {
+    expect(resolveLaunchAgentLifecycleTarget({ uid: 501, platform: 'darwin', port: 8888 })).toBeNull()
+    expect(resolveLaunchAgentLifecycleTarget({ uid: 501, platform: 'linux', port: 7777 })).toBeNull()
   })
 })
 

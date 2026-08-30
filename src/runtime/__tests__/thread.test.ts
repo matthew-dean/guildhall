@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import type { Task } from '@guildhall/core'
 import { projectStatePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
 
 import { buildThread as buildCurrentThread, type BuildThreadOptions, type Thread } from '../thread.js'
@@ -27,6 +28,31 @@ function buildThread(options: BuildThreadOptions): Thread {
     promoteProjectStateDatabaseAuthority(options.projectPath)
   }
   return buildCurrentThread(options)
+}
+
+function taskRecord(overrides: Partial<Task> & Pick<Task, 'id' | 'title' | 'status'>): Task {
+  const now = '2026-08-08T18:00:00.000Z'
+  return {
+    description: overrides.title,
+    domain: 'product',
+    projectPath: '/tmp/narrative-harness',
+    priority: 'normal',
+    dependsOn: [],
+    acceptanceCriteria: [],
+    notes: [],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    escalations: [],
+    agentIssues: [],
+    origination: 'human',
+    outOfScope: [],
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  }
 }
 
 describe('buildThread', () => {
@@ -1773,7 +1799,7 @@ describe('buildThread', () => {
     }
   })
 
-  it('summarizes normal spec_review component tasks as owner approval', async () => {
+  it('promotes a pending spec review over leftover setup chrome', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -1788,6 +1814,36 @@ describe('buildThread', () => {
               createdAt: '2026-06-04T00:00:00.000Z',
               updatedAt: '2026-06-04T00:01:00.000Z',
               spec: '## Summary\n\nBuild an accessible combobox.',
+              productBrief: {
+                userJob: 'Review the accessible combobox implementation plan.',
+                successMetric: 'The task has a complete owner-reviewable contract.',
+                nonGoals: ['Do not start implementation during review.'],
+                authoredBy: 'spec-agent',
+              },
+              structuredSpec: {
+                whatThisIs: 'An accessible combobox implementation plan.',
+                problemContext: 'The component needs keyboard-accessible behavior.',
+                goals: ['Provide an accessible combobox.'],
+                nonGoals: ['Do not start implementation during review.'],
+                proposedDesign: 'Use the existing component boundary.',
+                keyDecisions: ['Keep keyboard navigation in scope.'],
+                acceptanceCriteria: [{
+                  scenario: 'Given a keyboard user opens the combobox',
+                  expectation: 'They can navigate its options.',
+                  verificationMode: 'review',
+                }],
+                verification: ['Review the component contract before approval.'],
+                completionBoundary: {
+                  productOutcome: 'The owner can approve a complete combobox plan.',
+                  whatGuildhallCanCompleteInCode: 'Record the component contract.',
+                  externalDependencies: 'None.',
+                  ownerOnlySetup: 'None.',
+                  verificationEnvironment: 'The registered project.',
+                  whatCountsAsDone: 'The complete contract is available for review.',
+                  whatMustBeSplitOrBlocked: 'Split only independent work.',
+                  splitPolicy: 'conditional',
+                },
+              },
               acceptanceCriteria: [{ description: 'The combobox supports keyboard navigation.' }],
             },
           ],
@@ -1803,7 +1859,7 @@ describe('buildThread', () => {
         },
         bootstrapVerified: true,
         hasProvider: true,
-        hasDirection: true,
+        hasDirection: false,
         workspaceImportReviewed: true,
         taskCount: 1,
         wizardState: emptyWizardsState(),
@@ -1817,11 +1873,96 @@ describe('buildThread', () => {
 
       expect(thread.turns.find(turn => turn.id === 'spec:task-combobox')).toMatchObject({
         kind: 'spec_review',
+        status: 'active',
         phase: 'spec',
       })
+      expect(thread.turns.find(turn => turn.id === 'setup:direction')).toMatchObject({ status: 'pending' })
+      expect(thread.activeTurnId).toBe('spec:task-combobox')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
+  })
+
+  it('uses the supervisor task identity instead of setup while work is running', () => {
+    const projectPath = '/tmp/guildhall-thread-live-focus'
+    const thread = buildCurrentThread({
+      projectPath,
+      snapshot: {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: '2026-08-30T08:00:00.000Z' },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      },
+      tasks: [taskRecord({
+        id: 'task-live',
+        title: 'Run the focused work item',
+        status: 'ready',
+        productBrief: {
+          userJob: 'Run the focused work item.',
+          successMetric: 'The task is ready for its worker.',
+          approvedAt: '2026-08-30T08:00:00.000Z',
+        },
+        spec: '## What this is\nA focused work item.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'The work item runs.', verifiedBy: 'automated', met: false }],
+      })],
+      runStatus: 'running',
+      activeTaskId: 'task-live',
+      recentEvents: [],
+    })
+
+    expect(thread.activeTurnId).toBe('inflight:task-live')
+    expect(thread.turns.find(turn => turn.id === 'inflight:task-live')).toMatchObject({
+      status: 'active',
+      phase: 'inflight',
+    })
+    expect(thread.turns.find(turn => turn.id === 'setup:direction')).toMatchObject({ status: 'pending' })
+  })
+
+  it('keeps paused work focused after the live supervisor has stopped', () => {
+    const projectPath = '/tmp/guildhall-thread-paused-focus'
+    const thread = buildCurrentThread({
+      projectPath,
+      snapshot: {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: '2026-08-30T08:00:00.000Z' },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      },
+      tasks: [taskRecord({
+        id: 'task-paused',
+        title: 'Resume the focused work item',
+        status: 'in_progress',
+      })],
+      runStatus: 'stopped',
+      pausedTaskId: 'task-paused',
+      recentEvents: [],
+    })
+
+    expect(thread.activeTurnId).toBe('inflight:task-paused')
+    expect(thread.turns.find(turn => turn.id === 'inflight:task-paused')).toMatchObject({
+      status: 'active',
+      phase: 'ready',
+      summary: 'Work is paused. Resume work when you are ready.',
+    })
+    expect(thread.turns.find(turn => turn.id === 'setup:direction')).toMatchObject({ status: 'pending' })
   })
 
   it('keeps source-recovery tasks in shaping even when a draft spec exists', async () => {
@@ -2733,6 +2874,78 @@ describe('buildThread', () => {
     }
   })
 
+  it('keeps dependency-blocked briefs and specs waiting behind the one current review', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const completeBrief = {
+        userJob: 'Prove the packaged sidecar before desktop work begins.',
+        whyItMattersNow: 'The desktop release depends on this architecture gate.',
+        successMetric: 'The packaged app completes one offline fixture run.',
+        nonGoals: ['Do not build the full interface yet.'],
+      }
+      const tasks = [
+        taskRecord({
+          id: 'task-086',
+          title: 'Prove packaged Tauri sidecar',
+          status: 'exploring',
+          productBrief: completeBrief,
+        }),
+        taskRecord({
+          id: 'task-087',
+          title: 'Define typed desktop harness adapter',
+          status: 'spec_review',
+          dependsOn: ['task-086'],
+          productBrief: { ...completeBrief, approvedAt: '2026-08-08T18:10:00.000Z' },
+          spec: '## Summary\nDefine the adapter.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Typed adapter exists.', verifiedBy: 'review', met: false }],
+        }),
+        taskRecord({
+          id: 'task-088',
+          title: 'Build quiet desktop shell',
+          status: 'exploring',
+          dependsOn: ['task-086'],
+          productBrief: completeBrief,
+        }),
+      ].reverse()
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: '2026-08-08T18:00:00.000Z' },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: tasks.length,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildCurrentThread({ projectPath, snapshot, tasks, recentEvents: [] })
+
+      expect(thread.activeTurnId).toBe('brief:task-086')
+      expect(thread.turns.find(turn => turn.id === 'brief:task-086')).toMatchObject({ status: 'active' })
+      expect(thread.turns.find(turn => turn.id === 'brief:task-088')).toBeUndefined()
+      expect(thread.turns.find(turn => turn.id === 'spec:task-087')).toBeUndefined()
+      expect(thread.turns.find(turn => turn.id === 'inflight:task-087')).toMatchObject({
+        status: 'pending',
+        dependencyState: 'waiting',
+        canStart: false,
+        dependencyBlockers: [{ taskId: 'task-086', title: 'Prove packaged Tauri sidecar' }],
+      })
+      expect(thread.turns.find(turn => turn.id === 'inflight:task-088')).toMatchObject({
+        status: 'pending',
+        dependencyState: 'waiting',
+        canStart: false,
+        dependencyBlockers: [{ taskId: 'task-086', title: 'Prove packaged Tauri sidecar' }],
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('does not ask for recovery brief approval when a concrete spec is already saved', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -2761,6 +2974,30 @@ describe('buildThread', () => {
                 authoredAt: now,
               },
               spec: '## Summary\nBuild the block menu from recorded owner decisions.\n\n## Acceptance Criteria\n1. The block menu appears in the editor.\n2. Drag-and-drop remains out of scope.',
+              structuredSpec: {
+                whatThisIs: 'A block-menu implementation plan.',
+                problemContext: 'The editor needs an explicit block-menu boundary.',
+                goals: ['Build the block menu.'],
+                nonGoals: ['Keep drag-and-drop out of scope.'],
+                proposedDesign: 'Use the existing editor menu boundary.',
+                keyDecisions: ['Keep drag-and-drop out of scope.'],
+                acceptanceCriteria: [{
+                  scenario: 'Given the editor opens its menu',
+                  expectation: 'The block menu is available.',
+                  verificationMode: 'review',
+                }],
+                verification: ['Review the block-menu contract before approval.'],
+                completionBoundary: {
+                  productOutcome: 'The owner can approve a complete block-menu plan.',
+                  whatGuildhallCanCompleteInCode: 'Record the editor menu contract.',
+                  externalDependencies: 'None.',
+                  ownerOnlySetup: 'None.',
+                  verificationEnvironment: 'The registered project.',
+                  whatCountsAsDone: 'The complete contract is available for review.',
+                  whatMustBeSplitOrBlocked: 'Split only independent work.',
+                  splitPolicy: 'conditional',
+                },
+              },
               acceptanceCriteria: [
                 { id: 'ac-1', description: 'The block menu appears in the editor.', verifiedBy: 'review', met: false },
                 { id: 'ac-2', description: 'Drag-and-drop remains out of scope.', verifiedBy: 'review', met: false },
@@ -3085,6 +3322,53 @@ describe('buildThread', () => {
       expect(inflight.taskTitle).toMatch(/^Starter task spec: Wire up the existing auth page scaffolding/)
       expect(inflight.summary).toMatch(/answers and a spec draft/i)
       expect(inflight.summary).toMatch(/coordinator review/i)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects an approved brief without a spec as spec drafting instead of incomplete brief work', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const now = new Date().toISOString()
+      const tasks = [taskRecord({
+        id: 'task-086',
+        title: 'Prove packaged Tauri sidecar',
+        status: 'exploring',
+        productBrief: {
+          userJob: 'Prove the packaged sidecar.',
+          whyItMattersNow: 'The desktop release depends on the architecture gate.',
+          successMetric: 'The packaged app completes one offline fixture run.',
+          nonGoals: ['Do not build the full interface.'],
+          approvedAt: now,
+        },
+      })]
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          bootstrap: { verifiedAt: now },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildCurrentThread({ projectPath, snapshot, tasks, recentEvents: [] })
+      expect(thread.turns.find(turn => turn.id === 'inflight:task-086')).toMatchObject({
+        phase: 'spec',
+        briefApproved: true,
+        specDraftPresent: false,
+        dependencyState: 'clear',
+        canStart: true,
+        summary: 'The brief is approved. Guildhall is shaping the spec now.',
+        checklist: undefined,
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -4746,6 +5030,55 @@ coordinators:
 
       expect(thread.turns.find(t => t.kind === 'escalation' && t.taskId === 'task-resolved')).toBeUndefined()
       expect(JSON.stringify(thread.turns)).not.toContain('Spec agent kept researching')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('labels downstream shaping as waiting on its dependency', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      const now = new Date().toISOString()
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 2,
+        wizardState: emptyWizardsState(),
+      }
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+        tasks: [
+          {
+            id: 'task-gate', title: 'Prove architecture', description: 'Prove it.', domain: 'core', projectPath,
+            status: 'ready', priority: 'normal', dependsOn: [], acceptanceCriteria: [], notes: [], gateResults: [],
+            reviewVerdicts: [], adjudications: [], escalations: [], agentIssues: [], outOfScope: [], revisionCount: 0,
+            remediationAttempts: 0, origination: 'human', createdAt: now, updatedAt: now,
+          },
+          {
+            id: 'task-ui', title: 'Build desktop UI', description: 'Build it.', domain: 'core', projectPath,
+            status: 'exploring', priority: 'normal', dependsOn: ['task-gate'], acceptanceCriteria: [], notes: [], gateResults: [],
+            reviewVerdicts: [], adjudications: [], escalations: [], agentIssues: [], outOfScope: [], revisionCount: 0,
+            remediationAttempts: 0, origination: 'human', createdAt: now, updatedAt: now,
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(candidate => candidate.kind === 'inflight' && candidate.taskId === 'task-ui')
+      expect(turn).toMatchObject({
+        summary: 'Waiting for Prove architecture.',
+        dependencyBlockers: [{ taskId: 'task-gate', title: 'Prove architecture' }],
+      })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

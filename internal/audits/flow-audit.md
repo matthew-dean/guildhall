@@ -7,6 +7,480 @@ help_summary: |
 
 <!-- markdownlint-disable MD003 -->
 
+## 2026-08-30 LFS-safe repository freshness polling
+
+- Work id: `lfs-safe-repository-polling`.
+- User job: from service start, Guildhall establishes a repository baseline;
+  while working it notices changed repository metadata without invoking
+  content filters; a timed-out or unreadable observation keeps the last known
+  state and retries on the next poll instead of scheduling false work; after a
+  real change, the repository projection refreshes and the service remains
+  visibly healthy at `/api/stale-server`.
+- Observed failure: the five-second repository watcher ran a bounded
+  `git status` across every registered workspace. In an LFS-heavy repository,
+  Git invoked the LFS clean filter and the 750 ms timeout killed it mid-object,
+  leaving partial files in `.git/lfs/tmp` on every poll.
+- [x] Replace filter-capable status polling with a branch/index/filesystem
+  metadata fingerprint that still detects pushes, staged changes, unstaged
+  changes, additions, and removals.
+- [x] Add a regression whose configured content filter records any invocation;
+  repository freshness reads detect an asset change without invoking it.
+- [x] Install and restart Guildhall, confirm `/api/stale-server` reports
+  `stale:false`, and observe the LFS temp directory remain at `0B` from second
+  20 through second 55 after bounded startup projection work completed.
+- Contract/schema decision: no persisted contract or schema changed; this is a
+  side-effect and implementation correction at an existing observation seam.
+
+## 2026-08-09 Project config round-trip integrity
+
+- [x] Preserve explicitly configured per-role model overrides when Guildhall rewrites `guildhall.yaml`.
+  Evidence: Narrative Harness's committed `models.openai-api.spec` override was silently removed from the local file
+  without a corresponding user-directed configuration change. The invalid drift was restored before landing release work;
+  the shared provider inference now survives a write/read round trip, and
+  `workspace-config.test.ts` passes 16/16 tests.
+
+## 2026-08-09 Narrative Harness Gate Authority Repair
+
+- Work id: `narrative-harness-gate-authority`.
+- User job: after Guildhall runs a task's stored acceptance commands, the same
+  authoritative proof makes the task completable and every task surface can
+  find its worktree and evidence without a caller copying results between
+  stores.
+- Observed failure: NAR-091's five commands passed and each normalized command
+  proof path became `verified`, but the `gate_check -> done` transition still
+  rejected the task with `required_evidence_missing` because completion used a
+  separate legacy `gateResults`/checkbox predicate. The diagnostic runner also
+  demonstrated that a concrete `tasksPath` write and a project-root evidence
+  write can diverge when ambient data-directory resolution changes.
+- Escaped completion failure: the coordinator's recorded-hard-gates shortcut
+  then marked NAR-091's separate packaged visual-review criterion complete even
+  though no approving verdict named that criterion. This bypassed the same
+  evidence guard that correctly rejected the browser's manual completion.
+- Reopen supersession failure: after the task definition was repaired back to
+  `gate_check`, the older false `completion_summary` still made landing
+  reconciliation and task picking call it done. Reopening now writes a typed
+  `reopened` completion summary whenever current proof no longer satisfies the
+  contract, leaving the old completion in history without operational force.
+- [x] Make current proof satisfaction the single completion authority.
+- [x] Keep task evidence attached to the database selected by `tasksPath`.
+- [x] Persist dispatch workspace metadata through the same normalized project
+  authority and prove it survives an effective-task read.
+- [x] Require exact approving review criterion IDs; a passing command gate may
+  settle only its structurally linked criterion, and mixed work returns to the
+  reviewer instead of sending already-passing implementation back to a worker.
+- [x] Move historical proof-path verification records into typed evidence and
+  reset proof paths to expectation-only state through required migration
+  `0.13.77/proof-verification-evidence-authority`.
+  Evidence: the promoted compressed-authority regression covers command
+  pass/fail, review approve/revise, atomic cleanup, outbox drain, and a
+  ledger-independent second application; focused test, typecheck, and contract
+  detector pass.
+- [ ] Complete NAR-091 through the repaired path without supplying duplicate
+  gate results in the completion mutation.
+
+### Contract Touch Decision: Derived Escalation Authority
+
+- Work id: `narrative-harness-gate-authority`.
+- Touched contracts: the persisted task-definition boundary now excludes
+  `openEscalations`. Open escalation state remains available on effective task
+  reads, but is derived from typed escalation evidence and runtime state rather
+  than copied into the task definition.
+- Contracts considered but not touched: escalation payload shape, escalation
+  lifecycle, task status enums, task-evidence schema, queue revision schema,
+  provider prose, and owner-input routing.
+- Required follow-up: none beyond completing the Narrative Harness task run
+  through the repaired authority.
+- Proof required: blueprint recovery must atomically update the intended task
+  and its evidence without treating untouched tasks as definition changes;
+  project-state sanitization must remove `openEscalations`; existing projects
+  must continue to expose the same effective open-escalation state.
+- Proof provided: focused blueprint-recovery and project-state-boundary
+  regressions pass, and the complete orchestrator suite passes 423/423 tests.
+- Waivers: none.
+- Owner-review items: none. This removes duplicated authority rather than
+  changing the user-visible escalation lifecycle.
+- Apply/revert behavior: applying cleans `openEscalations` on the next task
+  definition write while preserving its typed evidence. Reverting would allow
+  the derived field back into task definitions and restore false multi-task
+  deltas during otherwise single-task mutations.
+
+### Schema Migration Decision: Derived Escalation Authority
+
+- Persisted schema touched: no table, column, enum, or evidence payload changes.
+  Existing task-definition JSON may contain the now-forbidden derived field.
+- Scope and change class: compatible write-boundary cleanup.
+- Existing data impact: readers continue to hydrate open escalations from typed
+  evidence. A later definition write drops only the redundant projected field.
+- Migration id and required-before-run behavior: none; cleanup is lazy and safe
+  on the next authoritative write.
+- Compatibility reader: effective-task hydration already supports definitions
+  with or without the redundant field.
+- Fixtures and tests: project-state-boundary sanitization and orchestrator
+  blueprint-recovery fixtures cover old rows and the cleaned representation.
+- Owner-facing plan and rollback: no owner action is required. A code revert
+  needs no stored-data rollback because the typed evidence remains intact.
+
+### Gate Authority Contract Touch Decision
+
+- Work id: `narrative-harness-gate-authority`.
+- Touched contracts: task completion evidence eligibility, command-proof path
+  persistence, current task evidence routing, exact review-criterion approval,
+  and normalized task workspace
+  projection. `GateResult` now carries an optional typed `executionRoot` so
+  landed-checkout requirements use observed workspace identity instead of a
+  proof-path verification record. Point and batch task writes also preserve the
+  normalized included/deferred release disposition because compatibility
+  `releaseIds` identify a release but cannot encode that disposition.
+- Considered but not touched: command execution, command identity, provider
+  prose, task lifecycle states and transition enum, acceptance criterion schema, release
+  membership, and Narrative Harness product contracts.
+- Required follow-up: rerun NAR-091 gates and completion against its registered
+  global project state, then use the same path for NAR-092 through NAR-094.
+- Proof required: promoted-database integration tests that run gates and then
+  complete from the resulting verified proof; a storage-routing regression;
+  workspace dispatch/effective-task regression; focused suites, typecheck,
+  contract lint, installed build/restart, and real Narrative task-state proof.
+- Proof provided: the complete orchestrator suite passes 423/423; the release
+  gate passes 301/301, including promoted proof authority, selected-release
+  scope, publish login/resume, and artifact tests; model independence passes
+  125/125; `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm lint:deps` pass.
+  The focused normalized-membership regression proves an ordinary task update
+  cannot promote deferred work into the selected release. Installed restart
+  and real NAR-091 completion remain open.
+- Owner-review items: none. The owner explicitly requires Narrative Harness to
+  improve Guildhall at the source model rather than accumulate caller patches.
+- Waivers: none.
+- Apply/revert: applying removes duplicated completion interpretation and binds
+  mutable task writes to one authority; reverting restores contradictory
+  verified-proof and completion state. The optional `executionRoot` field is
+  backward compatible and absent on historical gate results.
+
+### Gate Authority Schema Migration Decision
+
+- Persisted schema touched: proof-path verification records move into the
+  existing typed task-evidence ledger; proof paths retain only expected
+  evidence and reset their display status to `planned`. The compact task
+  summary now retains typed `proofForReleaseId` so indexed release projections
+  select the same release-local proof child as rich task projections.
+- Scope and class: required, data-moving authority correction for promoted
+  SQLite projects. No table or enum addition is required; the existing compact
+  `summary_json` gains one optional typed field. The existing
+  `gate_result` payload gains optional `executionRoot`; compatibility readers
+  already accept its absence.
+- Existing data impact: structured command pass/fail records become
+  `gate_result` evidence with command and execution root; structured review
+  pass/fail records become `review_verdict` approve/revise evidence. No result
+  is inferred from title, summary, or other model prose.
+- Migration id and pre-run requirement:
+  `0.13.77/proof-verification-evidence-authority`, required before runtime use.
+- Safety and compatibility reader: each task definition cleanup and its typed
+  evidence commit through the promoted-task CAS boundary. Compressed-history
+  projects use the transactional SQLite outbox and idempotent mirror flush;
+  legacy task queues remain readable but are not rewritten by this migration.
+- Fixtures and tests: a promoted compressed-authority regression covers
+  command pass/fail, review approve/revise, path cleanup, outbox drain, and a
+  ledger-independent second application.
+- Owner-facing plan and rollback: the migration is automatic because it moves
+  existing structured facts without judgment. Revert restores the old runtime
+  reader only; migrated evidence remains valid audit history and must not be
+  deleted.
+
+## 2026-08-08 Completed Release Intake Handoff
+
+- Work id: `completed-release-intake-handoff`.
+- User job: after a shipped release, the owner can describe the next release,
+  answer the intake questions, and immediately see the resulting work being
+  shaped without guessing whether the request was saved, queued, or lost.
+- Cross-surface failure: Narrative Harness Overview correctly said Stage 1 was
+  shipped, but offered no next-release action. New Thread accepted a supplied
+  `Stage 2: Local Desktop Harness MVP` title, replaced it with a sentence
+  fragment, asked sixteen pressure-test questions, marked the intake complete,
+  created no task or release, and selected an unrelated stale Stage 1 spec.
+  The API confirmed `status:complete`, no task split, no task id, and no
+  completion handoff while delivery state still exposed the stale tasks.
+- User-visible correction: the final pressure-test answer materializes one
+  exploring task, returns its id, merges the intake request into that task's
+  Thread chain, and focuses it. The owner-supplied title remains authoritative.
+- Recovery correction: materialization uses a stable request id and reuses an
+  existing linked task, so a retry after a partial server failure cannot create
+  duplicate work.
+- [x] Shelve the two orphaned Stage 1 tasks before starting Stage 2 work.
+- [x] Preserve an explicit release-intake title.
+- [x] Add a typed completed-intake-to-task handoff and retry recovery.
+- [x] Keep the intake history attached to the materialized task in Thread.
+- [x] Add an idempotent owner-approved release-creation boundary with explicit
+  task membership, then select the created release.
+- [x] Make shipped Overview offer a calm `Start next release` action.
+- [ ] Make project summary state distinguish a shipped historical release from
+  newly active unscoped shaping work.
+- [ ] Replace the repetitive two-question-per-domain closeout with progressive
+  review of already supplied constraints.
+- [ ] Keep a failed spec-approval mutation visible in the approval modal. The
+  installed Narrative Harness flow dismissed the modal while the API rejected
+  approval for required migration
+  `0.13.27/acceptance-command-proof-path-reconciliation`; Thread continued to
+  say the spec needed review without explaining the failed action.
+- [ ] Make the active-release projection use canonical dependency and runtime
+  state. Installed Stage 2 showed dependency-blocked future work as `Paused`,
+  ordered the likely run list from the last documentation task backward, called
+  four tasks `Queued` while only `task-086` was active, and claimed there were
+  no blocked tasks while the API reported eight dependency blockers.
+- [x] Make the activity count describe actual active agents or tasks, not every
+  nonterminal historical in-flight record; the installed ticker reported
+  `Working on 19 tasks` for a release with one active architecture gate.
+- [x] Do not count acceptance criteria as independent contract surfaces when
+  estimating worker context. Seven checks for one packaged sidecar had produced
+  a contradictory `tiny/proceed` size plan and `requires_child_work` readiness
+  block, leaving the approved task impossible to dispatch.
+- [x] Persist dependency blockers in the shared scope projection, focus the
+  runnable prerequisite before downstream shaping, and render only that shared
+  focus in Overview's Next run card.
+- [x] Suppress empty Blocked work chrome when the current API provides shared
+  readiness, and show downstream Thread work as `Waiting` with its named
+  prerequisite instead of inventing `Paused` or `Queued` state.
+- [x] **Release blocker:** retrying approved task `task-086` before any worker
+  pass routed it directly to generic command gates, skipped implementation,
+  and marked it done from unchanged Stage 1 code. Proof recovery must require
+  authoritative prior completion, and this false completion must be cleared
+  before Narrative Harness execution resumes.
+
+### Installed Stage 2 Proof
+
+- Built and installed the current branch, restarted the local service, and
+  confirmed `/api/stale-server` reported `stale:false` at runtime `0.13.2`.
+- Completed intake produced one stable task id and the explicit nine-task Stage
+  2 release was created and selected through the installed API without changing
+  the shipped Stage 1 release.
+- Canonical release state agreed on nine included tasks, zero complete, and
+  `task-086` as the only dependency-runnable architecture gate before shaping.
+- The first approval attempt exposed a required migration. Applying that named
+  automatic migration and retrying the same delegated approval succeeded;
+  execution resumed with the approval note preserved in task evidence.
+- A later retry incorrectly treated the approved, unimplemented architecture
+  task as proof recovery and marked it done from generic repository checks.
+  The run was stopped, the false lifecycle was superseded through the audited
+  spec-rerun action, and the retry discriminator now requires prior completion
+  for ordinary work. A production-miss calibration case protects the boundary.
+- [ ] Make a timed-out spec retry terminal and legible when the replacement
+  provider call aborts. Installed task `task-086` remained `running` and
+  `exploring` after the second call emitted `Stop requested; canceling the
+  active model call`; the owner had to pause it manually to recover.
+- [ ] Prove installed service lifecycle ownership. The packaged LaunchAgent
+  and `guildhall start` both attempted to own port 7777: the CLI forked a
+  detached process while KeepAlive repeatedly respawned and logged port-in-use
+  failures. Start and stop must control the LaunchAgent when it is installed,
+  with exactly one supervised listener.
+- [x] Enforce owner-required acceptance commands across spec revision. After
+  three explicit corrections, installed task `task-086` reached review with
+  `pnpm test:desktop-sidecar` and `pnpm package:desktop-spike` silently changed
+  into review-only criteria; only generic typecheck/build commands remained.
+  Owner correction commands need typed persistence and save-time enforcement.
+- [x] Keep owner-revision evidence rooted at the registered workspace when a
+  task targets a subdirectory. The first typed-command enforcement build still
+  accepted task `task-086` without either required command because validation
+  read evidence below its `docs/harness/` target while the revision evidence
+  was correctly stored at the Narrative Harness project root.
+- [x] Ignore a stale `rerun_spec` lifecycle marker after its task advances out
+  of `exploring`. Installed task `task-086` was simultaneously projected as
+  `paused_live_work` and as actively running because the durable recovery
+  marker outlived the ready-to-worker transition.
+- [x] Persist typed worker command results into recovery checkpoints and count
+  checkpoint-scoped progress only when a structured passing verification is
+  present. Installed task `task-086` repeatedly failed
+  `pnpm package:desktop-spike`, but the failed result was dropped while display
+  prose called the turn "verified work"; that reset no-progress recovery and
+  produced twelve worker ticks without a handoff or terminal recovery state.
+- [ ] Keep isolated worktree bootstrap from checkpointing unrelated dirty
+  shared-checkout files into a task branch. Task `task-086` inherited the
+  owner's package-lock deletion and an untracked fixture in its bootstrap
+  commit even though neither belongs to the Tauri architecture gate.
+- The first two fresh shaping attempts returned no change because the task
+  transcript still presented the superseded approval as if it were current.
+  Spec rerun now explicitly marks earlier approval history as non-authoritative
+  and requires a newly submitted current contract.
+- The live ticker now consumes the shared execution focus/count. The same
+  installed state that contains 19 nonterminal historical rows and one live
+  architecture gate therefore names that gate instead of claiming 19 tasks are
+  actively moving.
+- Indexed summary refresh now rebuilds dependency rows from current task
+  points, and owner-review projection excludes dependency-blocked specs. The
+  live Stage 2 summary can no longer name the adapter review as next while its
+  Tauri architecture prerequisite is still being shaped. Indexed orientation
+  copy is synchronized from the same refreshed start decision.
+
+### Active Release Projection Contract Touch Decision
+
+- Work id: `active-release-dependency-projection`.
+- Touched contracts: structured context-budget estimation, project scope row
+  dependency metadata, shared start focus, Thread in-flight dependency metadata,
+  and Overview's presentation of canonical start readiness.
+- Considered but not touched: task dependency authority, orchestrator task
+  status ordering, release membership, task identifiers, and provider prose.
+- Required follow-up: the project ticker still needs to count actual live work
+  instead of retained nonterminal Thread records.
+- Proof required and provided: focused readiness and dependency projection
+  regressions, full Thread runtime/component suites, full Overview suite,
+  typecheck, installed build/restart, stale-server check, and real-project
+  browser/API agreement.
+- Apply/revert: applying adds optional dependency fields to regenerated read
+  rows and Thread turns; reverting leaves authoritative task dependencies and
+  release state unchanged.
+
+### Approval-To-Worker Liveness Contract Touch Decision
+
+- Work id: `approval-to-worker-liveness`.
+- Touched contracts: current lifecycle projection after spec rerun, shared
+  owner-input review routing, worker checkpoint verification, worker
+  no-progress recovery, and command-proof freshness without a materialized
+  proof path.
+- Considered but not touched: task status transition graph, provider prose,
+  acceptance command identity, release membership, retry thresholds, and
+  owner escalation policy.
+- Required follow-up: rebuild/install the packaged app, restart the supervised
+  service, and rerun Narrative Harness task `task-086` through a visible failed
+  package command and recovery handoff.
+- Proof required: focused action/decision, current-lifecycle, proof-health,
+  checkpoint recovery, and intake route regressions; typecheck; contract lint;
+  installed API/browser agreement.
+- Proof provided: focused runtime suites, 126 cross-boundary regressions,
+  `pnpm typecheck`, `git diff --check`, and `pnpm lint:contracts`; installed
+  proof remains open until the new build is running.
+- Owner-review items: the owner explicitly requires the task flow to remain
+  understandable and self-recovering while this release is driven; no owner
+  choice is needed to retry a failed typed package command.
+- Waivers: none.
+- Apply/revert: applying ignores a stale exploring-only lifecycle marker once
+  work advances and requires typed passing verification for checkpoint-only
+  progress; automatic review promotion requires the same typed pass. Reverting
+  restores the contradictory paused/running projection and failed-command retry
+  loop.
+
+### Approval-To-Worker Liveness Schema Migration Decision
+
+- Persisted schema touched: none. Existing checkpoint `resumeContext.verification`
+  records are now populated from existing typed command-result metadata.
+- Scope and class: behavior correction within the current checkpoint schema;
+  no new field, enum value, or reader version.
+- Existing data impact: old checkpoints with an empty verification array remain
+  readable and are no longer treated as verified progress merely because
+  display metadata names touched files.
+- Migration id and pre-run requirement: none.
+- Compatibility, fixtures, and tests: existing optional checkpoint arrays stay
+  valid; focused clean-worktree, failed-verification, lifecycle, and
+  no-progress tests cover both old and corrected records.
+- Owner-facing plan and rollback: no migration prompt; rollback changes only
+  runtime interpretation and leaves checkpoint history intact.
+
+### Approval And Proof Recovery Calibration Contract Touch Decision
+
+- Work id: `approval-and-proof-recovery-calibration`.
+- Touched contracts:
+  `internal/calibration/cases/ux/unimplemented-task-proof-recovery.yaml`,
+  `internal/calibration/cases/ux/vague-approval-state.yaml`,
+  `internal/calibration/cases/ux/completed-intake-dead-end.yaml`, and
+  `internal/calibration/cases/ux/collapsed-rail-moving-target.yaml`.
+- Considered but not touched: calibration evaluator schemas, severity enums,
+  public documentation, provider prompts, and runtime task lifecycle enums.
+- Required follow-up: keep each production miss paired with a deterministic
+  runtime or rendered regression and complete the installed task 086 proof.
+- Proof required and provided: the matching intake, proof-health, shared-action,
+  current-lifecycle, Thread, and rendered-surface regressions pass; `pnpm
+  lint:contracts` reports `all touched contract paths have decision evidence`.
+- Waivers: none.
+- Owner-review items: these cases preserve the owner's reported failure modes;
+  they do not introduce new product policy or require a separate owner choice.
+- Apply/revert: applying updates internal calibration expectations only;
+  reverting does not mutate project state or user data.
+
+### Installed Service Lifecycle Contract Touch Decision
+
+- Work id: `installed-service-lifecycle-ownership`.
+- Touched contracts: packaged macOS `guildhall start`, `guildhall open`, and
+  `guildhall stop` process ownership for the default port.
+- Considered but not touched: foreground `serve`, custom ports, Linux/Windows
+  daemon behavior, LaunchAgent plist shape, and project run pause/resume.
+- Required follow-up: installed proof must show one port listener whose PID is
+  owned by the loaded LaunchAgent, plus clean stop and restart behavior.
+- Proof required: lifecycle target unit tests, CLI/runtime suites, packaged
+  build and install, stale-server check, launchctl/PID inspection, and startup
+  log inspection.
+- Apply/revert: applying routes the packaged default service through launchctl;
+  reverting returns CLI lifecycle commands to detached-process ownership.
+
+### Active Release Projection Schema Migration Decision
+
+- Persisted schema touched: project-state database schema version `37` adds
+  `work_scope.dependency_blocked` and
+  `work_scope.dependency_task_ids_json`; compact scope rows expose optional
+  `dependencyBlocked` and `dependencyTaskIds`; Thread payloads may gain optional
+  `dependencyBlockers`, `dependencyState`, and `canStart`.
+- Scope and class: additive read-model metadata derived from authoritative task
+  dependencies; no task-definition or release schema changes.
+- Existing data impact: opening an older database adds both columns with safe
+  defaults (`0` and `[]`). Ordinary projection refresh then derives them from
+  authoritative task dependencies. Old Thread payloads retain the view's
+  compatibility fallback. No task definition or historical evidence is
+  rewritten.
+- Migration id: project-state database schema version `37`; it applies during
+  normal database open before a run can consume the new projection.
+- Fixtures and tests: database snapshot and point-read round-trip, old-database
+  additive-column compatibility, project-scope dependency field round-trip and
+  focus, dependent-first Thread ordering and startability, Overview compact
+  point-read preservation, canonical next-run rendering, and full surface
+  suites.
+- Owner-facing plan and rollback: no prompt is needed because both columns are
+  derived read-model cache fields. Rollback may stop emitting the optional
+  fields; the added columns remain inert and task dependency authority remains
+  intact.
+
+### Contract Touch Decision
+
+- Work id: `completed-release-intake-handoff`.
+- Touched contracts: pressure-test intake completion metadata,
+  `/api/project/pressure-test/:id/answer` success payload, routed-request title
+  precedence, Thread request-to-task grouping, and
+  `POST /api/project/release/create` owner-approved release membership.
+- Considered but not touched: task-level legacy `releaseIds`, shipped release
+  membership, release closure lifecycle,
+  project decision schema, task status transitions, and provider prose.
+- Required follow-up: a separate shared-summary repair must make newly active
+  work visible beside a shipped historical release; this handoff does not
+  manufacture a new release envelope before its task plan is reviewed.
+- Proof required: route regression from release request through all intake
+  domains, duplicate-retry regression, Thread focus regression, typecheck,
+  model-independence, contract lint, build/install/restart, and installed
+  browser proof.
+- Proof provided: collision-safe and concurrent materialization regressions,
+  completed-intake route and Thread focus regressions, `pnpm typecheck`, and
+  `pnpm lint:contracts` (`all touched contract paths have decision evidence`).
+  Full model-independence, build/install/restart, and final browser proof remain
+  part of the pre-merge release gate.
+- Owner-review items: the owner explicitly chose and approved the Stage 2
+  release direction, Tauri architecture gate, and installed approval-to-worker
+  flow; final PR review remains open until the complete task run and browser
+  proof are attached.
+- Waivers: none.
+- Apply/revert: applying creates one linked exploring task after completion;
+  reverting leaves already-created tasks intact and only removes automatic
+  handoff for future intakes.
+
+### Schema Migration Decision
+
+- Persisted schema touched: pressure-test intake JSON written by
+  `savePressureTestIntake` and read by `loadPressureTestIntake` gains optional
+  `handoff` metadata with materialized task id and timestamp.
+- Scope and class: additive, backward-compatible project-local state change.
+- Existing data impact: none; legacy and completed intakes without `handoff`
+  continue to parse, and retry reconciliation can link an already-created task
+  by stable request id.
+- Migration id: none required for an optional JSON field.
+- Safety and compatibility reader: Zod accepts missing metadata; project
+  check-in intakes never materialize tasks through this path.
+- Fixtures and tests: serve-intake completion/retry regression and Thread
+  materialized-task focus regression.
+- Owner-facing plan and rollback: no pre-run migration or owner action; rollback
+  preserves task state and ignores the additive intake field.
+
 ## 2026-08-07 Cross-View Density Audit
 
 - Work id: `0.13.1-cross-view-density-audit`.
@@ -38,6 +512,44 @@ help_summary: |
 - [ ] Add global density assertions: at most one primary CTA and one alert band
   per viewport, no duplicate actions, narrative text capped at two lines outside
   disclosures, and no empty informational cards.
+
+### Repair: Thread does not render a stopped work queue as a conversation
+
+#### Thread user job before implementation
+
+When the owner opens Thread and Guildhall has no question or approval for
+them, they should learn that immediately and get one route to the selected
+work. Queued tasks and review notes are activity, not a conversation the owner
+must read before deciding what to do.
+
+- [x] Default a stopped shared `ready_work` state to `No response needed` and
+  one `Open work` route rather than the Thread list, selected detail, active
+  dock, and queued/history stack.
+- [x] Replay the installed Narrative Harness stopped-ready route at desktop and
+  mobile; confirm owner-input and live-run states retain their dedicated
+  response and progress surfaces.
+- Contract Touch Decision: Thread consumes the existing shared
+  `actionModel.primaryAction.code`, task ID, label, detail, and href without
+  changing their authority or ranking. It suppresses only the local thread
+  presentation when that model says `ready_work`, the referenced task is
+  already represented in Thread, and no run is active. Considered but
+  unchanged: thread event persistence, task status, run protocol, owner-input
+  routing, live-agent activity, and task-detail APIs. Proof required/provided:
+  a Thread component regression checks that a stopped ready-work state exposes
+  neither list, detail, nor dock and that its one button retains the scoped
+  Work href. Installed route proof remains open. Apply/revert affects default
+  presentation only; detailed Thread behavior remains for owner input and live
+  activity.
+- Schema Migration Decision: none; no persisted schema, event envelope, or
+  compatibility reader changes.
+- Evidence, 2026-08-12: `ThreadTab.svelte.test.ts` covers the stopped
+  `ready_work` presentation and retained scoped Work route. In the installed
+  `stale:false` runtime `0.13.2-1786568575-20640`, Narrative Harness Thread
+  rendered only `No response needed`, the selected task, its one-sentence
+  status, and `Open Work`; it contained no Thread list, selected-detail pane,
+  active dock, queued task rows, or reviewer history. `Open Work` routed to
+  `task-091`. The same compact Thread had no horizontal overflow at `1280x720`
+  or `390x844`.
 
 ### Installed Flow Proof
 
@@ -54802,3 +55314,8767 @@ Repair:
       narrow desktop, and mobile; no dead/self actions, contradictory shared
       status, clipped chrome, blank-screen recovery, or raw long task IDs in
       ordinary owner-facing flow; focused and release-relevant gates pass.
+
+## 2026-08-08 - Narrative Harness Stage 2 Decision Agreement
+
+- Work id: `narrative-harness-stage-2-decision-agreement`.
+- User job: after reopening the first task in the desktop release, the owner can
+      tell that Guildhall is shaping that task, which task is next, why later
+      tasks are waiting, and whether pressing Start will perform the action the
+      Overview describes.
+- Failing finding: the authoritative `startReadiness` decision correctly made
+      the reopened Stage 2 sidecar spike runnable and said Guildhall would shape
+      it, while `orientationSpine.summary.nextAction` independently interpreted
+      the same exploring row as a deficient brief. Overview could therefore
+      tell the owner to repair a brief while Start was about to run shaping.
+- [x] Code repair: the Overview orientation preview now consumes the shared
+      start-readiness message whenever one exists. Its scope projection remains
+      a fallback for older or unavailable decision state, not a second decision
+      engine.
+- [x] Deterministic proof: the selected-release exploring-task regression now
+      requires a runnable Overview decision and visible next action to match
+      exactly. The focused test and `pnpm typecheck` pass.
+- Failing installed finding: after that repair, the same Overview still called
+      all nine unfinished Stage 2 items blocked, rendered the runnable focus as
+      `Needs triage`, repeated it under `Blocked work` and `Next run`, surfaced
+      a stale `Shape the first spec` Inbox item as `Needs you` despite shared
+      owner-input count zero, and showed repository/proof/map diagnostics that
+      are not actionable before implementation finishes.
+- [x] Shared-state repair: selected work progress now counts only actual
+      `blocked` task state or open escalations as blocked. Shaping, review, and
+      dependency-waiting work remain unfinished/active instead of becoming a
+      red status merely because they prevent release completion.
+- [x] Action repair: ready-work actions retain the shared readiness explanation
+      and deduplicate secondary task/Inbox actions that point to the same task
+      or route as the primary action.
+- [x] Progressive-disclosure repair: active-release Overview now keeps the
+      current decision, work mix, release progress, and genuine exceptions.
+      It omits premature repository follow-up, routine healthy runtime/memory
+      telemetry, empty blocked sections, duplicate next-run instructions, and
+      raw Inbox urgency when the shared owner-input model says no owner action
+      is active. Completed scope still exposes repository and proof evidence.
+- [x] Expanded deterministic proof: all 31 project-action-model tests and all
+      35 Overview component tests pass; focused release-readiness tests prove
+      unshaped release blockers remain distinct from visible blocked work and
+      proof-wait copy stays aligned; `pnpm typecheck` passes.
+- [x] Installed proof: rebuild and install Guildhall, refresh Narrative Harness
+      Stage 2 state, then confirm the Overview/API top action, work rows, Thread,
+      and status chrome agree that task 086 needs its drafted brief reviewed and
+      tasks 087-094 are waiting on prerequisites before starting the real run.
+      Installed artifact
+      `/Users/matthew/.guildhall/app/0.13.2-1786220107-71246/app/dist/cli.js`
+      reports `stale:false`, zero startup errors, and one 1280x720 document with
+      no horizontal overflow.
+
+- Failing Thread finding from the installed click-through: the shared decision
+      called task 086 unattended shaping and reported no owner input, while
+      Thread resurrected active brief reviews for tasks 086 and 088 plus a spec
+      review for dependency-blocked task 087. The task contract confirms task
+      086 has a complete but unapproved product brief, so Thread exposed the
+      real gate and the shared scope projection was wrong. Task 087 and 088
+      should remain dependency-waiting, not appear as parallel owner work.
+- [x] Repair the shared scope/start decision to classify a complete unapproved
+      brief as review work, suppress owner-review turns behind unfinished
+      dependencies, and remove the stale duplicate same-task secondary action.
+- [x] Re-run deterministic state-agreement tests: 31 scope-projection tests,
+      33 action-model tests, 74 Thread projection tests, and typecheck pass.
+      The full release-readiness file passed 81 behavior cases; its two known
+      migration claim-replay fixtures still fail before their assertions. The
+      one new source-recovery expectation exposed by this change was repaired;
+      its focused replay now reaches only the same migration precondition.
+- [x] Re-run the installed Overview, Work, and Thread click-through before
+      approving task 086.
+- Failing installed finding: after dependency-aware review repair, the saved
+      summary adapter preserved task 086's `owner_input_required` decision but
+      discarded its review target. `/api/project` therefore labeled the shell
+      `Start`, routed `Review brief` to Work, and called the run control
+      `Waiting on setup` even though this is an ordinary task review in Thread.
+- [x] Preserve review action semantics through the saved-summary boundary:
+      brief/spec review opens the focused task Thread, ordinary task review is
+      not project setup, and the shell says it is waiting on the owner's answer.
+- Failing installed follow-up: the fresh action and run control were correct,
+      but compact resolution retained the previously saved `setup: blocked`
+      cache and the API still carried an accidental `label: Start` field beside
+      `Review brief`. Neither field is allowed to contradict the typed task
+      review decision.
+- [x] Replace stale saved setup state when readiness names a focused task review
+      and remove the legacy transport label from compact start readiness.
+- Failing installed flow finding: task 086's Thread is correctly the only
+      owner action, but every downstream dependency-blocked turn is labeled
+      `Paused` in the rail, and Overview renders the old completed
+      `Shape the first spec` setup record as a second Needs-you signal. The
+      authoritative Thread rows carry dependency blockers and both setup turns
+      are done.
+- [x] Prefer typed dependency state over stopped-run presentation in the Thread
+      rail, and filter saved setup attention whenever the shared action model
+      says setup is ready.
+- Failing deterministic finding: Work and Overview opened the same joined
+      transaction and returned the same start decision at the same revision,
+      but Overview alone rewrote the shared orientation headline to `ready to
+      continue`; Work retained `in progress`. The Work adapter also preferred
+      the compact projection's nested summary over the transaction's explicit
+      shared summary.
+- [x] Make every ordinary surface select the joined transaction summary first
+      and apply the same typed readiness overlay to its headline/next action;
+      inventory remains surface-specific, but decision copy does not.
+- Failing installed finding: Thread correctly labels tasks 087-094 `Waiting`,
+      but Overview calls task 086 `Paused`, Work calls eight of nine tasks
+      `Paused`, and dependency-blocked task 087 still says `Awaiting approval`.
+      The rows carry enough typed focus and dependency data to present the real
+      gate without treating a stopped coordinator as paused task state.
+- [x] Reuse typed focus and dependency state in Overview and Work so task 086
+      says `Review brief`, tasks 087-094 say `Waiting`, and summary counts do
+      not invent paused work or actionable downstream reviews.
+      Installed Overview says `Waiting for review` / `Review brief`; Work says
+      `1 Review` / `8 waiting tasks`; Thread exposes the same one review and
+      eight waiting rows. The focused 91-test presentation suite, typecheck,
+      production build, and rendered 1114px/900px/390px clipping-and-state
+      protocol all pass.
+- Failing real-flow finding: sending `No, change it` on task 086 durably saved
+      the framework-neutral correction, but the complete rejected brief stayed
+      authoritative. Every refreshed surface therefore returned to the same
+      Vue-based approval gate, and Thread omitted the saved correction because
+      its compact task projection did not hydrate current note evidence.
+- [x] Make document revision requests typed, invalidate only the rejected
+      active brief, hydrate revision-matched note evidence into current Thread,
+      and refresh Thread before the reply returns.
+- Failing installed follow-up: the corrected task left the rejected approval
+      gate, but the Thread kept the shell's old review alert, called the
+      ordinary package-backed task an `imported note`, and labeled available
+      shaping work `Paused`. The API already reported typed `ready_work` and
+      `Resume`; only the client refresh and presentation disagreed.
+- [x] Refresh project chrome after a correction, require explicit workspace
+      import provenance, and present available focused shaping as `Ready`.
+- Failing live-run finding: execution remained correctly focused on task 086
+      inside the nine-task release, but the ticker rendered the decision's
+      broad active count as `Working on 19 tasks` instead of naming the typed
+      live focus.
+- [x] Prefer the shared live focus title in running ticker copy so global
+      inventory counts cannot imply that work escaped the selected release.
+- Failing live-run finding: the remote DeepInfra spec lane says `Waiting for
+      the local model to respond`, and its one automatic timeout recovery
+      restarts with no visible attempt boundary. Provider location and retry
+      state are known typed runtime facts; the status copy should not invent a
+      local model or make a bounded retry look like unexplained repetition.
+- [ ] Make model-wait copy provider-neutral (or derive it from the typed
+      provider label), and identify the bounded shaping retry as attempt 2 of 2
+      in Thread/status chrome.
+      Provider-neutral copy is implemented and passed installed proof; the
+      truthful bounded retry count remains open.
+- Failing installed review finding: task 086's current brief and spec correctly
+      removed Vue, but the shared action detail still quoted the superseded
+      Vue-based task description. The selected Thread simultaneously rendered
+      `Ready`, `Paused`, `Coordinator review is next`, a `Needs you` spec-review
+      dock, and `Resume spec work` for the same task.
+- Failing installed correction finding: after `Request changes` and a concrete
+      spec correction, task 086 moved to `exploring` but retained its rejected
+      spec as current detail. During refresh the global alert jumped to
+      dependency-blocked task 087 as needing review while task 086's dock still
+      asked for approval of the rejected draft.
+- [x] Supersede rejected spec/planning output at the typed revision boundary,
+      keep the valid brief, and make the shared decision, alert, Thread card,
+      dock, and run control agree that task 086 is ready for one spec-revision
+      pass while task 087 remains dependency-waiting.
+- [x] Prefer current approved/candidate brief intent over a superseded original
+      description in next-action detail, and remove local card copy/actions that
+      reinterpret a shared owner-review or ready-work decision.
+- Failing installed approval-handoff finding: after task 086's corrected brief
+      was approved, its persisted task detail carried `approvedAt`, but Thread
+      called it `Continue shaping brief`, rendered an incomplete `Brief
+      checklist`, and said one item was missing. The task was actually ready
+      for the spec lane. The first refresh also temporarily promoted
+      dependency-blocked task 087 as the global review target.
+- [x] Project approved-brief/spec-draft state explicitly into current Thread,
+      omit the brief checklist after approval, call the next step spec
+      drafting, and make dependency-root review selection keep task 086 ahead
+      of task 087. Focused runtime, scope, Thread, and typecheck proof passes;
+      a fresh installed Browser tab shows `Continue drafting spec`, no brief
+      checklist, task 086 as the only Ready item, and typed prerequisite copy
+      on all eight downstream rows.
+- Failing gate-quality finding: the corrected spec initially named the desired
+      evidence but omitted pinned toolchain versions, exact contract/package
+      commands, a concrete capability allowlist, and explicit packaged launch,
+      typed result, failure, timing, size, and go/no-go proof. A second owner
+      correction improved the spec, but exact package/contract commands and
+      concrete version/allowlist values are still absent.
+- [x] Keep task 086 in spec review until its architecture gate is executable
+      and falsifiable; do not let broad review prose substitute for exact
+      commands and saved packaged-app evidence. The installed approval modal
+      retained `pnpm test`, `pnpm test:desktop-sidecar`, `pnpm
+      package:desktop-spike`, `pnpm typecheck`, and `pnpm build`; the task did
+      not enter implementation until that exact contract was approved.
+- Failing proof-freshness finding: as soon as the second spec introduced
+      `pnpm typecheck` and `pnpm build`, both acceptance criteria were marked
+      met from earlier project commands even though task 086 implementation had
+      not started. Guildhall then surfaced required migration
+      `0.13.27/acceptance-command-proof-path-reconciliation`.
+- [x] Run the required reconciliation through the user-visible migration flow
+      and prove the task's new command criteria do not inherit stale success
+      from work that predates the current spec revision.
+      Migration `0.13.27/acceptance-command-proof-path-reconciliation` applied
+      successfully. The shared command-proof matcher now rejects gates older
+      than the current path boundary; task 086's `pnpm typecheck` and `pnpm
+      build` criteria returned to unmet with planned paths and zero current
+      verification records. Focused proof/migration tests pass 122/122.
+- Failing write-boundary follow-up: the next task 086 spec revision recreated
+      the same required migration. Normal task updates only materialized
+      generated proof paths for commands classified as task-specific, while
+      migration `0.13.27` correctly expected every persisted acceptance
+      command to have a revision-matched path. Mixed-release checks such as
+      `pnpm typecheck` were therefore born stale after every spec edit.
+- [x] Materialize generated proof paths for every non-empty acceptance command
+      during the authoritative task update, while retaining the stricter
+      task-specific-command rule for script-only releases and proof-setup
+      completion. The spec-agent write regression proves `pnpm typecheck`
+      receives a current path and the `0.13.27` detector remains settled;
+      206 focused task/proof/migration tests and typecheck pass. Installed
+      proof then applied the historical repair once, reported no remaining
+      pending migration, and returned task 086's three command criteria as
+      unmet with planned revision-current paths and no verification records.
+- Failing installed correction-handoff finding: after requesting one more task
+      086 spec revision, Thread correctly showed `Continue drafting spec` but
+      the global alert temporarily promoted dependency-blocked task 087 as
+      ready for review. The authoritative API already focused runnable task
+      086, and a full page refresh cleared the false alert. Thread refreshed
+      project chrome before its own revised-task read had settled, then left
+      the intermediate project projection in place.
+- [ ] Refresh project chrome again after Thread observes the revised task so
+      the shell cannot retain a dependency review target from the mutation's
+      intermediate projection; prove the live correction handoff without a
+      manual page refresh.
+- Failing spec-grounding finding: task 086's corrected spec agent first failed
+      the typed tool shape, then correctly attempted the exact owner-requested
+      commands. The imported-source grounding guard rejected those commands
+      because they do not exist yet. Its final retry reached review only by
+      stripping `pnpm test:desktop-sidecar` and `pnpm
+      package:desktop-spike` from the automated criteria, silently weakening
+      the owner-approved contract to prose.
+- [x] Treat only a typed owner `document_revision_requested: spec` instruction
+      as additional grounding for a new executable detail. Keep ordinary
+      notes, provider prose, and unsupported imported-source inventions
+      rejected; prove both exact commands survive the installed spec revision
+      and receive current proof paths. Installed proof re-authored the spec via
+      the validated task writer, approved it through the UI, and read all five
+      exact commands back from task detail before and after worker claim.
+- Failing evidence-identity finding: a later generic human steering note used
+      the same current-evidence identity as the typed owner spec-revision
+      request and replaced it. The durable ledger still contained the owner
+      instruction, but the current evidence read no longer did, so identical
+      task state produced different grounding depending on note order.
+- [x] Give typed owner notes stable event/kind identities distinct from generic
+      source notes. Database projection coverage proves later steering notes
+      no longer erase the current document-revision contract.
+- Failing approval-boundary finding: spec drafting accepted the typed owner
+      revision commands, but `approve-spec` ran the grounding validator without
+      the same current owner evidence and rejected the exact same spec. The
+      authoring and approval boundaries disagreed about whether the release
+      contract was valid.
+- [x] Centralize owner spec-revision requirements and pass the same
+      revision-matched current evidence to both spec authoring and approval.
+      Runtime and endpoint regressions cover the shared grounding contract.
+- Failing pre-worker recovery finding: immediately after approval, the first
+      coordinator tick treated `pnpm test:desktop-sidecar` and `pnpm
+      package:desktop-spike` as invalid because their package scripts did not
+      exist yet. It reset task 086 to exploring and erased the approved spec,
+      although creating those scripts is the implementation task itself.
+- [x] Allow missing declared package scripts while a task is ready or being
+      implemented, but continue rejecting missing scripts at review/gate check
+      and self-referential scripts at every stage. Focused task-gate and
+      orchestrator recovery tests pass 4/4.
+- Failing installed approval-transition finding: approving task 086 updated
+      its authoritative task row to `ready`, while the stored current Thread
+      projection continued to show the superseded spec-review turn and the UI
+      dock said `Needs brief`. The approve route returned before publishing the
+      new read model.
+- [x] Refresh current Thread after successful spec approval and before the
+      endpoint responds. The endpoint regression now asserts that the stored
+      Thread names the approved task with `taskStatus: ready`; installed proof
+      remains part of the task 086 run below.
+- Failing installed approval-invariant finding: the refreshed projection still
+      rendered `Ready` beside `Needs brief`. Task 086's complete brief had been
+      derived from its structured completion boundary, while spec approval only
+      stamped brief approval when `authoredBy` was exactly `project-reintake`.
+      The task lifecycle advanced even though the worker-handoff model still
+      considered the brief unapproved.
+- [x] Make successful spec approval approve any complete current product brief,
+      including a completion-boundary-derived brief, while retaining the
+      re-intake-only warning cleanup. Focused intake and endpoint regressions
+      prove the persisted brief is approved and current Thread no longer emits
+      `Needs brief` for the ready task.
+- Installed pass: after approval, task 086 showed `Ready for work`, `Approved
+      and queued`, and `Resume work`; the false owner-review alert disappeared,
+      the API recorded `approvedBy: human`, and all five acceptance commands
+      remained current. Resume produced `ready -> in_progress via task-claimer`
+      and created the isolated `guildhall/task-task-086` worktree, where the
+      worker began adding the two missing package scripts.
+- Failing installed worker-bootstrap presentation: immediately after Resume,
+      the ticker briefly said `Working on 19 tasks` despite the task-scoped run.
+      During worktree bootstrap, Thread then called the claimed task `Queued`
+      and said work was `paused between worker passes`, while the authoritative
+      task was `in_progress`, assigned to `worker-agent`, and the service log
+      was actively bootstrapping its isolated worktree.
+- [ ] Represent task claim/worktree bootstrap as active focused work across
+      ticker, Thread list, dock, and activity summary; never reinterpret a
+      running scoped task as globally running inventory or a paused pass.
+- Failing installed recovery finding: after the service/database compatibility
+      repair, explicitly starting task 086 returned a successful `running`
+      response and then stopped after one tick as `all_terminal`. The task was
+      still `blocked`, even though its approved runnable contract, worker
+      checkpoint, ready task assessment, and empty authoritative escalation
+      set proved that no owner decision remained. Historical blocker prose had
+      survived evidence compaction after the escalation itself was gone.
+- [~] A focused Start now resumes checkpointed implementation work when typed
+      state proves there is no open escalation, owner hold, or dependency
+      blocker. The repair must not inspect blocker prose, and ordinary project
+      Start does not silently reopen intentionally blocked work. The focused
+      endpoint regression, typecheck, contract lint, and model-independence
+      gate pass. Installed task 086 replay passed: the task moved from blocked
+      to `in_progress`, cleared the stale blocker, reclaimed the saved worker
+      checkpoint, and remained the one named live focus.
+- [x] Installed cross-surface proof at 1280x720: authoritative task/API state,
+      Thread's first row and active dock, downstream waiting reasons, Pause
+      control, and live ticker all agree that task 086 is working and tasks
+      087-094 are waiting on named prerequisites. The document has 1280px
+      client/scroll width and 720px client/scroll height, with no page clipping.
+- Failing implementation-gate finding: task 086's first worker handoff said all
+      but one acceptance criterion were met while the shared proof summary
+      still listed four required commands with no current evidence. Reviewer
+      contract failure returned the task to implementation, but the worker
+      handoff itself was allowed to claim review-ready work with an explicitly
+      unmet criterion.
+- [ ] Prevent a worker from transitioning to review when its structured
+      self-critique reports any unmet acceptance criterion or current command
+      proof is missing. Reviewer rejection remains defense in depth, not the
+      first authoritative proof guard.
+- [x] Task 086 architecture-gate audit rejected the first successful `.app`:
+      it was 8.3 MB and contained only the app executable, plist, and icon;
+      `test:desktop-sidecar` was a placeholder and no sidecar binary existed.
+      The replacement package is 71.8 MB and contains a 60.4 MB self-contained
+      Node 22 sidecar built by pinned `esbuild` and `@yao-pkg/pkg`. The packaged
+      app launched with `PATH=/usr/bin:/bin`, used the scoped Tauri shell
+      plugin, executed the real `scripts/lib/mvp-harness.mjs#runMvp` fixture
+      path, wrote a schema 1.0.0 artifact with 12/12 review lanes passing, and
+      recorded ordered events plus typed malformed-input and crashed-sidecar
+      outcomes. The measured package proof took 99 ms and returned `go`.
+- Failing task-gate finding: after that proof reached review, Guildhall marked
+      every command stale because the compact promoted task row omitted its
+      isolated-worktree path. Acceptance-script validation and command gates
+      then read the registered checkout's old `package.json`, claimed
+      `test:desktop-sidecar` did not exist, and bounced valid work back to the
+      worker.
+- [x] Recover promoted workspace ownership before both acceptance-script
+      validation passes and before command execution. The regression stores
+      the worktree only in the workspace authority, gives the registered
+      checkout no new script, and proves `pnpm test:desktop-sidecar` executes
+      in the task worktree and reaches verified/done state.
+- Failing review-recovery finding: restarting task 086 after the stale gate
+      repair still sent its clean, committed task branch back to the worker.
+      The handoff guard equated a clean worktree with no implementation, and
+      deterministic review treated hard-gate failures recorded before the
+      task's reopened lifecycle as current. The unnecessary worker pass then
+      timed out and surfaced an old `spec_ambiguous` blocker even though the
+      packaged sidecar remained fully proven in the isolated branch.
+- [~] Preserve clean committed task branches as implementation evidence and
+      evaluate only the latest hard gates from the current reopened lifecycle.
+      A passing `review_handoff` checkpoint on committed task work now also
+      rebuilds its missing structured self-critique and advances to review
+      without spending another worker-model turn on handoff ceremony. Focused
+      reviewer and orchestrator regressions plus typecheck pass. Installed
+      task-086 replay proved that recovery advances directly through review and
+      executes `pnpm test:desktop-sidecar` and `pnpm package:desktop-spike` in
+      the isolated worktree without another fake-edit worker pass.
+- Failing installed lifecycle-gate finding: that replay still treated the old
+      `pnpm test`, `pnpm typecheck`, and `pnpm build` passes as current because
+      command selection scoped freshness only to `proofRecovery`; the task's
+      authoritative reopened boundary was stored in `currentLifecycle`. Two
+      fresh package gates passed, then the task looped through review instead
+      of rerunning all five commands and completing.
+- [x] Use one verification-lifecycle boundary for command selection and gate
+      completion, regardless of whether the reopen is represented by
+      `proofRecovery` or `currentLifecycle`. A focused regression now proves
+      both previously passing automated commands physically rerun after the
+      lifecycle boundary and settle the task only from fresh execution;
+      typecheck passes. Installed task-086 replay reran the three stale command
+      paths, retained the two newer package gates, and reached five verified
+      proof paths before landing.
+- Failing installed landing finding: all five task-086 command/proof paths
+      reached verified state, but `cherry_pick_local` blocked the task because
+      the owner checkout had already deleted `package-lock.json` and contained
+      an untracked fixture-run artifact byte-identical to the task branch's
+      target. `git apply --check` treated those matching owner changes as
+      conflicts and refused to land the unrelated desktop implementation.
+- [x] Exclude a task-delta path from the landing patch only when the owner
+      checkout already matches the task branch's exact blob, file mode, or
+      deletion target. The integration regression proves the remaining task
+      delta is committed while the matching tracked deletion and untracked
+      artifact remain untouched and uncommitted. Installed recovery landed
+      task 086 as commit `edb2548`; `guildhall.yaml`, the deleted lockfile, and
+      the identical untracked fixture artifact remained untouched.
+- Failing installed post-completion finding: the coordinator reported task 086
+      `done`, the desktop delta landed, and its worktree was removed, but the
+      next canonical status read rendered task 086 as `exploring`. Completion
+      cleared `proofRecovery` but left the authoritative `currentLifecycle`
+      overlay, so effective-task projection overrode the new done definition
+      with the old reopened status and blocked all eight dependents again.
+- [x] Settle both recovery markers at every true completion boundary: command
+      gates, recorded hard gates, completed-work landing reconciliation, and
+      merged-PR reconciliation. Focused regressions prove command execution and
+      recorded-gate completion remain `done` in both the effective task and
+      runtime overlay; typecheck passes. Installed canonical status reports
+      task 086 `done`, release progress `1/9`, and task 087 as the sole owner
+      review action. Browser agrees at 1280x720, 1024x768, and 390x844 with no
+      clipped content or horizontal overflow.
+- Failing installed task-087 authoring finding: after a precise owner spec
+      revision request cleared the vague draft, two spec-worker attempts
+      exhausted their turn budget without saving any durable spec. The worker
+      had the exact current task and correction in its injected packet, but
+      opened the retired compact `TASKS.json` with a filesystem tool, saw only
+      one compatibility task, concluded task 087 did not exist, and tried to
+      reconstruct it instead of calling `update-task` against the
+      database-authoritative project store.
+- [x] Make the injected task packet and task tools the explicit authoring
+      authority. The orchestrator now labels the path as a task-state handle,
+      warns that its compatibility projection may omit database-authoritative
+      tasks, and the spec-agent contract forbids raw `TASKS.json` inspection or
+      reconstruction. The first installed replay then spent the generic
+      eight-turn budget on seven relevant source reads plus one authoritative
+      `read-tasks` call, proving the lane budget itself was too small for a
+      source-backed blueprint. The spec lane now has 16 turns while retaining
+      the two-turn durable-progress nudge. Focused prompt/routing/factory
+      regressions, typecheck, and the model-independence gate pass. Installed
+      task-087 replay used the preserved source reads, wrote a durable
+      structured spec, and returned to `spec_review` without inspecting or
+      reconstructing the compatibility queue.
+- Failing installed dependency-action finding: while task 087 was blocked and
+      task 088 depended only on completed task 086, canonical status promoted
+      task 088's imported brief as the next owner action. That was locally
+      dependency-valid but globally incoherent for the release sequence: the
+      owner was still repairing the adapter contract that all later desktop
+      work consumes, so Review pointed away from the active recovery job.
+- [ ] Shared next-action ranking must keep an explicitly focused blocked/retry
+      task ahead of unrelated downstream shaping, while still allowing truly
+      independent work when no focused recovery exists.
+- Failing installed spec-turn observability finding: each source-backed spec
+      pass took roughly three to six minutes with no Thread, ticker, or CLI
+      event between dispatch and final task transition. The process was alive
+      and accumulating provider work, but every user-visible surface looked
+      stalled.
+- [ ] Publish bounded per-turn spec activity from provider/tool events so the
+      current task visibly says what is being inspected or saved without
+      exposing hidden reasoning or flooding Activity.
+- Failing installed owner-correction finding: repeated `Request changes`
+      passes fixed one exact contract clause while reintroducing another. The
+      drafts variously omitted the dedicated command, invented a framework,
+      put runtime TypeScript outside `tsconfig`, bypassed the sidecar, erased
+      cancellation phases, collapsed distinct failure codes, proposed skipping
+      the mandatory parity proof, and reintroduced error-message parsing. The
+      durable grounding gate protected exact commands but had no typed surface
+      for the requested protocol members and invariants. After adversarial
+      review, the delegated owner had to call the authoritative `update-task`
+      boundary directly with typed target files, contract deltas, proof
+      disposition, exact acceptance commands, and the reviewed blueprint.
+- [ ] Make exact owner contract corrections first-class typed revision input
+      and give the owner a direct structured-spec edit/replace path in the
+      product. A model rewrite may propose the revision, but it must not be the
+      only way to preserve exact union members, failure codes, invariants, and
+      target files across review loops.
+- Failing installed implementation-handoff finding: task 087's first worker
+      pass escalated `spec_ambiguous` because the approved target directory
+      `src/desktop` did not exist before implementation, even though creating
+      that target directory was the task. A later acceptance-command recovery
+      then moved `review -> exploring`, cleared the approved spec, and asked for
+      re-intake because the new package script was not yet visible in the
+      registered main checkout. The implementation command passed in the
+      task worktree once the actual code existed.
+- [ ] A worker may create an approved target path, and implementation-created
+      commands must be validated against the authoritative task worktree
+      without erasing an approved spec or routing completed code back through
+      source intake.
+- Failing installed worker/reviewer finding: after the delegated owner supplied
+      a proven implementation, the worker added only a duplicate explicit type
+      re-export beneath the existing wildcard export and called it backward
+      compatibility. The reviewer then remained in `review` for seven minutes
+      with no visible finding, activity detail, or completion signal. Stopping
+      the run returned the task to `in_progress`/`worker-agent` instead of
+      preserving a clear pending-review recovery state.
+- [ ] Bound review calls, publish safe per-turn review activity, reject
+      no-op/duplicate edits deterministically, and preserve the interrupted
+      lane as an explicit resumable state when a run is stopped.
+- Failing installed brief-grounding finding: task 088's generated product brief
+      invented Vue 3, described a general professional writing environment,
+      and duplicated its non-goals as anti-patterns even though the release is
+      a minimal Tauri shell over the existing sample-run sidecar. The delegated
+      owner had to rewrite why-now, success, and scope before approval.
+- [ ] Product-brief shaping must preserve the release's typed architecture and
+      product boundary. Framework choice and broader editor positioning require
+      source evidence or an explicit owner decision; repeated brief fields
+      should be normalized rather than displayed as separate authority.
+- Failing installed owner-command finding: the task-088 revision explicitly
+      said `pnpm test:desktop-shell` in ordinary prose, but the typed
+      `requiredAcceptanceCommands` list stayed empty because intake only
+      recognized backtick-quoted commands. Current evidence then compacted the
+      long revision before the command phrase, so both the spec agent and a
+      direct authoritative update hit the circular "script does not exist yet"
+      grounding rejection and removed the required automated proof.
+- [x] Preserve ordinary inline pnpm/yarn/bun and npm-run commands from owner
+      revision prose in the typed command list before evidence compaction. The
+      extractor now records quoted commands and unquoted package commands,
+      while grounding still requires the resulting exact typed command. Focused
+      intake/spec tests, typecheck, and model-independence tests pass.
+- Failing task-088 execution finding: after an explicit owner retry named the
+      missing files, typed shell contract, dimensions, and proof commands, the
+      worker reported successful checkpoints but committed an empty proof
+      script, no desktop `tsconfig`, no Vite/Vitest dependencies, an 800x600
+      Tauri window, and a generic placeholder shell. The task remained
+      `in_progress` with no blocker while the project activity claimed active
+      work; at the same time, `planExecution` said the same task was paused.
+- [ ] A worker checkpoint must not count as forward progress when required
+      contract files are empty or absent. Review handoff should validate the
+      approved file/command boundary, and project execution plus plan execution
+      must agree on whether the focused task is running or paused.
+- Failing task-088 recovery finding: resuming an already corrected, committed
+      worktree handed it back to the worker instead of reconstructing review.
+      While Stop was pending, that worker added fake macOS traffic-light
+      controls, duplicated a type field, and replaced the reviewed visual
+      system. The task API still said `in_progress` while CLI/release projection
+      called the task `paused`; Start then exposed `running` without an active
+      child process or task revision for several seconds.
+- [ ] Review recovery must pin the committed reviewed revision, prevent worker
+      mutation once stop has been requested, and make API, CLI, release, and
+      execution projections agree on paused/running state. A native-chrome
+      non-goal must also remain an executable review invariant, not merely prose.
+- [x] NAR-088 was recovered through delegated owner review and authoritative
+      gates. `pnpm test:desktop-shell`, `pnpm typecheck`, and
+      `pnpm package:desktop-spike` pass; Browser geometry at 1280x800 and
+      900x700 has no overflow or clipping; the final launch has no fake action
+      or title-bar controls. Only intended shell/build/config files were landed
+      to Narrative Harness main at `f07379c`.
+- Failing NAR-089 shaping finding: after an approved, source-complete brief,
+      focused Start spent roughly two minutes in `exploring` with no revision,
+      event, question, task assignment, or phase detail while every surface
+      claimed generic active work. Stop changed the run to `stopping` but could
+      not interrupt the provider call; only after the model returned `no change`
+      did the project actually stop.
+- [ ] Long shaping calls need visible stage/timing activity and cooperative
+      cancellation. A model pass that returns no durable change must explain
+      why and offer a concrete retry/recovery action instead of making the user
+      infer that nothing happened.
+- Failing mixed-toolchain spec finding: the NAR-089 owner revision named three
+      package-manager commands and `cargo test --manifest-path
+      src-tauri/Cargo.toml fixture_input` in the same ordinary sentence. The
+      typed revision kept all package commands but silently dropped Cargo, so
+      authoritative spec grounding rejected the required Rust proof.
+- [x] Preserve ordinary inline Cargo test/check/build/clippy/fmt commands as
+      typed owner requirements alongside package commands. The extractor stops
+      at prose conjunctions and retains flags, paths, and test filters.
+- Failing Stage 2 graph finding: NAR-090's author job starts from the prepared
+      `workingFixtureDir` and retained setup state owned by NAR-089, but the
+      imported dependency graph marked both tasks parallel with only NAR-087
+      and NAR-088 as parents. That invites isolated workers to invent competing
+      setup-to-run handoffs and defers reconciliation until packaging.
+- [x] Make NAR-090 depend on NAR-089 in addition to NAR-087/NAR-088. The typed
+      run controller now has one explicit upstream input owner; NAR-091 still
+      follows the run task and NAR-092 remains the integration/package boundary.
+- Failing NAR-089 execution finding: after the exact owner spec was approved,
+      the worker consumed three passes without creating or changing any file,
+      then stopped as `no_visible_progress`. The task remained assigned and
+      `in_progress`, but no task surface offered a concrete recovery action or
+      distinguished an empty worker attempt from implementation underway.
+- [ ] A worker pass with no file delta, checkpoint, question, or typed blocker
+      must stop after the first bounded attempt, publish the failed attempt as
+      visible evidence, and offer reviewable retry/take-over recovery without
+      leaving the task looking actively implemented.
+- [x] NAR-089 was taken over at the unchanged task worktree. The recovered
+      implementation gives the bundled sample and one native-selected local
+      fixture the same narrow Rust validation/copy path, edits only an
+      app-cache copy, preserves source bytes and failed edits, exposes one
+      typed `workingFixtureDir` handoff, and packages the three fixture files
+      byte-for-byte. Setup DOM, TypeScript, Rust fixture-input, packaged-app,
+      sidecar-without-Node, and 1280px Browser geometry proofs pass.
+- [x] Adversarial NAR-089 review found that initial intake could accept a
+      fixture the Stage 1 runner would later reject, Continue had no visible
+      transition, comma-separated list editing could change authored values,
+      contract-valid empty lists were blocked without explanation, production
+      IPC names/payloads were untested, validation feedback was not announced,
+      and the temporary write path could follow an existing link. The repair
+      now mirrors the runner's required story collections and expected-signal
+      shape, cleans rejected cache copies, uses line-preserving optional lists,
+      announces missing required inputs, advances visibly to Run, creates a
+      unique write file with `create_new`, tests all production gateway calls
+      plus Rust handler registration, and makes the packaged sidecar run from
+      the prepared cache copy. The same reviewer confirmed no release blocker
+      remains after the final IPC and accessibility follow-up.
+- [x] Final native NAR-089 proof used the rebuilt packaged `.app`, not the Vite
+      preview. At the default wide window and a dragged 910x701 minimum-window
+      capture, source controls, required inputs, the sticky primary action, and
+      visible text had no horizontal clipping or incoherent overlap. Clicking
+      `Continue to run` in the real Tauri webview invoked the Rust save command,
+      advanced the workflow from Set up to Run, marked Set up complete, and
+      rendered `Your working copy is ready.` Screenshots are saved at
+      `/tmp/narrative-harness-task089-native-wide.png`,
+      `/tmp/narrative-harness-task089-native-final-900x700.png`, and
+      `/tmp/narrative-harness-task089-native-handoff-900x700.png`.
+- [x] Guildhall recorded NAR-089 `done` with all four hard-gate results, and the
+      reviewed 19-file change was selectively landed to Narrative Harness main
+      as `343b9ca`. From that actual checkout, `pnpm test:desktop-setup`,
+      `pnpm typecheck`, `pnpm package:desktop-spike`, and the filtered Rust
+      fixture-input tests all pass; the owner's unrelated `guildhall.yaml`
+      edit remained untouched and unstaged.
+- Failing NAR-090 handoff finding: after NAR-089 completed, the authoritative
+      project run remained `stopped` while `startReadiness` said both that
+      Guildhall "is shaping" NAR-090 and that the project `canStart`. The task
+      itself was still `exploring`, with no spec revision, assignment, or live
+      run. A stopped project must describe shaping as the available next action,
+      not as work already happening; every surface must derive tense and action
+      from the same run-aware summary state.
+- Failing NAR-090 shaping finding: the task-scoped spec pass ran one opaque tick
+      for nearly five minutes, consumed approximately 1.61 million input tokens
+      and 8,233 output tokens, and persisted no spec, criterion, question, or
+      task evidence. Its transcript proposed mapping four broad adapter events
+      onto seven author-visible narrative stages, which would have simulated
+      progress. The bounded run was stopped and recovered with a source-backed
+      delegated-owner spec that requires typed events at the real `runMvp`
+      boundaries. Guildhall must cap context/token amplification, surface live
+      durable-step progress, and fail a no-mutation shaping pass with an explicit
+      recovery action instead of retaining a generic running state.
+- Failing NAR-090 implementation finding: after the exact spec was approved,
+      the first worker tick checkpointed only the shared stage type and timeout
+      contract. A second pass emitted all seven author-visible stages before
+      `runMvp` had performed the work, then continued looping. Three ticks used
+      approximately 1.09 million input tokens and 3,417 output tokens without
+      producing a reviewable implementation. The run was stopped and the same
+      isolated worktree was recovered locally. A worker must not claim typed
+      progress from planned prose or pre-emit completion stages; the runtime
+      boundary and bounded mutation/proof budget need to be enforced before a
+      task remains presented as active.
+- [x] Local NAR-090 recovery now runs the packaged sidecar through the production
+      Tauri shell transport, creates a fresh cache-confined request for every
+      attempt, advances the seven visible stages only from actual `runMvp`
+      boundaries, terminates invalid streams, maps failures from typed codes,
+      preserves prepared input for retry, and keeps short desktop windows to a
+      single-screen action layout through progressive disclosure. The focused
+      adapter, run UI, typecheck, full unit suite, and packaged-app proof
+      commands pass; the package contains the allowlisted spawn, stdin, and kill
+      permissions and a self-contained sidecar whose real event order is
+      `accepted` through `result`.
+- [x] The final automated package proof now crosses the shipped boundary rather
+      than invoking the sidecar behind the webview: production JavaScript calls
+      `prepare_desktop_proof`, builds the request through Rust, starts the exact
+      configured `Command.sidecar('binaries/narrative-harness-sidecar')`, feeds
+      the typed adapter, writes a cache-confined artifact, records
+      `transport: webview-production`, and exits through `finish_desktop_proof`
+      with Node removed from `PATH`. This proof caught a real production defect:
+      the transport had used the unconfigured bare sidecar name even though the
+      Tauri bundle and capability named `binaries/narrative-harness-sidecar`.
+      The package was rebuilt after that repair and the full chain passed.
+- [x] Adversarial re-review found three release blockers and then confirmed them
+      repaired at `08f53a2`: package proof no longer bypasses the webview,
+      rejected or hung termination becomes the non-recoverable
+      `termination_unconfirmed` state with Quit as its only action, and success
+      advances through `Review results` to a bounded Review-phase handoff. A
+      cancellation race before the first sidecar event is also covered so a
+      late spawn cannot outlive a cancelled request. Seventeen adapter tests,
+      eleven renderer/transport tests, TypeScript checking, ten Rust tests, the
+      full unit suite, and the rebuilt package proof pass. Fault-injected native
+      termination and the full Review-to-Run-again interaction remain residual
+      native-test risk, not evidence inferred from test doubles.
+- [x] NAR-091 through NAR-094 now have source-grounded delegated-owner specs,
+      exact acceptance commands, explicit dependency edges, and approved
+      `ready` status. NAR-091 owns strict cache-artifact loading and Draft /
+      Review / Run details; NAR-092 owns Rust-confined native Save/Open; NAR-093
+      owns the two-viewport packaged-native evidence matrix; and NAR-094 owns
+      public guide copy and fresh screenshots. The release summary therefore
+      reports four done, NAR-090 active, four ready, and zero blockers instead
+      of vague shaping requests that hid the intended release sequence.
+- [x] A source-contract re-audit caught NAR-091 before assignment: the existing
+      live headless writer already permits `blocked` findings and `high`
+      severity, while the declared `ReviewFinding` interface and approved task
+      wording named only `pass | needs_attention` and `info | medium`. The task
+      moved through `ready -> exploring -> spec_review -> ready`; it now treats
+      `blocked` as attention, ranks the complete typed severity domain, varies
+      arbitrary prose independently in proof, and binds output-path identity to
+      the exact confined Rust read rather than pretending the artifact JSON
+      contains its own filesystem path. All five command contracts were
+      preserved and NAR-091 remains dependency-waiting on NAR-090.
+- [x] The same review found NAR-092's filesystem-authority wording contradicted
+      its proposed API: the renderer necessarily carries the current prepared
+      and result paths, but the invariant said the renderer supplies no paths.
+      The task moved through the same review lifecycle and now states the
+      enforceable boundary: native dialogs exclusively choose external open
+      sources and save destinations; renderer cache paths are untrusted claims
+      usable only after Rust confinement and current-result identity checks.
+      Proof now includes escaped/stale cache inputs, while every command and
+      dependency remains unchanged.
+- [x] Installed Release-page audit found the Stage 2-specific desktop
+      description followed immediately by the global Stage 1 headless-only
+      charter, making the active release explain two incompatible scopes.
+      Named releases now omit that global orientation card and retain their own
+      description, verdict, counts, and shared top action. The focused 26-test
+      ReleaseTab suite and a fresh `pnpm build` / `pnpm dev:install` pass; the
+      restarted service reports `stale: false`. At 1280x720, installed Browser
+      proof shows no horizontal overflow, no old headless-charter text, and
+      agreement among NAR-090 focus, 4/9 completion, five unfinished items, and
+      the API's four-done / one-active / four-ready release summary.
+- [x] Installed Work audit found a view-local acceptance-count heuristic
+      replacing NAR-091 through NAR-093's authoritative dependency state with
+      `Review breakdown`, even though their source-grounded specs were already
+      approved and each task named an unmet prerequisite. Work list and board
+      status now render the shared task presentation; broad flat-work detail is
+      informational and cannot invent a competing action. The 45-test WorkTab
+      suite, typecheck, build, install, and restarted `stale: false` service
+      pass. At 1280x720, the installed Open view shows NAR-091 through NAR-094
+      as four Waiting rows with their exact prerequisites, NAR-090 as the one
+      Paused row, no `Review breakdown`, and no horizontal overflow. Calibration
+      case `local-breakdown-overrides-dependency-waiting` preserves the escaped
+      miss.
+- [x] Exact progressive-scope CI exposed a second Work contradiction: the
+      persisted surface summary and explicit release envelope reported 6
+      current / 12 deferred Narrative items and 5 / 8 Looma items, while Work
+      locally counted every unrelated project row as deferred. The joined
+      surface boundary now reuses its scope-normalized compact summary; Work
+      filters Current scope by explicit release membership while retaining an
+      execution child through its parent identity; and Release replaces its
+      generic verdict heading with the shared named-release headline. Focused
+      runtime and component suites pass, followed by the exact three-test
+      rendered agreement gate across Overview, Work, Thread, Release, and
+      Structure. Calibration case
+      `current-scope-counts-include-unrelated-backlog` preserves the miss.
+- [ ] Finish NAR-090 packaged-webview interaction proof at the app's minimum
+      desktop window, including success, induced artifact-write failure, retry,
+      cancel, visible action geometry, and no clipping. macOS was locked during
+      the first two Computer Use attempts, so this evidence remains open rather
+      than being inferred from browser or package tests.
+- [ ] Complete NAR-090's five authoritative Guildhall gates, mark the task done,
+      selectively land the reviewed change to Narrative Harness main without
+      touching the owner's `guildhall.yaml`, and then drive NAR-091 next.
+
+| Surface | Expected Stage 2 evidence |
+| --- | --- |
+| Authoritative API | `startReadiness` focuses NAR-090 as paused live work; the release reports four done, one active, four ready, and no blockers. |
+| Top action | Overview repeats the NAR-090 decision and opens that task in Work without inventing another owner action. |
+| Work list/cards | NAR-090 is the only active item; NAR-091 through NAR-094 are ready but dependency-waiting in order. |
+| Thread | NAR-090 is the current implementation handoff; downstream specs are approved and non-actionable until their dependencies land. |
+| Bottom/status chrome | No claim that all Stage 2 tasks are running. |
+| Visible cards | No competing brief-cleanup or owner-urgency recommendation. |
+
+### Contract Touch Decision
+
+- Touched contracts: owner-facing orientation-summary `nextAction` semantics
+      and its agreement with shared project start readiness; selected work
+      progress blocked/active semantics; same-task project-action
+      deduplication; active-release Overview progressive disclosure; complete
+      unapproved product-brief handoff semantics; and dependency-aware Thread
+      review visibility; saved-summary action target/label preservation; and
+      the distinction between task review and project setup in run control;
+      stale compact setup-cache reconciliation; plus the joined surface
+      transaction's shared-summary selection order; dependency-aware Thread
+      rail status; setup-ready attention reconciliation; and shared typed task
+      presentation for dependency waiting and focused brief/spec review.
+      The task intake contract now also accepts an explicit document revision
+      target, clears a rejected active brief, preserves the correction as typed
+      task evidence, and refreshes current Thread from a revision-matched read.
+      A rejected spec now clears the current executable plan, acceptance,
+      sizing, readiness, and proof projections while preserving its current
+      product brief and historical evidence ledger. Current Thread now carries
+      typed approved-brief/spec-draft facts for the approval handoff, and
+      current command proof requires a gate or record observed at or after the
+      current proof-path boundary. Authoritative task updates now also project
+      every persisted acceptance command into that current proof-path boundary
+      immediately, so migration reconciliation is for historical data rather
+      than ordinary new spec writes. Structured spec grounding now admits new
+      executable detail only when a typed owner spec-revision instruction
+      explicitly names it; arbitrary notes and model prose remain outside the
+      grounding contract. Typed evidence identities preserve that instruction
+      independently of later generic notes, approval consumes the same
+      revision-matched evidence as authoring, missing implementation-created
+      package scripts are permitted only before review, and successful approval
+      republishes current Thread before returning. A failed post-mutation
+      Thread refresh is now logged without rewriting a persisted approval or
+      reply as HTTP failure; later current-state reads retain self-healing
+      ownership. Focused Start also repairs a
+      checkpointed implementation blocker only from approved contract,
+      readiness, checkpoint, dependency, hold, issue, and escalation fields;
+      historical blocker prose remains display-only. Acceptance command
+      validation and execution now also recover the task's authoritative
+      workspace checkout when the compact task row omits `worktreePath`, so
+      implementation-created scripts are checked where the work actually
+      exists. Review recovery now distinguishes a clean task branch with
+      commits ahead of its recorded base from an empty worktree, and
+      deterministic review scopes hard-gate evidence to the current reopened
+      lifecycle instead of letting superseded failures force another worker
+      pass. A committed checkpoint whose typed next action is review handoff
+      and whose command evidence passes may reconstruct the structured review
+      packet deterministically, but any newer failed hard gate or substantive
+      reviewer revision suppresses that recovery.
+- Contracts considered but not touched: task/release lifecycle enums,
+      action-model schema, provider prompts, and persisted project state.
+- Required follow-up: complete the installed state-agreement table, then drive
+      task 086 through shaping, review, implementation, and proof before
+      unblocking its dependents.
+- Proof required/provided: focused scope, action-model, Thread, and API
+      regressions plus typecheck are provided. The saved Activity regression
+      proves decision, top action, action model, run control, setup state, and
+      task-specific Thread route agree; the cross-surface API regression proves
+      Overview and Work share headline, next action, progress, and release at
+      one revision. Installed Browser proof for the active focused run is
+      provided above. The broader
+      task-endpoint file still has the pre-existing migration claim-replay
+      precondition and two stale-fixture assertions downstream of it; each is
+      outside this route/control change.
+- Waivers: none. The configured Guildhall MCP bridge returned `Transport
+      closed`, and this checkout has no root `.guildhall/artifacts.yaml`, so the
+      canonical local artifact was updated directly.
+- Apply/revert behavior: reverting restores the competing compact projection
+      message; no stored data needs migration or cleanup.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Scope and change class: request-time presentation reconciliation plus an
+      existing-field task mutation for an explicit brief revision request.
+- Existing data impact: the rejected `productBrief` is removed from current
+      task detail for a brief revision. A rejected spec clears current plan
+      fields while preserving its brief; old notes/review/gate records remain
+      historical evidence and are excluded by the new revision/proof boundary. The
+      owner correction remains in existing task evidence and the exploring
+      transcript. No new persisted field or enum is added.
+- Migration id, compatibility reader, fixtures, and rollback: no migration or
+      compatibility migration is required. Revision target is request-only;
+      both legacy and database-authoritative mutation paths are covered. A
+      revert restores the prior approval-loop behavior but does not lose saved
+      correction evidence.
+
+### Schema Migration Decision: Required Acceptance Commands
+
+- Persisted schema touched: task evidence note payloads may carry the existing
+      structured `requiredAcceptanceCommands` array on an owner
+      `document_revision_requested` event; no database column, enum, or queue
+      schema is added.
+- Scope and change class: compatible structured payload extension plus a
+      current-evidence identity correction.
+- Existing data impact: existing ledgers remain readable. On reprojection,
+      typed owner revision notes retain an event/kind-based identity and no
+      longer collide with generic notes from the same actor/source.
+- Migration id and safety: no migration is required because the event payload
+      is already open structured data and the current-evidence table is a
+      derived projection. Rebuilding the projection applies the corrected
+      identity rule.
+- Compatibility reader and fixtures: readers tolerate absence of
+      `requiredAcceptanceCommands`; project-state database, spec-quality,
+      intake, task-queue, task-gate, and orchestrator fixtures cover both old
+      generic notes and new typed requirements.
+- Owner-facing plan text: task 086 must retain all five exact proof commands
+      from owner correction through approval, implementation, and gate check.
+
+### Contract Touch Decision: Selected Release Scope Agreement
+
+- Work id: `pr20-selected-release-scope-agreement-2026-08-09`.
+- Touched contracts: joined project-surface summary selection; persisted
+      scope-row parent identity at the route adapter; Current scope membership
+      and count presentation; named-release verdict presentation; and the web
+      read type for `parentTaskId`.
+- Contracts considered but not touched: release membership authority, task
+      lifecycle enums, action-model schema, provider/model prose, persistence
+      columns, and public API field names.
+- Required follow-up: none for this repair. Continue the open NAR-090 native
+      packaged-window proof before advancing the Narrative Harness release.
+- Proof required: parent/child execution rows must not double-count current
+      work; unrelated backlog must remain available in All but absent from
+      Current scope; Overview, Work, Thread, Release, and Structure must report
+      the same selected-release counts and headline; typecheck and
+      model-independence must pass.
+- Proof provided: focused release-readiness, WorkTab, and ReleaseTab suites;
+      the complete 46-test rendered UI matrix, including exact Narrative
+      Harness, Looma, consumed-release, and four-project agreement checks;
+      `pnpm typecheck`; `pnpm model:independence`; and the calibration case
+      named above. The rendered assertions now compare Current scope against
+      the authoritative selected-release total and require a completed release
+      to show calm readiness with no invented owner action.
+- Waivers: none.
+- Owner-review items: Current scope means explicit selected-release membership,
+      not every project item outside that release. Execution children inherit
+      membership from their selected parent.
+- Apply/revert behavior: apply the normalized summary and membership filter as
+      one unit. Reverting restores contradictory counts but requires no data
+      cleanup.
+
+### Schema Migration Decision: Selected Release Scope Agreement
+
+- Persisted schema touched: none. The repair reads existing release node IDs,
+      deferred node IDs, scope rows, and optional `parentTaskId` fields.
+- Scope and change class: read-boundary normalization and presentation repair.
+- Existing data impact: no records are rewritten. Existing projects gain
+      consistent counts on their next read.
+- Migration id and required-before-run behavior: none.
+- Compatibility reader: unnamed scopes or older projections without explicit
+      release membership retain the existing scope-row fallback.
+- Fixtures and tests: the focused runtime and component regressions plus the
+      rendered Narrative Harness/Looma fixtures cover both named-release and
+      fallback behavior.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; no persisted state rollback.
+
+### Contract Touch Decision: Adversarial Release-Flow Integrity
+
+- Work id: `pr20-adversarial-release-flow-integrity-2026-08-09`.
+- Touched contracts: the Work API's selected-release `scopeRows`; Work's
+      consumption of those rows; the release-readiness verdict presentation;
+      stale-response handling when switching projects; exact Git path handling
+      during task-branch landing; and rendered cross-surface agreement checks.
+- Contracts considered but not touched: release membership persistence, task
+      lifecycle enums, provider/model prose, project database tables, queue
+      schema, release transition rules, and public command syntax.
+- Required follow-up: none for the reviewed PR surface. The multiprocess
+      intake-allocation repair is landed; continue NAR-090's packaged native
+      interaction proof once the Mac is unlocked.
+- Proof required: unrelated backlog must be absent from shared selected-release
+      rows; execution children must remain through parent membership; Release
+      must render the verdict title from its readiness response and ignore late
+      responses from the previous project; leading/trailing whitespace in Git
+      paths must survive landing; map counts must compare exact current,
+      deferred, and boundary values; all rendered flow checks must pass.
+- Proof provided: 178 focused runtime, Git-driver, Work, and Release component
+      tests passed after the API-boundary repair; the Release suite's 27 tests
+      passed after the readiness-title regression was added; `pnpm typecheck`
+      passed. The first full rendered rerun exposed two stale spine-headline
+      assertions; after replacing them with readiness-API agreement, the full
+      46-test rendered UI matrix passed. `pnpm lint:contracts` also passed with
+      this decision record. Two synchronized-process regressions prove distinct
+      slug-equivalent requests allocate separate files and identical retries
+      converge on one persisted intake. The intake API suite passed; its one
+      stale project-question expectation was aligned with the existing typed,
+      prose-independent planner contract while retaining explicit evidence
+      assertions. The first post-push release gate passed 298/299 tests; its
+      only failure was the integration-heavy unnamed-release fixture finishing
+      in 5.38 seconds against Vitest's 5-second default, so that fixture now has
+      an explicit 15-second integration-test budget. Three concurrent stress
+      runs passed, and the complete local `pnpm test:release` gate then passed
+      all 299 tests.
+- Waivers: none.
+- Owner-review items: a named release gets a specific system-authored verdict
+      title from the same readiness snapshot that owns its tone and detail.
+      Orientation prose remains useful elsewhere, but cannot override that
+      verdict or race a different project's response into the view.
+- Apply/revert behavior: apply the API filter, verdict title, response guard,
+      exact-path handling, and their tests together. Reverting is code-only and
+      restores the reviewed contradictions; no data cleanup is required.
+
+### Schema Migration Decision: Adversarial Release-Flow Integrity
+
+- Persisted schema touched: none.
+- Scope and change class: API read-model filtering, system-authored presentation
+      metadata, request lifecycle handling, Git path preservation, and tests.
+- Existing data impact: no project, queue, workspace, task, or evidence records
+      are rewritten.
+- Migration id, required-before-run behavior, and compatibility reader: none.
+      Existing verdict payloads without `title` retain the generic label.
+- Fixtures and tests: focused runtime/component/Git tests and the rendered
+      project matrix cover current and compatibility behavior.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; no persisted-state rollback.
+
+### Contract Touch Decision: Concurrent Intake Completion Handoff
+
+- Work id: `pr20-concurrent-intake-completion-handoff-2026-08-09`.
+- Touched contracts: the pressure-test answer endpoint's completion and task
+      materialization boundary. A final answer and its durable task handoff now
+      execute under one project-state write lock.
+- Contracts considered but not touched: pressure-test intake schema, handoff
+      schema, task lifecycle, queue schema, provider/model prose, and public
+      response fields.
+- Required follow-up: none.
+- Proof required: overlapping submissions of the same final answer must
+      converge on one task, return the same task id, and leave the persisted
+      completed intake linked to that task.
+- Proof provided: synchronized API regression in `serve-intake.test.ts`, plus
+      focused intake tests, typecheck, model-independence, and contract lint.
+- Waivers: none.
+- Owner-review items: duplicate final-answer requests are treated as idempotent
+      recovery after the first request completes; they must not erase the
+      handoff or create another task.
+- Apply/revert behavior: apply the serialized answer/materialization operation
+      with its endpoint integration. Reverting restores the stale-write race;
+      no persisted data migration is required.
+
+### Schema Migration Decision: Concurrent Intake Completion Handoff
+
+- Persisted schema touched: none.
+- Scope and change class: existing-record write ordering and idempotency.
+- Existing data impact: no records are rewritten outside the answered intake
+      and its already-defined handoff field.
+- Migration id, required-before-run behavior, and compatibility reader: none.
+- Fixtures and tests: the overlapping final-answer API regression uses the
+      existing intake and task fixtures.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; no persisted-state rollback.
+
+### Contract Touch Decision: Work Inspector Action Agreement
+
+- Work id: `narrative-harness-stage2-live-work-inspector-audit-2026-08-09`.
+- Touched contracts: Work inspector action visibility and labels, plus its
+      compact proof summary. The inspector now treats dependency-waiting work
+      as inspectable but not runnable, labels paused work Resume, and presents
+      shared completion-proof counts when explicit proof paths are compacted.
+- Contracts considered but not touched: task lifecycle, dependency storage,
+      project run control, proof-path schema, release membership, and API
+      response fields.
+- Required follow-up: reinstall the pushed Guildhall build and repeat the
+      Narrative Harness Work-page audit after CI passes.
+- Proof required: a paused selected task shows Resume; a dependency-waiting
+      selected task offers no Start work action; a task with shared expected
+      proof counts does not claim no proof is attached.
+- Proof provided: focused WorkTab component regressions, typecheck, rendered
+      project-flow checks, and live Narrative Harness browser evidence before
+      and after reinstall.
+- Waivers: none.
+- Owner-review items: Open drawer remains available for inspecting waiting work,
+      but it is not presented as an execution command.
+- Apply/revert behavior: apply the inspector action and proof-copy changes with
+      their tests. Reverting is code-only and restores the cross-surface
+      contradiction.
+
+### Schema Migration Decision: Work Inspector Action Agreement
+
+- Persisted schema touched: none.
+- Scope and change class: presentation of existing task, dependency, and proof
+      read-model fields.
+- Existing data impact: none.
+- Migration id, required-before-run behavior, and compatibility reader: none;
+      tasks without proof summary fields retain the existing fallback copy.
+- Fixtures and tests: paused, dependency-waiting, and compact-proof WorkTab
+      fixtures cover the changed behavior.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; no persisted-state rollback.
+
+### Contract Touch Decision: Review Evidence Handoff
+
+- Work id: `narrative-harness-nar-091-review-evidence-handoff-2026-08-09`.
+- Touched contracts: acceptance-criterion proof-path reconciliation, promoted
+      lifecycle point writes, committed-branch review packets, and the bounded
+      persona-review execution budget, plus task-level fan-out review authority.
+      Explicit `review` and `human`
+      criteria now receive stable review evidence targets when no existing
+      review path owns them. Lifecycle writes compare mutations with the
+      effective task that was actually read without persisting derived proof
+      projections. Review packets compare a clean task branch with its recorded
+      base and surface committed screenshot evidence and its README. A reviewer
+      has enough turns to inspect that complete packet before returning its
+      typed verdict. Persona rows remain an audit trail, while one final
+      `reviewer-fanout` verdict owns the aggregate decision and exact stable
+      target ids. An incomplete aggregate approval remains in review as an
+      invalid review contract instead of briefly advancing and bouncing a
+      worker who has no product change to make. Deterministic fallback no
+      longer attempts to settle unresolved review-owned criteria or charges
+      those provider/contract failures to the worker revision budget. Existing
+      max-revision blockers whose latest round is entirely non-substantive are
+      recovered at review even when the older fallback mislabeled them as
+      actionable. Persona review starts from the bounded packet, avoids
+      sequentially reading every changed file, and has a finite 12-turn ceiling.
+      When a generated review proof reuses the exact acceptance-criterion id,
+      that typed criterion approval also satisfies the projected proof path;
+      distinct proof-evidence ids still require explicit approval.
+      Review packets now prioritize the evidence README and production source
+      excerpts ahead of test files, include up to six bounded text excerpts,
+      and are the default persona evidence surface. Default persona fan-out no
+      longer exposes open-ended file-list/read tools; explicit integrations may
+      still add a narrowly scoped read-only tool.
+      The packet presents recorded commands/gates and visual evidence before
+      source excerpts. Up to eight confined committed screenshots (2 MiB each,
+      4 MiB total) are attached as image blocks to the visual-designer turn;
+      paths that escape the task worktree or fail realpath checks are never
+      attached. Non-visual personas continue to receive the bounded text packet.
+      A `revise` result must now attach a concrete `workerInstruction` to every
+      unsatisfied typed finding. Findings that only carry model-authored prose
+      or revision strings are invalid/non-substantive and cannot route a worker
+      or consume product-revision budget; historical blocks made entirely from
+      those findings recover into review. The recovery path now recognizes the
+      fan-out loop's own `reviewer_fanout_max_revisions` code, hydrates its
+      bounded review history before classification, and resolves the matching
+      escalation when the latest round is entirely non-substantive.
+- Contracts considered but not touched: acceptance-criterion schema, proof-path
+      schema, task lifecycle enums, provider prose, fan-out aggregation policy,
+      and owner approval authority. The existing review-verdict shape is reused
+      without adding fields.
+- Required follow-up: rerun NAR-091 through the installed Guildhall build and
+      confirm the screenshot-backed `ac-6` target reaches reviewers by stable
+      id instead of bouncing to an evidence-free worker retry.
+- Proof required: mixed command/review criteria produce both command and review
+      paths without duplicating an existing review owner; stale generated paths
+      disappear when the criterion contract changes; reconciliation is
+      idempotent; a lifecycle point write survives differing read-time proof
+      projections; a clean task branch exposes committed source and screenshot
+      evidence; persona review retains a finite but practical read budget; the
+      aggregate authority persists exact ids and survives the next gate check;
+      incomplete aggregate approvals do not create worker revisions; the real
+      NAR-091 infrastructure-only revision debt self-recovers into a fresh
+      review window; the real NAR-091 flow advances using its committed native
+      evidence matrix.
+- Proof provided: 9 proof-path tests, the focused promoted point-write and
+      committed-review-packet regressions, persona-reviewer tests, and
+      112 focused fan-out/review-contract/proof-authority tests, plus
+      `pnpm typecheck` pass.
+      Installed-app Narrative Harness rerun remains.
+- Waivers: none.
+- Owner-review items: none. This repair exposes evidence already required by
+      the approved task contract; it does not approve that evidence itself.
+- Apply/revert behavior: apply proof reconciliation and reviewer budget
+      together. Reverting is code-only and restores the evidence-free loop.
+
+### Schema Migration Decision: Review Evidence Handoff
+
+- Persisted schema touched: none.
+- Scope and change class: reconciliation of existing acceptance criteria into
+      the existing proof-path shape, plus a runtime execution-budget constant.
+- Existing data impact: active tasks gain a generated review path only when
+      their typed review criterion is otherwise unrepresented. Existing
+      authored review paths remain authoritative. No lifecycle or review-packet
+      data is rewritten merely because an effective proof projection differs.
+- Migration id and required-before-run behavior: none; reconciliation occurs
+      through the same runtime path that already materializes command proof.
+- Compatibility reader: existing proof paths and review verdicts remain valid.
+- Fixtures and tests: focused proof-path and persona-reviewer regressions plus
+      the installed NAR-091 flow.
+- Owner-facing plan text: no migration action is required.
+- Rollback/revert behavior: code-only revert; generated projection rows can be
+      rebuilt from the unchanged acceptance contract.
+
+## 2026-08-09 - Stop-Ship Usability Mandate: Human Control Must Become Coherent
+
+**Owner report. Do not treat this as a list of isolated UI bugs.** The current
+product is unusable for an owner trying to operate a live project. The app has
+accumulated information and controls without an intelligible decision flow. It
+is failing the reason Guildhall exists: to be more usable than repeatedly
+prompting an agent with opaque context.
+
+### Reproduced owner journey evidence
+
+On the Looma + Knit Work list, the owner observed all of the following in one
+normal attempt to make progress:
+
+- The work list shifts after initial render. Selecting `Revisit multi-action…`
+  is then replaced a moment later by selection of `Keep docs/component…`.
+  Selection and list geometry must remain stable across background refreshes;
+  no unsolicited reselection is acceptable.
+- Bottom chrome claims `17 current tasks when you resume` while the project is
+  actively working. Shared project run state, bottom chrome, task list, and
+  top actions are contradictory.
+- The active `Pause` command is visually wrong: it lost the established
+  red/orange-red treatment that distinguishes an interrupting control from an
+  ordinary navigation action.
+- Opening `Keep docs/component…` exposes no usable action. Its enabled
+  `Action` tab does nothing. Its only actual approval command is hidden under
+  `Spec`, below a long scroll, in an unpinned `Spec draft awaiting approval`
+  panel. The owner took roughly a dozen navigation steps to find the only
+  action that could advance the task.
+- `10 specs are ready for your review` is presented as inert, unexplained
+  status text. A count that implies owner work must be a direct, meaningful
+  route to that work or must not be elevated as a call to action.
+- Approving the discovered spec replaces the panel body with a raw migration
+  error: `Run required Guildhall migration
+  0.13.27/acceptance-command-proof-path-reconciliation before starting this
+  project.` This is unacceptable both operationally and as error presentation.
+  Guildhall must proactively run safe required migrations before a user action,
+  or present one concise repair action with a plain-language reason and an
+  outcome. It must never strand the user inside a replaced action panel.
+- Tab hopping reveals repeated, dense, largely duplicative status/proof/task
+  prose. The quantity is itself a product defect: it prevents decision-making
+  rather than supporting it.
+
+### What the next agents must do
+
+This is a **stop-ship, end-to-end product-flow reset**, not another visual
+polish pass. Start from a live registered project and drive the exact owner job:
+open Work, choose a task, understand why it needs attention, take its primary
+action, see an unambiguous result, and return to the next meaningful choice.
+Do this using a fresh-owner perspective and record browser evidence before
+claiming any fix.
+
+The required product standard is deliberately small. It is intentionally a
+**radical subtraction mandate**, not a request to rewrite the same reports in
+shorter sentences. Guildhall has mistaken the existence of internal context for
+a reason to display it. That stops here.
+
+**Assume every current product view, tab, card, counter, feed, and stacked
+“live” surface has failed until it earns its way back from the owner job.** Do
+not preserve the present information architecture. In particular, two “live”
+views showing overlapping project state are a design failure, not a reason to
+refine their copy or alignment: one must be removed or the concepts must be
+recomposed into one coherent owner surface.
+
+The governing audit question is:
+
+> Could a user jump in here, get instantly oriented into where progress is at
+> (which milestone, which tasks), what has been completed, resolve any
+> user-pending questions or approvals, and jump back out in under a minute?
+
+If the answer is not an unqualified yes, the route has failed. Do not answer
+this by inspecting the data model or explaining the page after the fact. Time a
+fresh owner reading and acting through the actual installed product. The amount
+of required human reading is itself decisive evidence: if someone must read a
+report, traverse tabs, or scroll through accumulated context before they can
+orient and act, the information architecture is wrong.
+
+1. Every screen has one clear purpose and a small set of choices. A task that
+   needs owner input shows its actual primary action immediately in the owning
+   surface. Do not hide it in an off-tab, below-the-fold, unpinned panel.
+2. The shared project summary/action model is the only source for run state,
+   selected work, owner-required counts, and next action. A background refresh
+   cannot reorder the list, change selection, or contradict the visible state
+   without a deliberate user-visible explanation.
+3. Counts, banners, and bottom chrome are only shown when actionable; each
+   actionable count links to the precise filtered work it names. Do not invent
+   urgency after work is running, completed, or otherwise not owner-blocked.
+4. Project-control commands use durable semantics: Pause is a clear
+   interrupting/destructive control and visually retains the established
+   red/orange-red affordance. Its effect must be visible across all surfaces.
+5. The system owns its maintenance. Safe pending migrations run before the
+   interaction path that needs them. Any migration that requires a decision has
+   an explicit repair flow; raw migration identifiers, stack-like errors, and
+   body-replacing failure text are never the owner experience.
+6. Rebuild product information architecture from the owner’s decisions, with
+   no inheritance obligation to existing screens, tabs, routes, or panels.
+   The only three possible destinations for existing information are
+   **decision**, **specific follow-up detail**, or **deletion**. “Diagnostics”
+   is not a default fourth destination.
+   - A default product screen is a decision console, not a status report. It
+     shows only: what is happening now, whether the owner needs to intervene,
+     the one to three choices they can make, and the immediate consequence of
+     each choice. If there is no decision, there is no elevated panel.
+   - Details may appear only after the owner chooses to inspect a specific
+     item. They answer a concrete follow-up such as “why is this blocked?” or
+     “what will approval change?” They do not repeat project summaries,
+     timelines, proof inventories, or task prose that was already available
+     elsewhere.
+   - Diagnostics may retain only information that has a demonstrated debugging
+     use and cannot be obtained from source, logs, or an existing engineering
+     tool. It is absent from the product path and requires deliberate,
+     secondary navigation from a clearly named advanced/diagnostics affordance.
+     It must never be a top-level tab, a default-open card, or the only route
+     to an owner action. Most current operational detail should be deleted from
+     the product entirely, not relocated here.
+7. Start every affected view by deleting information, tabs, cards,
+   counters, and copy. Do not begin by compressing paragraphs, changing labels,
+   adding accordions, or restyling the existing layout. A fact earns default
+   visibility only if its absence would prevent the owner from making the
+   decision on that screen right now. “It might be useful,” “it explains the
+   system,” and “an agent may need it later” are not valid reasons.
+8. Remove duplicate state at the product boundary. A project fact has at most
+   one visible home, and only when it changes a live owner decision. It is not
+   re-summarized as another panel, banner, tab, activity item, count, or
+   “live” view. An internal fact normally has zero owner-visible homes.
+9. Reduce navigation to the owner's actual loop. A person must not traverse
+   multiple tabs, drawers, or long scrolls to perform the action Guildhall just
+   told them to take. If the action is real, it is adjacent to the explanation;
+   if it needs context, that context is compact and adjacent too.
+
+### Non-negotiable information rules
+
+- No existing component, tab, route, or view has a presumption of survival.
+  Its code, tests, accumulated data, or prior design work are not reasons to
+  keep it. Delete it unless a fresh-owner scenario proves that it enables a
+  distinct decision that no surviving surface already handles.
+- Do not make “more information” a substitute for a decision. No vague status
+  prose, aggregate counts, activity feeds, proof summaries, readiness blobs,
+  release narratives, or task descriptions belong in the primary path unless
+  they immediately change the choice available to the owner.
+- Do not put operational debugging behind a friendly product label. “Action,”
+  “Spec,” “Thread,” “Overview,” and similar top-level surfaces are not dumping
+  grounds. Merge or remove them until each has a distinct owner job.
+- “Progressive disclosure” means a user requests a specific missing answer;
+  it does **not** mean putting the same wall of text inside a collapsed card or
+  a second tab.
+- Do not relocate every removed fact to Advanced or diagnostics. If a fact has
+  no demonstrated owner or engineering recovery use, remove it entirely. The
+  normal interface should know very little; the source code, durable logs, and
+  machine-readable artifacts are already the proper homes for most system
+  detail.
+- There cannot be two primary views of the same live state. A second timeline,
+  activity stream, live feed, readiness report, or stacked status region must
+  prove a distinct owner decision or be deleted. Different visual treatments
+  of the same answer are duplicate UI, not “more context.”
+
+### Required acceptance evidence before declaring this recovered
+
+- Live installed-app proof on `localhost:7777`, not component tests alone.
+- The Looma + Knit sequence above is repeated at the original desktop viewport,
+  a narrower desktop viewport, and mobile where applicable. Capture evidence
+  for initial render and the post-refresh state to prove the list and selection
+  remain stable.
+- For every displayed next-action/count/status claim, compare the authoritative
+  API, top action, Work list, selected task inspector, Thread, and bottom
+  chrome. Any disagreement is a shared summary-model defect to repair before
+  copy or styling.
+- A zero-context owner can reach and complete a pending spec approval in one
+  obvious flow, with the action visible without tab hunting or long scrolling.
+- Each rebuilt route has an explicit inventory of every old visible element:
+  retained with its owner decision, moved to a specific follow-up detail with
+  its exact question, retained in diagnostics with its engineering recovery
+  use, or deleted. “Existing feature,” “useful context,” and “might be needed”
+  are rejected classifications. Screenshots and the route contract must prove
+  that the redesign removed irrelevant context rather than shortening,
+  collapsing, or relocating it by default.
+- A fresh-owner test names the exact decision and action for every visible
+  card, count, tab, and control. Anything that cannot pass that test is removed
+  or moved out of the normal product path.
+- A timed fresh-owner test answers the governing question in under one minute:
+  identify the current milestone and task state, recognize completed work,
+  resolve any immediately pending approval/question, and leave with no
+  unanswered “what do I do here?” prompt. Record reading time as well as click
+  count; a route that technically works but requires substantial reading fails.
+- Migration repair is exercised from the same owner path and completes before
+  approval; the owner sees a concise success/failure result rather than an
+  internal implementation error.
+
+Do not call a flow audit complete because individual controls render, unit tests
+pass, a wall of text was condensed, or a reviewer can reconstruct the state
+from raw data. The standard is whether an owner who did not build Guildhall can
+tell what is happening, why it matters, and what they can do next within a few
+seconds, without being asked to interpret Guildhall's internal thinking.
+
+## 2026-08-12 - Owner Entry-Flow Reset (In Progress)
+
+### User job
+
+An owner opens Guildhall, picks the project that needs them, sees the current
+milestone and the one action that changes it, takes that action, and returns to
+work. The first two routes must provide orientation and an executable decision
+in under one minute, without a drawer, tab hunt, report reading, or duplicated
+next-action message.
+
+### Live baseline
+
+- Installed `0.13.2` at `localhost:7777`, with `/api/stale-server` reporting
+  `stale:false`, rendered seven projects as a Guild hall, a five-number metric
+  strip, Work mix, Attention, Running now, dense project cards, and a detail
+  drawer. The owner’s actual decision was buried under six summaries.
+- The authoritative `/api/service/projects` response already gave Looma + Knit
+  one shared action: `owner_review_required`, routed to
+  `task-import-1rpbo8n`. The home and overview then restated that same answer
+  in several incompatible visual forms.
+- Live Looma + Knit Overview repeated the primary action in top chrome and a
+  `Do this next` card, then added Work mix, Current release, Blocked work, Next
+  run, and a bottom status sentence that contradicted the visible paused state.
+  It required reading a report before an owner could act.
+
+### Reset inventory
+
+- **Delete from default home:** Guild hall role avatars, fleet metric strip,
+  Work mix, Attention, Running now, task activity charts, project detail
+  drawer, and its duplicate project status/count summaries. None answers a
+  distinct first-screen owner choice.
+- **Retain on default home:** one stable project row per project, its current
+  state, one short outcome sentence, and one direct project/open-or-pause
+  control. A project needing an owner decision earns a visible direct route to
+  that decision.
+- **Delete from default overview:** the second cross-route `Do this next`
+  panel, Work mix, map preview, glance cards, blocked-work list, next-run
+  panel, signals grid, live ticker, and release report cards. The default
+  overview keeps one current milestone/progress sentence and the authoritative
+  primary action. Specific work is reached through that action or the Work
+  route, not duplicated here.
+- **Not moved to diagnostics:** the removed fleet/task/release/timeline
+  summaries. They are duplicated or irrelevant to an immediate owner recovery,
+  so they do not earn a diagnostics destination.
+
+### Contract Touch Decision: Entry-Flow Presentation Reset
+
+- Work id: flow-audit owner entry-flow reset.
+- Touched contracts: existing `ProjectActionModel` presentation at home and
+  project overview; project route ownership of the primary action.
+- Contracts considered but not touched: task lifecycle, project summary
+  projection persistence, action ranking, readiness calculation, migration
+  protocol, and API payload schemas. The routes consume the same shared action
+  model; they do not create a client-side alternative.
+- Required follow-up: prove top chrome, overview action, Work selected task,
+  Thread, and bottom chrome agree after the reset; repair the shared model if
+  they do not.
+- Proof required: installed-app browser evidence at the reported desktop,
+  narrow desktop, and mobile dimensions; stable post-refresh selection; a
+  timed fresh-owner pass with click count and reading time.
+- Proof provided: focused overview and shell regressions (65 tests), typecheck,
+  and a production build. The installed app was rebuilt with `pnpm dev:install`,
+  restarted, and `/api/stale-server` returned `stale:false` from the new
+  artifact. On Looma + Knit at 1280x720, Overview is one 249px-high decision
+  region with no document overflow: project, current stage, one owner-action
+  sentence, and `Open item`/`View work`. `Open item` routed directly to
+  `/projects/looma-knit/work?task=task-import-1rpbo8n`, the shared action's
+  target. Narrow-desktop and mobile proof remain required before this route is
+  complete.
+- Waivers: none.
+- Owner-review items: the exact set of surviving project controls is subject to
+  the live owner pass; no removed report surface is grandfathered in.
+- Apply/revert behavior: apply the route reset together so a project has one
+  action authority. Revert code only; no persisted project state changes.
+
+### Schema Migration Decision: Entry-Flow Presentation Reset
+
+- Persisted schema touched: none.
+- Scope and change class: client presentation deletion and route composition.
+- Existing data impact: none.
+- Migration id and required-before-run behavior: none.
+- Compatibility reader: existing project and action-model payloads remain
+  unchanged.
+- Fixtures and tests: home/overview rendering regressions plus installed-app
+  flow proof.
+- Owner-facing plan text: no project migration is required.
+- Rollback/revert behavior: code-only revert.
+
+### Follow-up finding: Work is the next stop-ship route
+
+The repaired Overview correctly reached the selected Looma + Knit item, but
+the destination immediately presented a dense filter strip, a ten-row table,
+and a full inspector beside it. This violates the same one-minute owner job.
+Do not patch its copy or add another summary panel. Rebuild Work around the
+selected owner decision first; retain a deliberately entered queue only when a
+user chooses to browse work. Test the original selection-shift report before
+retaining any auto-selection behavior.
+
+### Repair: Work selection has one route authority
+
+The Looma + Knit reselection was caused by an old `?task=` URL value remaining
+authoritative after a user chose a different list row. Refresh then restored the
+old item. A Work-row click now writes the chosen task into the route; a direct
+link still selects and filters its named task, while a user-click route update
+does not replace the user's current filter. The focused Work suite covers mouse
+and keyboard selection plus legacy route parameters (46 passing tests). Live
+post-refresh proof remains required.
+
+### Repair: spec approval is no longer below the dossier
+
+The prior drawer put `Spec draft awaiting approval` after the review plan,
+handoff packet, task brief, spec body, and acceptance details. A direct review
+route therefore made the action look absent. The Spec route now begins with one
+`Your decision` card when approval is pending: it says what approval unlocks
+and exposes `Approve spec` before the reading material. The old bottom approval
+card was deleted. A rendered regression asserts the button precedes the Spec
+heading and invokes the supplied approval action. Installed-app proof and the
+migration-repair outcome are still required.
+
+### Repair: approval migration failures enter the shared repair flow
+
+Task approval no longer leaves the owner on a raw required-migration error.
+The drawer hands that typed failure to Router, which navigates to the scoped
+Overview repair intent; ProjectView consumes that intent by opening its existing
+migration modal. Typecheck passes. Add a rendered and installed-app approval
+proof before considering the full recovery flow complete.
+
+#### Contract Touch Decision: approval repair handoff
+
+- Work id: `flow-audit-approval-migration-repair`.
+- Touched contracts: none; the drawer continues to consume the existing task
+  action error payload and the project view continues to consume the existing
+  migration-status endpoint.
+- Considered but not touched: task action response schema, migration schema,
+  project summary/action model, and persisted task state.
+- Required follow-up and proof: drawer typed-error regression, repair-intent
+  modal regression, typecheck, production build, and installed-app modal proof.
+- Apply/revert behavior: client-only routing change; reverting restores the
+  previous raw-error presentation and does not alter project data.
+
+#### Schema Migration Decision: approval repair handoff
+
+- Persisted schema touched: none.
+- Change class and existing-data impact: client error routing only; none.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader required; test fixtures cover the typed error; code-only
+  revert.
+
+Installed-app evidence, 2026-08-12: after `pnpm build`, `pnpm dev:install`,
+and a local-service restart, `/api/stale-server` reported `stale:false` from
+the current packaged build. Visiting
+`/projects/looma-knit/overview?repair=migration` opened the real `Migrate
+project` modal and named its one required migration, affected scope, and
+`Apply required migration` action. The mutation itself was intentionally not
+applied to the active Looma + Knit project during this audit. The drawer's
+typed-error regression and the repair-intent modal regression both pass.
+
+### Live finding: Work still fails the one-minute owner job
+
+Installed Looma + Knit Work at
+`/projects/looma-knit/work?task=task-import-1rpbo8n` rendered a filter strip,
+ten task rows, duplicate title/description text, a full inspector, and a
+separate recent-progress message. It also claimed `17 current tasks when you
+resume` while the project is working. This is not a layout polish issue:
+replace the route with a focused owner-decision surface and an explicitly
+entered queue. Do not retain the filters, table, inspector, or duplicate
+progress report as the default route merely by compressing them.
+
+#### Work-route user job before implementation
+
+When an owner opens Work from the project action or a direct task link, they
+must see the current milestone, the one work item that needs their decision,
+what that decision changes, and its executable action without reading a queue
+or opening a drawer. They may deliberately choose `Browse work` only after
+that decision is clear. The API/shared summary, selected task, visible action,
+and status chrome must agree; a delayed refresh must not change selection or
+move the primary action.
+
+#### Contract Touch Decision: focused Work route
+
+- Work id: `flow-audit-work-focus`.
+- Touched contracts: the existing `ProjectActionModel.primaryAction`,
+  `StartReadiness.focusTaskId`, task display-key, and release-summary response
+  fields are presented directly by Work.
+- Considered but not touched: task schema, project-summary computation,
+  route schema, persisted selection, release state, and task status rules.
+- Required follow-up and proof: focused-route and retained-inventory render
+  suites, typecheck, installed desktop/narrow/mobile evidence, and a
+  selection-refresh check on Looma + Knit.
+- Apply/revert behavior: client-only route presentation. `?view=queue` retains
+  the existing inventory while its eventual replacement is designed; no project
+  data is changed.
+
+#### Schema Migration Decision: focused Work route
+
+- Persisted schema touched: none.
+- Change class and existing-data impact: derived client presentation only;
+  none.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader is required; focused and queue fixtures cover both
+  paths; code-only revert.
+
+#### Installed focused-Work evidence, 2026-08-12
+
+- Rebuilt, installed, and restarted the packaged app. `/api/stale-server`
+  reported `stale:false` from the current package before the browser pass.
+- At `/projects/looma-knit/work?task=task-import-1rpbo8n`, desktop now showed
+  one decision: the Stage 1 milestone, `0 of 17 complete`, short key
+  `LOO-EBUYE7`, the pending spec title, and `Review spec`. The default queue,
+  inspector, filters, recent-progress feed, shell alert, and bottom ticker
+  were absent. `Browse work` is the only deliberate route to the old
+  inventory.
+- The shared `owner_review_required` state now wins over scoped-work fallback
+  text, so a focused route cannot say `17 current tasks when you resume` while
+  it asks for review. The shell and footer defer to Work when that route owns
+  the same focused task, rather than repeating the action.
+- Geometry proof: document width equaled viewport width at `1280x720`,
+  `960x720`, and `390x844`. On mobile the decision card was 374px wide inside
+  a 390px viewport and its `Review spec` button was a visible 316px-wide
+  full-row control. A post-refresh wait retained `LOO-EBUYE7` and the same
+  selected task title.
+- Click proof: `Review spec` opened the selected drawer directly on its
+  approval card. Confirming approval encountered the real required migration
+  and routed to a `Migrate project` modal with one named migration and an
+  explicit `Apply required migration` action; no raw internal error was
+  rendered. The migration was not applied to the active Looma + Knit project.
+
+### Remaining stop-ship finding: direct task review is still a dossier
+
+The direct approval action is now visible and executable, but after it opens,
+the task drawer still exposes seven top-level tabs and a long legacy packet of
+checkpoint, brief, spec, acceptance, and provenance material below the
+decision. The next task-detail pass must retain the approval outcome and any
+owner question, then remove the rest of that default reading burden instead
+of moving it among shallow tabs. The task detail needs the same one-minute
+route contract as focused Work.
+
+#### Task-review user job before implementation
+
+For a pending spec, the drawer's default job is only: identify the work,
+understand what approval permits, inspect the concise task outcome and finish
+conditions, then approve or ask for a correction. Checkpoint packets,
+transcripts, reviewer budgets, acceptance-command editing, provenance,
+history, and task-management utilities do not earn a place in that initial
+decision. A full record may remain reachable only through one explicit
+secondary route after the decision is clear; it must not be a parallel tab
+strip that suggests seven equally important jobs.
+
+#### Contract Touch Decision: focused pending-spec review
+
+- Work id: `flow-audit-task-review-focus`.
+- Touched contracts: the existing task `resume` action is invoked with its
+  existing `revisionTarget: 'spec'` field when the owner requests a revision.
+- Considered but not touched: task status schema, approval action schema,
+  task-detail payload, persisted task content, history/provenance schemas, and
+  task route schema.
+- Required follow-up and proof: drawer regression proving the default has no
+  tab strip or packet, approval and revision action tests, typecheck, build,
+  and installed Looma + Knit desktop/narrow/mobile proof.
+- Apply/revert behavior: a client route presentation change using the existing
+  action contract. `?detail=full&tab=spec` deliberately retains the legacy
+  full record; reverting restores the former tabbed default without changing
+  task data.
+
+#### Schema Migration Decision: focused pending-spec review
+
+- Persisted schema touched: none.
+- Change class and existing-data impact: client presentation and existing
+  action invocation only; none.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader is required; TaskDrawer regressions cover focused and
+  full-record paths; code-only revert.
+
+#### Rendered pending-spec evidence, 2026-08-12
+
+- The TaskDrawer suite passes with 56 tests. A pending `spec_review` task now
+  renders `Approve spec`, `Request changes`, a concise outcome, and one
+  `Read full task record` escape hatch with no tab strip or handoff packet.
+- A revision request posts the existing typed `resume` action with
+  `revisionTarget: 'spec'`; detailed acceptance/proof inspection tests now
+  deliberately request `?detail=full` instead of treating it as normal review
+  content.
+- `pnpm typecheck` passes. Installed-app and geometry evidence remain required
+  before this finding can be closed.
+
+#### Installed pending-spec evidence, 2026-08-12
+
+- After `pnpm build`, `pnpm dev:install`, and a service restart,
+  `/api/stale-server` reported `stale:false` from package
+  `0.13.2-1786558432-40301`.
+- From the real Looma + Knit focused Work route, `Review spec` opened
+  `task-import-1rpbo8n?tab=spec` with the short task key, one decision, two
+  executable choices, and `Read full task record`. The review drawer had zero
+  top-level tabs; its body was 406 characters at `960x720` rather than the
+  legacy packet. The explicit full-record link opened the retained legacy
+  seven-tab record at `?detail=full&tab=spec`.
+- Geometry proof: document width equaled viewport width at `1280x720`,
+  `960x720`, and `390x844`. On mobile the drawer measured 359px inside the
+  390px viewport; both approval choices remained visible without horizontal
+  overflow.
+- Approval click proof: the real confirmation modal appeared, then the active
+  project correctly routed the required migration to
+  `/overview?repair=migration`. The `Migrate project` modal named one required
+  migration and exposed `Apply required migration`; the former raw migration
+  error was absent. The migration was intentionally not applied to Looma +
+  Knit during this audit.
+- Final packaged visual check: the drawer title is now one ellipsized line
+  (17px client height at the default desktop viewport), while the focused body
+  exposes only `Request changes`, `Approve spec`, and `Read full task record`.
+
+### Repair: Overview now owns one named owner decision
+
+The required-migration recovery action is now executable and understandable,
+but the underlying Overview still shows `10 specs are ready for your review
+before work can continue`, `Open item`, and `View work` alongside the modal.
+The count is not itself an executable decision, and it competes with the one
+repair action. The migration modal remains the active recovery decision when
+it is open. Outside that repair state, Overview now consumes the same focused
+action model as Work rather than parallel generic prompts.
+
+#### Overview user job before implementation
+
+When an owner opens Overview, they must see the active milestone, exact
+milestone progress, the focused work item selected by the shared action model,
+why that one item is next, and one button that opens it. A count may add
+context but cannot replace the selected item or become a second decision.
+Overview must not show a generic
+`Open item` label, a duplicate `View work` route, or locally choose a
+different task from Work and the task drawer.
+
+#### Contract Touch Decision: owner-review action wording
+
+- Work id: `flow-audit-overview-owner-decision`.
+- Touched contracts: the derived `ProjectActionModel` now maps
+  `owner_review_required` readiness to a stable review command, its existing
+  focused task target label, and a typed review button label.
+- Considered but not touched: persisted task schema, start-readiness schema,
+  release-summary schema, migration schema, task selection rules, and route
+  schema.
+- Required follow-up and proof: action-model regression, Overview rendered
+  regression, typecheck, installed Looma + Knit API/model agreement, and
+  desktop/narrow/mobile browser proof.
+- Apply/revert behavior: a deterministic presentation projection change; no
+  persisted project data changes. Reverting restores the generic action text.
+
+#### Schema Migration Decision: owner-review action wording
+
+- Persisted schema touched: none.
+- Change class and existing-data impact: additive optional action-model target
+  label plus Overview action removal only; existing readers remain compatible.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader is required; action-model and Overview tests cover the
+  behavior; code-only revert.
+
+#### Installed Overview evidence, 2026-08-12
+
+- The real Looma + Knit API now returns one `owner_review_required` action:
+  `Review a spec`, target task `task-import-1rpbo8n`, short display key
+  `LOO-EBUYE7`, and `Review next spec`. Its task ID, title, route, and review
+  count agree with start readiness and focused Work.
+- At `/projects/looma-knit/overview`, the route shows only the milestone,
+  exact shared progress (`0 of 17 complete`), the named review command, one
+  single-line task target, the contextual count, and one `Review next spec`
+  control. The prior `Open item` and secondary `View work` controls are absent.
+- At desktop, narrow desktop, and `390x844` mobile, document width matched the
+  viewport and the one action remained visible. The mobile action measured
+  316px wide. One click opened the same focused Work route and its `Review
+  spec` action for `LOO-EBUYE7`.
+- Regressions: action-model, ProjectOverviewTab, focused Work, and ProjectView
+  suites pass (111 tests total); typecheck and packaged build pass.
+
+### New finding: installed-service handoff can require a second start
+
+After consecutive `pnpm dev:install` runs, the first immediate
+`guildhall stop && guildhall start` tried to spawn the now-deleted previous
+packaged runtime and raised `ENOENT`; a later automatic LaunchAgent restart
+did eventually recover. The new `~/.guildhall/app/current` pointer was already
+correct and the final running service reported `stale:false` from
+`0.13.2-1786559572-94576`. Audit the installer/launcher handoff for an atomic
+runtime transition; do not make operators retry or wait through a normal
+restart.
+
+#### Installed-service handoff user job before implementation
+
+After installing an update, an operator can run `guildhall stop && guildhall
+start` once and immediately get the updated service. The installer must first
+quiesce the old LaunchAgent and its child before it removes that versioned
+runtime; then it may publish the new current pointer and load the replacement
+agent. A deleted runtime must never be a possible service executable.
+
+#### Contract Touch Decision: installed service handoff
+
+- Work id: `flow-audit-installed-service-handoff`.
+- Touched contracts: the packaged macOS installer lifecycle now has an explicit
+  quiesce-before-prune ordering for the user-level LaunchAgent and its recorded
+  service process.
+- Considered but not touched: project/task/release schemas, service API
+  response schema, LaunchAgent plist command shape, and portable detached
+  service startup. They retain their existing contracts.
+- Required follow-up and proof: installer contract regression, macOS package
+  build, installed update followed by one stop/start, stale-server proof, and
+  retained current-package launch verification.
+- Apply/revert behavior: if the old service cannot stop, the installer fails
+  before changing `current` or pruning payloads. Reverting the code restores
+  the unsafe ordering and is not acceptable without an equivalent barrier.
+
+#### Schema Migration Decision: installed service handoff
+
+- Persisted schema touched: none. The existing service-state file is read only
+  to identify the process that must exit before install pruning.
+- Change class and existing-data impact: installer lifecycle ordering only.
+  Existing malformed or stale state remains safely removable after LaunchAgent
+  quiescence.
+- Migration, compatibility reader, fixtures, and rollback: no migration or
+  compatibility reader is required; release-artifact regression and installed
+  service proof cover the behavior; code-only revert.
+
+#### Installed service-handoff evidence, 2026-08-12
+
+- The installer now unloads `io.guildhall.agent`, waits for the recorded
+  service PID to exit, clears its state record, and only then replaces
+  `~/.guildhall/app/current` or prunes any versioned payload. A service that
+  will not stop leaves the prior install untouched rather than creating a
+  deleted-runtime launch path.
+- `sh -n scripts/install.sh` and the release-artifact, dev-install-layout,
+  launch-agent, and CLI lifecycle suites pass (53 tests).
+- With the previous packaged service running, `pnpm dev:install` installed a
+  new package. One subsequent `guildhall stop && guildhall start` succeeded
+  without `ENOENT`; `/api/stale-server` returned `stale:false` and named the
+  new `0.13.2-1786559900-10575` runtime. The active install was the sole
+  retained versioned payload after the handoff.
+
+### Repair: project pause remains a destructive project control
+
+The shared action model correctly keeps `pauseEnabled` true when a project is
+blocked on an owner review: the owner may still deliberately stop future
+project processing. The top-bar control previously rendered that real Pause
+action as a neutral secondary button whenever nothing was actively executing,
+which made it look like a status rather than an intentional control. Pause now
+uses the danger treatment consistently; its shared enablement and endpoint are
+unchanged.
+
+### Repair: remove the duplicate project ticker
+
+#### Project-shell user job before implementation
+
+When an owner opens Work, Thread, Release, or any other project route, that
+route must own its decision. Guildhall must not append a second status strip
+which repeats a raw event, stale count, or already-visible owner decision.
+Timeline is the one intentional place to inspect activity; it is available in
+the project navigation when that history is actually needed.
+
+- Finding: ProjectView ranked recent events and readiness locally, then rendered
+  the result as a persistent footer on almost every route. The footer repeated
+  Work's selected task, Thread's owner input, or release status and sometimes
+  supplied a second "live" presentation below the page that already described
+  the same work.
+- Fix: remove the shell ticker, its client-side event ranking, five-second
+  refresh loop, and responsive CSS. Project state and controls remain on their
+  owning route; Timeline remains the activity surface.
+- Contract Touch Decision: no persisted or API contract changes. The removal
+  stops a duplicate client presentation rather than changing readiness, run,
+  selection, owner-input, or event authority. ProjectView regressions must
+  prove terminal Thread and live Work add no footer report.
+- Schema Migration Decision: none; no stored data is touched.
+
+### Repair: Thread follows the shared owner decision
+
+#### Thread user job before implementation
+
+When the owner opens Thread from a project blocked on a named approval or
+question, Thread must open that same work item. The server's last active turn
+is history, not permission for Thread to override the shared action model and
+send the owner into unrelated work.
+
+- Finding: `defaultThreadChainId` ignored the shared primary task whenever
+  start readiness was blocked. On Looma + Knit, readiness and Overview named
+  `task-import-1rpbo8n` for spec review while Thread selected an unrelated
+  historical active turn.
+- Fix: use the shared execution focus or primary action task for default Thread
+  selection regardless of whether Guildhall can presently start more work.
+- Contract Touch Decision: selection consumes the existing shared action-model
+  task ID; no action, route, project, or stored-thread schema changed.
+- Schema Migration Decision: none; selection is a client projection.
+
+#### Evidence, 2026-08-12
+
+- `ThreadTab.svelte.test.ts` now supplies a blocked owner-review action and an
+  unrelated active worker turn, then proves Thread selects the review task.
+  The focused suite passes: 120 tests.
+- The live Looma + Knit project reports `task-import-1rpbo8n` as the shared
+  primary owner-review task while its Thread endpoint identifies a different
+  historical active turn. This is the real disagreement the regression covers.
+- `pnpm build`, `pnpm dev:install`, `guildhall stop`, and `guildhall start`
+  completed; `/api/stale-server` reports `stale: false` for the installed
+  runtime. Fresh desktop, narrow-desktop, and mobile browser proof remains an
+  outstanding audit item because the browser client could not connect to the
+  restarted localhost service during this run.
+
+#### Follow-up: Thread cannot substitute activity for a missing decision
+
+- Finding: the selection fix was incomplete. The live Looma + Knit owner action
+  targets `task-import-1rpbo8n`, which is deliberately absent from the Thread
+  projection. Falling back to the server's old active turn made a paused task
+  look like the current project and rendered a list, history, and active dock
+  that could not answer the owner's actual question.
+- Fix: Thread now takes the shared primary action from its current response as
+  well as the shell snapshot. When that action's task is not in the Thread
+  projection, the default screen contains only the current decision and its
+  direct action. `Browse project activity` is an explicit escape hatch; the
+  stale thread is no longer a substitute for the project decision. The project
+  shell also defers to Work, Thread, and Release when one of those routes has
+  an action-model decision, so it does not repeat the same action above the
+  route that owns it. Secondary routes retain the shell notice when they only
+  have legacy start-readiness data.
+- Contract Touch Decision: consume the existing `ProjectActionModel` response
+  field in Thread and compare its task ID to the existing typed Thread turn
+  task IDs. Considered but unchanged: action ranking, action route semantics,
+  task state, thread persistence, response shape, and selection model for a
+  represented owner action. Proof required/provided: a component regression
+  supplies an action whose task is absent from Thread, asserts the list/detail/
+  dock are not rendered, and verifies the direct action preserves its task
+  route. Apply/revert: applying prevents stale history from taking ownership;
+  reverting restores that misleading fallback.
+- Schema Migration Decision: none; this is an in-memory presentation of
+  existing response fields and stores no new data.
+
+### Repair: Release starts with the owner decision
+
+#### Release user job before implementation
+
+When the owner follows a release link, they must see the current release,
+progress, and the one decision that needs them. If the project is waiting for
+a spec review, the release route must offer that review directly. Counts,
+checkout detail, repository state, and task tallies are inspection material;
+they must not be mistaken for the next action.
+
+- Finding: the default release route fetched readiness independently, derived
+  a local verdict, then led with duplicate counts and a blocker stack. It could
+  receive the owner from Overview without exposing an executable action.
+- Fix: the default release view consumes `ProjectDetail.actionModel` from the
+  project shell. It renders one progress marker plus the shared action and its
+  direct route. Release checks remain a deliberate inspection route. A shipped
+  release now ends with an unambiguous completion state and no invented follow-
+  up action.
+- Shared-model correction: a checkout inspection error now counts as a release
+  blocker while retaining its error classification. The release verdict cannot
+  report ready merely because the inspection found zero dirty files before it
+  failed.
+- Contract Touch Decision: `ProjectDetail.actionModel` and
+  `ProjectReleaseReadiness` are existing cross-surface contracts. ReleaseTab
+  now consumes them rather than re-ranking raw readiness signals. No endpoint
+  response shape, persisted project data, action route contract, or task schema
+  changes. Proof: ReleaseTab and ProjectView regressions cover direct shared
+  action routing, terminal shipped state, removed default diagnostics, and
+  checkout-inspection failure.
+- Schema Migration Decision: none; this changes only presentation and derived
+  readiness handling for existing in-memory response fields.
+
+#### Evidence, 2026-08-12
+
+- The focused ReleaseTab, ProjectView, and ThreadTab suites pass: 211 tests.
+  The ReleaseTab regression proves `Review next spec` uses the shared action
+  route including its focused task query, rather than routing to a generic
+  release report.
+- Installed browser proof on Looma + Knit at `1280x720`: the release route
+  shows `0/17 done`, the short task key, one review decision, and a visible
+  `Review next spec` control. That control opens the focused Work item; its
+  `Review spec` control opens a drawer with `Approve spec` immediately visible.
+  The document and body both measured `1280px` wide, so this route had no
+  page-level horizontal overflow.
+- `pnpm build`, `pnpm dev:install`, `guildhall stop`, and `guildhall start`
+  completed; `/api/stale-server` reports `stale: false` for the installed
+  runtime. Narrow-desktop and mobile browser proof remain open audit work.
+
+### Repair: Work is a decision list, not a project database
+
+#### Work user job before implementation
+
+When an owner deliberately browses Work, they can scan the relevant slice,
+recognize a short task key, title, and state, select one task without the
+selection changing, and open its real action immediately. The list is not a
+place to read timestamps, priority, source excerpts, hierarchy paths, revision
+counts, or proof diagnostics for every task.
+
+- Finding: Work presented a six-column pseudo-table plus row-level source,
+  hierarchy, proof, delivery, and dependency prose. It also locally sorted and
+  re-ranked server work, making selection and ordering harder to trust. The
+  actual task action was buried at the bottom of a separate inspector.
+- Fix: Work rows now contain only a project-scoped short key, one-line task
+  title, and state. The server project order is preserved. Selection opens a compact
+  inspector whose first controls are the meaningful action (`Review spec`,
+  `Review task brief`, or `Open task`) and, when appropriate, a run control.
+  Supporting task material remains attached to that selected item rather than
+  duplicated across the whole list.
+- Contract Touch Decision: Work continues to consume existing project task,
+  action-model, route-selection, and work-progress contracts. No endpoint,
+  persisted task, release, or project contract changed. The removed local sort
+  and row projections were presentation-only behavior, not an authoritative
+  ordering contract.
+- Schema Migration Decision: none; no persisted data changed.
+
+#### Evidence, 2026-08-12
+
+- TimelineTab regressions pass (7 tests), including newest-first page merge,
+  task routing, hidden transport filtering, and removal of an exhausted
+  earlier-history action after it finds only hidden records.
+- Fresh installed Looma + Knit browser proof at `1280x720` shows only three
+  meaningful updates in reverse chronological order. The former connection
+  check count and raw live-event disclosure are absent; document and body are
+  both `1280px` wide with no horizontal overflow.
+- The installed LaunchAgent reports `stale:false` for runtime
+  `0.13.2-1786562583-32141`.
+
+### Repair: Task actions do not pretend to exist
+
+#### Task drawer user job before implementation
+
+When an owner opens a task, every visible tab must take them to a distinct,
+useful surface. A task with no current action conversation must not advertise
+an Action tab and then quietly send the owner back to Overview.
+
+- Finding: TaskDrawer always rendered `Action`, while its own state effect
+  immediately reset that tab to Overview when the task had no current turns.
+  This produced the reported enabled tab that appeared to do nothing.
+- Fix: `Action` is now conditional on current action content. Existing action
+  buttons remain in the drawer footer and focused decision surfaces; no new
+  local action classification is introduced.
+- Related root correction: opening an unrelated task while the shared project
+  model names a different owner decision now leads with that decision and a
+  direct route to it. The unrelated task record is an explicit `View this task
+  record` choice, not the default wall of task-size, checkpoint, review-plan,
+  source, and hierarchy detail.
+- Contract Touch Decision: consumes the existing shared
+  `ProjectDetail.actionModel.primaryAction`, drawer task payload, and route
+  contract. The drawer now gives the project decision precedence when its task
+  ID differs from the open record; it does not create, re-rank, or reinterpret
+  an owner action locally. No endpoint, persisted task, release, or project
+  contract changed. Required follow-up: keep any new owner-facing decision on
+  the shared action model. Proof: a drawer regression covers the diverging task
+  and action IDs, and installed browser proof verifies the actual route.
+- Schema Migration Decision: none; no persisted data changed.
+
+#### Evidence, 2026-08-12
+
+- WorkTab regressions now assert the deliberately small default list, absence
+  of pseudo-table diagnostics, stable keyboard/mouse selection, and an
+  immediately visible selected-task action. The focused Work suites pass: 50
+  tests.
+- Live Looma + Knit browser evidence before this repair: selecting `Revisit
+  multi-action FAB behavior only if real app demand appears`, then waiting
+  2.5 seconds, kept that row active and its inspector title unchanged. The
+  historical automatic reselection was not observable in the installed build;
+  the route remains the selection authority and is separately covered by its
+  regression.
+- Fresh installed Looma + Knit proof at `1280x720`: the review list shows ten
+  one-line rows with short `LOO-…` keys and a state only. A long title measured
+  one visible line (`16px` client height) with its full text clipped rather
+  than expanding the row (`31px` scroll height); the page had no horizontal
+  overflow. Selecting `Revisit multi-action FAB behavior only if real app
+  demand appears` kept it active and put `Review spec` at the top of the
+  inspector. That action opened a drawer with `Approve spec` and `Request
+  changes` immediately visible.
+- The installed LaunchAgent is running the freshly installed
+  `0.13.2-1786562310-22410` runtime. `/api/stale-server` reports `stale:false`.
+- Fresh installed Looma + Knit proof at `1280x720`: directly opening unrelated
+  `LOO-QE2UZJ` (ContextMenu) shows only `Project needs your decision first`,
+  the shared `Review a spec` action, and an explicit `View this task record`
+  escape hatch. It exposes no tabs, checkpoint, task size, review plan, or
+  raw task record by default. Choosing `Review next spec` routed to
+  `LOO-EBUYE7` and rendered `Approve spec` and `Request changes` immediately
+  beside a compact spec-at-a-glance summary. The installed LaunchAgent reports
+  `stale:false` at runtime `0.13.2-1786563260-70137`.
+
+### Repair: Release checks agree with the owner decision
+
+#### Release detail user job before implementation
+
+When an owner chooses `Inspect release details`, every displayed check must
+describe the same current project state as the owner decision that led them
+there. A missing diagnostic payload must never be rendered as a green, clear
+check.
+
+- Finding: the saved release projection correctly retained the ten
+  `spec_review` tasks in its status counts, while the shared owner action said
+  ten specs required review. Release detail read that projection-only endpoint
+  but treated its intentionally absent diagnostic arrays as empty, displaying
+  `No specs awaiting approval.`
+- Fix: expanded Release detail is an explicit current-state inspection
+  (`release-readiness?live=true`). The live readiness response exposes the
+  same typed check arrays at the top level as well as under diagnostics, so
+  the UI never converts omitted data into a passing state. The duplicate
+  aggregate blocker row is removed; its task total did not tell the owner
+  anything beyond the named checks below it.
+- Contract Touch Decision: the release-readiness response gains the existing
+  typed diagnostic arrays (`openEscalations`, incomplete/unapproved briefs,
+  `unapprovedSpecs`, shelved and agent-blocked work, and missing proof) on
+  explicit live reads. Considered but not changed: saved summary contract,
+  action model, task lifecycle, release membership, persistence, and routing.
+  Proof required: component test must request the explicit live endpoint and
+  runtime integration must expose pending spec IDs at both response levels.
+  Apply/revert: applying makes an existing live fact visible; reverting hides
+  it again and permits false-clear detail rows. No data migration is needed.
+- Schema Migration Decision: none; this is an additive read-model response
+  field and changes no stored schema.
+
+#### Follow-up finding, 2026-08-12: scope count authority
+
+- [x] Align Overview and Release progress counts to the same execution-scope
+  unit. Live Looma + Knit evidence showed Overview's selected Stage 1 scope as
+  `0 of 17 complete`, while explicit Release inspection reported `0/16 done`.
+  The dropped record was the ready ContextMenu parent whose materialized child
+  work caused `executionScopeRows` to suppress it. The compact shared release
+  count now uses that same execution boundary, so Overview's progress no
+  longer counts a parent and child as separate owner work. A project-route
+  regression covers included parent/child work plus deferred scope work.
+- Contract Touch Decision: `releaseCounts` is an existing derived summary
+  contract. Its `total`, state dimensions, and owner/proof counts now describe
+  included execution rows; `deferred` describes deferred execution rows. The
+  raw release membership list remains intact for audit and routing. Considered
+  but unchanged: task hierarchy, scope-row schema, release membership, task
+  status, and API shape. Proof required: a compact project route must show one
+  execution task for a parent/child release instead of double-counting it.
+- Schema Migration Decision: none; existing scope rows already carry the
+  hierarchy and inclusion fields needed for this derived projection.
+- Evidence: fresh installed Looma + Knit proof at `1280x720` shows Overview
+  `0 of 16 complete` and Release detail `0/16 done` for the same Stage 1
+  scope. Both surfaces name `Review a spec` and the same ten pending reviews;
+  the service reports `stale:false` at runtime `0.13.2-1786564327-91914`.
+
+#### Follow-up: Orientation progress uses the execution boundary
+
+- Finding: following Thread's focused review action to Work exposed a second
+  `0 of 17 complete` count. Release readiness was correctly using 16 execution
+  units, but the orientation preview recomputed its summary from release
+  membership while ignoring the saved spine's materialized-child boundary.
+- Fix: the preview now summarizes its current saved scope rows through the
+  shared execution-row counter. Work, Overview, and Release therefore use one
+  owner-visible unit of progress; raw release membership remains available for
+  audit rather than being presented as a second progress total. The compact
+  Work response also projects `releaseSummary.counts` from the same compact
+  release-readiness result before it returns, so its later legacy-summary
+  spread cannot reintroduce a parent-plus-child total.
+- Contract Touch Decision: `ProjectOrientationSpine.summary` is an existing
+  cross-surface derived contract. Its current progress and included/deferred
+  counts now reuse the `ProjectScopeRow` execution counter that already owns
+  parent/child suppression. Considered but unchanged: durable release
+  membership, hierarchy, task status, scope-row persistence, action routing,
+  and API response shape. Proof: the release runtime regression creates one
+  parent plus three materialized children and requires both readiness and the
+  Work orientation summary to report three execution units.
+- Schema Migration Decision: none; this corrects an in-memory summary of the
+  existing saved rows and requires no stored-data rewrite.
+- Evidence, 2026-08-12: installed Looma + Knit proof at `1280x720` showed the
+  focused Thread handoff as one `Review a spec` decision, with no horizontal
+  overflow. `Review next spec` opened `LOO-EBUYE7` in Work with `Review spec`
+  immediately visible and `0 of 16 complete`. The compact Work API returned
+  `16` for `releaseSummary.counts.total`, orientation progress, and release
+  readiness. The same Thread decision and no-horizontal-overflow result held
+  at `1000x720` and `390x844`; the installed service reported `stale:false`.
+
+### Repair: Timeline shows project updates, not the transport
+
+#### Timeline user job before implementation
+
+When an owner opens Timeline, they can glance at the newest meaningful project
+updates in reverse chronological order and open a related task when an update
+requires context. They should not have to interpret connection checks, token
+stream fragments, model recovery traces, or an older-history control that
+appears to do nothing.
+
+- Finding: Timeline correctly ordered events newest-first but devoted its first
+  screen to counts of hidden transport events and a raw live-stream disclosure.
+  When an older page contained only those hidden events, its button remained
+  available despite producing no visible change.
+- Fix: remove transport and model-recovery reporting from the owner timeline.
+  It now shows only project updates. `Show earlier updates` retires after one
+  attempt that finds no user-visible update, rather than asking for repeated
+  clicks with no result.
+- Contract Touch Decision: existing activity-history paging and event envelope
+  contracts are consumed unchanged. This is a projection/filtering correction;
+  task routing remains via the existing event task ID. No API or persistence
+  contract changed.
+- Schema Migration Decision: none; no persisted data changed.
+
+### Repair: Decision routes lead to a recoverable cause
+
+#### Narrative Harness user job before implementation
+
+When the Stage 2 owner chooses the one action Guildhall presents, the opened
+task must be able to resolve the stated blocker. Guildhall may not route to a
+downstream task that is merely waiting on work elsewhere.
+
+- [x] Live finding: Narrative Harness Overview sent the owner to ready
+  `NAR-092` because it was dependency-blocked, although its prerequisite
+  `NAR-091` was executable review work. The Task route then rendered a large
+  record with no action that could unblock the project.
+- [x] Repair the shared selected-scope precedence so an explicit blocked task
+  remains first, but inherited dependency blocking never hides runnable review
+  work that can actually advance the release.
+- [x] Advance the compact summary projection version with the precedence change
+  so an installed runtime refreshes its saved decision packet instead of
+  continuing to serve the old route until unrelated project data changes.
+- [x] Keep the orientation pin in that regenerated packet aligned with the
+  final shared action focus, rather than the pre-action execution candidate.
+- Contract Touch Decision: the selected-scope start state, project decision,
+  action model, and orientation pin remain existing derived contracts. The
+  decision now carries the refined start-action focus and the compact summary
+  projection version advances so existing installed projects regenerate it.
+  Considered but unchanged: task status, dependency schema, release membership,
+  proof records, and all task persistence. Proof: focused scope, decision, and
+  summary regressions plus installed Narrative Harness replay. Apply/revert:
+  applying reprojects current state only; reverting restores the stale
+  downstream focus, with no durable task-data rollback.
+- Schema Migration Decision: no persisted task or project schema changes. The
+  versioned compact projection is an on-read cache; old versions remain
+  compatibility-readable, are marked stale, and regenerate on startup.
+- Evidence, 2026-08-12: an installed `stale:false` runtime regenerated the
+  Narrative Harness summary. The API now agrees on `task-091` across the
+  action model, start readiness, decision execution focus, orientation pin,
+  and next action. At `1280x720`, Overview -> Open Work -> Open task reached
+  `NAR-091` and displayed `Resume only this work item`; the Overview also had
+  no horizontal overflow at `390x844` with `Open Work` visible.
+- [x] Radical follow-up: the `NAR-091` task record still presents the old
+  dossier wall (description, task links, all delivery rows, sizing, request
+  shape, review plan, and evidence requirements) before or alongside one
+  resume command. Redesign the default task route as an action surface with
+  the current command pinned at the top; move non-decision data out of the
+  default entirely, not merely into smaller cards or shorter prose.
+- Contract Touch Decision: `ProjectDetail.actionModel.primaryAction` and the
+  task drawer's existing one-task start endpoint are consumed unchanged. The
+  drawer now treats the shared primary action as presentation authority when
+  it names the opened, directly runnable task: it renders one resume command
+  and makes the record an explicit `detail=full` route. Considered but
+  unchanged: task state, run protocol, action ranking, task-detail response,
+  persistence, and project-summary projection. Required proof: a component
+  regression must show no tabs or dossier before the command and must preserve
+  the full-record route; installed Narrative Harness proof must show the same
+  result from Overview -> Work -> task. Apply/revert affects only the default
+  drawer presentation and leaves the record and execution semantics intact.
+- Schema Migration Decision: none; this is an in-memory presentation change
+  over existing action-model and task-detail fields, with no stored schema,
+  compatibility reader, fixture migration, or rollback data work.
+- Evidence, 2026-08-12: `TaskDrawer.svelte.test.ts` proves a matching shared
+  primary action suppresses tabs and dossier content, keeps one scoped-resume
+  command, and preserves the explicit full-record route. In the installed
+  `stale:false` runtime `0.13.2-1786568266-11192`, Narrative Harness replayed
+  Overview -> Open Work -> Open task to `NAR-091`. The drawer showed only
+  `Resume only this work item` and `View task details`; no tabs, task links,
+  delivery steps, task size, review plan, or evidence requirements appeared.
+  `View task details` opened `?detail=full&tab=spec`. The default action
+  surface had no horizontal overflow at `1280x720` or `390x844`.
+
+### Repair: Work waits for its own inventory
+
+#### Work user job before implementation
+
+When an owner opens Work, the list must settle once. Guildhall may show a
+brief loading transition, but it may not render the different ordering from
+Overview and then move every row once the Work inventory arrives.
+
+- [x] Hold Work and Planner content while a positively identified Overview or
+  Map task payload is being replaced by the Work inventory.
+- [x] Replay Looma + Knit Work from a cold navigation, wait through the first
+  refresh, select a row, and prove that neither the row order nor selection
+  changes without an owner action.
+- Contract Touch Decision: `ProjectDetail.taskPayload.surface` is the existing
+  response identity for bounded project inventories. ProjectView now uses that
+  identity to decide whether a previously loaded payload belongs to Work;
+  it does not rank tasks, change selection, alter the task payload, or modify
+  the project store's request sequencing. Legacy payloads with no surface
+  marker keep their existing immediate rendering behavior. Proof required and
+  provided: a ProjectView regression begins with an explicit Overview payload,
+  requires the selected-view loading state instead of its task row, then proves
+  only the resolved Work row renders. Installed Looma + Knit proof remains
+  open. Apply/revert changes only the cross-surface loading boundary.
+- Schema Migration Decision: none; no persisted fields or API shapes change.
+- Evidence, 2026-08-12: installed runtime `0.13.2-1786568898-31076` reported
+  `stale:false`. At `1280px` wide, Looma + Knit Work held the same 16 rows for
+  3.5 seconds after initial load, with no horizontal overflow. Selecting the
+  reported `LOO-7BD5ZE Revisit multi-action FAB behavior only if real app
+  demand appears` row held both its task URL and selected row for a further
+  3.5 seconds. The available installed-browser session did not expose viewport
+  resizing, so narrow/mobile geometry remains covered by the existing
+  responsive component suite rather than being represented as a false live
+  browser claim for this repair.
+
+### Repair: Spec review does not repeat the task as generated prose
+
+#### Spec-review user job before implementation
+
+Once an owner has opened a focused spec review, they need to decide whether to
+approve it or request a correction. The task title already identifies the work.
+A generated restatement of that title and a count of hidden finish conditions
+do not help the decision; the full record remains available only when the
+owner deliberately needs it.
+
+- [x] Delete the default `What will change` restatement and finish-condition
+  count from focused spec review.
+- [x] Rebuild and replay Looma + Knit spec review to prove its default drawer
+  contains only the decision, its two actions, and the explicit full-record
+  route.
+- Contract Touch Decision: `SpecReviewDecision` no longer consumes task
+  description, product brief, spec prose, or acceptance criteria for the
+  focused review route. The drawer title, approve action, revision action, and
+  full-record route retain their existing contracts. Considered but unchanged:
+  task/spec persistence, approval endpoint, revision endpoint, full task
+  payload, action model, and task routing. Proof required: drawer regression
+  and installed Looma + Knit replay. Apply/revert affects only default review
+  presentation and introduces no local decision logic.
+- Schema Migration Decision: none; no persisted schema, API response, or
+  compatibility reader changes.
+- Evidence, 2026-08-12: `TaskDrawer.svelte.test.ts` passes all 59 tests,
+  including a regression that the focused review contains no `What will
+  change` heading, no generated finish-condition count, no tabs, and no
+  handoff packet. `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm build`
+  pass. An installed `stale:false` runtime replayed Looma + Knit Work ->
+  `Review spec`: the focused drawer showed its one-line ellipsized short-key
+  title, `Your decision`, `Request changes`, `Approve spec`, and `Read full
+  task record`, with no generated prose beneath the decision. Desktop geometry
+  had no page-level horizontal overflow at `1280px`; this browser session did
+  not expose viewport resizing, so narrow/mobile live geometry is not claimed
+  for this repair.
+
+### Repair: Owner review leads with the selected spec, not its queue count
+
+#### Owner-review user job before implementation
+
+When Guildhall has selected a spec for review, the owner needs its name and
+one review command. The number of other reviews is not an instruction and
+cannot displace the selected work as the visible explanation of why the owner
+is here.
+
+- [x] Remove owner-review queue-count prose from the shared primary action
+  while retaining the typed count in readiness for non-product operational use.
+- [x] Rebuild and replay Looma + Knit Overview, Work, Thread, and Release to
+  prove their primary owner action presents the same selected spec without the
+  queue count becoming a competing instruction.
+- Contract Touch Decision: `ProjectAction.detail` is the existing shared
+  display contract for the current owner decision. For typed
+  `owner_review_required`, it now intentionally remains absent because
+  `taskLabel`, `taskId`, and `buttonLabel` fully identify the executable
+  action. The `StartReadiness.count` and message remain unchanged as typed
+  machine/readiness context. Considered but unchanged: task ranking, review
+  selection, persisted project projection, readiness schema, and task routes.
+  Proof required: action-model regression and installed cross-surface replay.
+  Apply/revert changes only shared decision presentation.
+- Follow-up presentation decision: Thread now consumes the existing
+  `ProjectAction.taskLabel` before the optional action detail and removes its
+  local `Browse project activity` alternative. Considered but unchanged:
+  thread selection, project-activity route, action ranking, and the shared
+  action payload. The task label is already the shared selected-task identity;
+  this adds no Thread-local selection logic. Proof required: Thread regression
+  and installed replay with one named selected spec and one action.
+- Schema Migration Decision: none; the action detail is derived on read and
+  no persisted schema or API compatibility shape changes.
+- Evidence, 2026-08-12: action-model, focused Work, Overview, and Thread
+  regressions pass (209 focused assertions); `pnpm typecheck`,
+  `pnpm lint:contracts`, and the packaged build pass. In installed runtime
+  `0.13.2-1786569778-87977`, `/api/stale-server` returned `stale:false` and
+  the shared primary action named `LOO-EBUYE7` with no action detail. At
+  `1280px`, Overview, focused Work, Thread, and Release each exposed one
+  review control for that same selected spec; none displayed the `10 specs`
+  queue-count sentence, Thread named the selected task instead of offering an
+  anonymous action, and no route had page-level horizontal overflow. The
+  browser session did not offer viewport resizing, so narrow/mobile live
+  geometry remains unclaimed for this repair.
+
+### Repair: Browsed Work selection is an action, not an inspector dossier
+
+#### Work-queue user job before implementation
+
+When an owner deliberately browses Work and selects a row, they need the
+selected task's identity, current state, and the one control that opens its
+next action. Scope restatements, proof counts, source summaries, rollups,
+contained-work trees, delivery checklists, and recent activity do not help the
+selection decision and must not compete with it.
+
+- [x] Make the `?view=queue` selected-row panel action-only.
+- [x] Replay Looma + Knit queue selection and prove the selected review item
+  exposes `Review spec` without an inspector dossier or selection movement.
+- Contract Touch Decision: `WorkTreePreview` receives a presentation-only
+  `actionOnly` input derived from the existing Work route's `view=queue`
+  parameter. It continues to consume the selected task identity and current
+  task-state presentation, but does not execute work, derive an alternate next
+  action, or change task selection/routing. The existing detailed inspector
+  remains outside the explicit queue presentation while its replacement is
+  audited. Considered but unchanged: task schema, task-action endpoints,
+  project action model, work inventory ordering, proof data, and persistence.
+  Proof required: queue render regression and installed selection replay.
+- Schema Migration Decision: none; route interpretation and client rendering
+  only, with no persisted fields or API shape changes.
+- Evidence: `pnpm vitest run
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts` (47 passing),
+  `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` passed.
+  After `pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall
+  start`, `/api/stale-server` reported `stale:false`. On installed Looma + Knit
+  at `/projects/looma-knit/work?view=queue&task=task-import-1rpbo8n`, the
+  selected `LOO-EBUYE7` rendered only its identity, `REVIEW SPEC` state, and
+  `Review spec`; no Scope, Proof, Rollup, Contained work, Delivery queue, or
+  Recent progress content was present, and desktop `scrollWidth ===
+  clientWidth` at 1280px. Clicking `Review spec` opened the task review route
+  with `Request changes` and `Approve spec`, with no alert. The browser session
+  did not offer viewport resizing, so narrow/mobile geometry remains unclaimed.
+
+### Repair: Runnable work is a state plus a task, not repeated prose
+
+#### Ready-work user job before implementation
+
+When a project is ready to resume, the owner needs to see that state, the one
+task Guildhall will continue, and the route to its executable command. Repeating
+the task title as a heading, quoted status sentence, and destination label does
+not add orientation; it disguises one fact as three pieces of information.
+
+- [x] Make the shared ready/paused-work action present one stable state label,
+  one compact task identity, and no duplicate readiness sentence.
+- [x] Suppress the generic project-level `Resume` while the focused work item
+  owns the shared `ready_work` action; keep project-level Pause for active runs.
+- [x] Replay Narrative Harness Overview and its Work handoff from the installed
+  app. Prove the state, task key, action target, and run control agree.
+- Contract Touch Decision: `ProjectAction` is the existing shared presentation
+  contract for project readiness. `ready_work` and `paused_live_work` will use
+  it to expose the state separately from the selected task identity; no route
+  may reconstruct either locally. Considered but unchanged: readiness ranking,
+  run protocol, task lifecycle, persistence, endpoint shapes, and task routing.
+  Proof required: action-model and Overview regressions, installed Narrative
+  Harness replay, and cross-surface state agreement.
+- Schema Migration Decision: none; this is a derived presentation correction
+  over existing action-model fields with no stored data or API-shape change.
+
+#### Evidence
+
+On 2026-08-12, after `pnpm build`, `pnpm dev:install`, and a fresh service
+restart, `/api/stale-server` reported `stale: false` from the installed app.
+At 1280px, Narrative Harness Overview showed only the project, Stage 2, `5 of
+9 complete`, `Work ready to resume`, `NAR-091`, its title, and `Open Work`.
+Clicking that one control opened `/projects/narrative-harness/work?task=task-091`,
+which showed `READY`, the same task key and title, and one direct command:
+`Resume this work item`. The top bar contained no generic `Resume`; both routes
+had no alert and `scrollWidth === clientWidth`. The browser surface did not
+offer viewport resizing, so narrow/mobile geometry remains unclaimed. The
+direct command's request and inline failure rendering are covered by the Work
+tab regression rather than clicking it against the user's active project.
+
+### Finding: local service startup needs a reliable readiness handoff
+
+The development installer replaces the active app while `guildhall start` may
+report a timeout before its background process has bound the listener. A retry
+then finds a healthy, fresh service. This makes the required installed-app
+proof unnecessarily ambiguous and should be fixed at the launcher/readiness
+boundary rather than documented as a manual timing ritual.
+
+- [ ] Make `guildhall start` wait for the same service readiness signal the
+  browser and stale-server endpoint use, and return success only after the
+  listener is available.
+- Contract Touch Decision: considered service lifecycle/status protocol and
+  installer handoff. No change in this repair; a later fix must preserve the
+  existing CLI start/stop contract and prove a cold start plus replacement
+  install without a false timeout.
+- Schema Migration Decision: none; expected work is process readiness only.
+
+### Finding: Looma exposes conflicting release state and scope counts
+
+#### Shared-summary user job before implementation
+
+An owner must be able to trust every visible project surface to describe the
+same release. A release cannot be simultaneously active and blocked, and a
+scope cannot be both 16 and 17 tasks depending on which legacy projection a
+route happens to read. The chosen action may hide the discrepancy today, but
+it will reappear the moment an owner opens Release, Work, or a task record.
+
+- [x] Trace `releaseSummary`, `releaseReadiness`, task-payload scope membership,
+  and action-model scope selection to one canonical release snapshot. The
+  immediate failure is that compact reads reuse saved review readiness while
+  the mutation boundary independently rejects that same review for a required
+  migration.
+- [x] Overlay the existing required-migration gate onto every compact shared
+  start/action projection before it reaches product surfaces, so a visible
+  owner command cannot be refused by the mutation boundary for hidden setup.
+- [x] Normalize legacy readiness verdicts out of the persisted release
+  lifecycle envelope at the shared database/readiness boundary; do not
+  normalize conflicting values inside individual views.
+- [x] Make compact owner surfaces consume the existing execution-normalized
+  scope for both task selection and selected-work progress, while preserving
+  the full durable parent/child release graph only for audit and routing.
+- [x] Add deterministic compatibility coverage and replay the installed Looma
+  Overview migration handoff.
+- [x] Replay Looma Work and Release against the same current snapshot after
+  count semantics are reconciled. Task review remains correctly unavailable
+  until the visible required migration is applied.
+- Contract Touch Decision: `startBlockerForRequiredMigrations` is already the
+  mutation and full-read gate. Compact `startReadiness` and `actionModel` must
+  consume that same typed result before presentation; the migration status
+  therefore has precedence over saved owner-review readiness. Considered but
+  unchanged: release membership, saved count projection, migration execution
+  endpoint, task approval protocol, and persistence. The existing release
+  lifecycle contract is also revalidated at the compact database and
+  readiness readers: legacy non-lifecycle values such as `blocked` normalize
+  to `active`, while the separately typed readiness verdict remains blocked.
+  The shared `ProjectView` presentation boundary now assigns a required
+  migration to exactly one visible control per route: Overview owns the
+  decision card; other routes own the top-bar command and suppress a stale
+  stop-notice link. It consumes the existing action-model/readiness result and
+  does not add client-side migration state, routing, or task ranking.
+  Considered but unchanged: documentation/help routes and content, because
+  this is a current-action ownership repair rather than help content.
+  The compact `orientationSpine`, `taskPayload`, and `workProgress` contracts
+  now use the existing execution scope/count envelope returned by shared
+  release readiness; durable release membership remains the full hierarchy
+  relation for audit and routing. Considered but unchanged: release-membership
+  persistence, task hierarchy, Map structural rows, migration state, and task
+  identity routes. Proof required: parent-plus-materialized-child regression
+  and installed Looma agreement across Overview, Work, and Release.
+  Proof provided: compact migration precedence, mutation refusal parity,
+  lifecycle/readiness separation, a split-parent execution-scope regression,
+  and installed Looma cross-surface replay. Overview, Work, Map, compact
+  release readiness, and detailed release readiness now consume the same
+  execution scope rather than exposing the durable relation as an extra work
+  item.
+- Schema Migration Decision: none; required-migration status is existing
+  durable data read through an existing gate. This repair changes only the
+  derived compact response precedence, with no new stored field or migration.
+
+#### Evidence: hidden migration gate repaired
+
+On 2026-08-12, normal compact Looma reads previously returned
+`owner_review_required` and `Review next spec`, while the full diagnostic read
+and every mutation returned `required_migration_pending` for
+`0.13.27/acceptance-command-proof-path-reconciliation`. The compact response
+now returns that same typed migration readiness. A compatibility regression
+seeds the old `release.state: 'blocked'` row and proves the release envelope
+normalizes to lifecycle `active`; the separate readiness verdict remains its
+own field. After build, dev install, restart, and `stale:false`, installed
+Looma Overview showed one `Update project` button, no competing top-bar run
+control, and a guarded migration dialog identifying the required migration and
+affected paths. The dialog was closed without applying the user's migration.
+Installed Work now shows one top-bar `Migrate` control plus the one-line,
+non-actionable reason `Update this project before working.`; its prior stale
+stop-status link to a second migration action is absent. The task list still
+shows the current 16 execution units for orientation, but no longer claims the
+owner should use an unavailable task action first.
+This prevents the raw approval 409 and the active/blocked lifecycle
+contradiction.
+
+#### Evidence: split-parent scope agreement repaired
+
+On 2026-08-12, Looma's selected release retained one durable parent plus four
+materialized children. That is correct for audit and routing, but product
+responses inconsistently treated it as 17 countable work items even while Work
+progress said 16. The shared release-readiness accessor now derives the
+owner-facing execution scope from the persisted scope rows. Its split-parent
+regression proves compact Work and detailed Release expose only the child as
+the executable unit while keeping the underlying queue relationship intact.
+
+After `pnpm build`, `pnpm dev:install`, `guildhall stop`, and `guildhall
+start`, the fresh installed app reported `stale:false`. Looma's Overview, Work,
+and Map compact responses each reported a 16-item selected scope, 16-item
+release membership, and 16 visible execution units; detailed Release reported
+the same 16-item scope/release and 16 tasks. Browser replay showed one
+`Update project` action on Overview, a visible top-bar `Migrate` command plus
+the explanatory gate on Work, and the same migration command on Release with
+`0/16 done`. There was no page-level horizontal overflow at 1440px Overview,
+1024px Work, or 390px Release. The migration was not applied, so task-review
+actions correctly remain gated rather than presenting a contradictory action.
+
+### Repair: A required project update suppresses non-executable work
+
+#### Migration-gate user job before implementation
+
+When a required project update blocks every task action, the owner needs one
+clear command to apply that update. Work and Board must not present a task
+inventory, filters, or a second decision surface that cannot be acted on until
+the update finishes.
+
+- [x] Suppress Work and Board content while the shared required-migration gate
+  is active; the existing top-bar migration command and one-line reason remain
+  the sole visible route decision.
+- Contract Touch Decision: `ProjectView.requiredMigrationBlocked` already
+  derives from the shared `startReadiness` response and owns this presentation
+  gate. Work/Board are suppressed at the route boundary and do not receive a
+  second local migration interpretation. Considered but unchanged: migration
+  execution, action-model ranking, task inventory API, task routing, and
+  persisted project state. Proof required: ProjectView regression and an
+  installed Looma Work replay. Apply/revert changes only whether unavailable
+  route content is rendered.
+- Schema Migration Decision: none; this is route presentation over existing
+  shared readiness data.
+- Evidence, 2026-08-12: `ProjectView.svelte.test.ts` passes all 67 tests,
+  including the migration-gated Work assertion. `pnpm typecheck`,
+  `pnpm lint:contracts`, and `git diff --check` pass. After a fresh installed
+  build reported `stale:false`, Looma Work rendered only the `Migrate` command
+  and `Update this project before working.` It contained no Work controls,
+  task-list heading, task rows, or page-level horizontal overflow at 1280px.
+  The migration was not applied.
+
+### Repair: Browsed Work starts with work that can still move
+
+#### Work-queue user job before implementation
+
+When an owner deliberately opens Work, they need the selected release's work
+that still needs a decision or execution. Finished records are useful only
+after that question is answered; they cannot sit above the first actionable
+item simply because the durable scope retains complete history.
+
+- [x] Make the default browsed Work slice the selected scope's nonterminal
+  work plus any completion-proof recovery item. Keep complete/deferred scope
+  history available only through an explicit filter.
+- [x] Remove the filter and board console from an action-backed browsed queue;
+  it is a short selection list, not a second dashboard.
+- Contract Touch Decision: the selected scope remains owned by the shared
+  orientation/release boundary. `WorkTab` applies a presentation-only default
+  slice over that already-authoritative membership; it does not rank tasks,
+  alter the primary action, or mutate task/release state. Considered but
+  unchanged: project action model, task inventory API, scope membership,
+  readiness, proof evaluation, and task routing. Proof required: Work
+  regression and installed Narrative Harness queue replay. Apply/revert
+  affects only the default filtered presentation of an explicitly browsed
+  Work route.
+- Schema Migration Decision: none; no persisted state or API contract changes.
+
+#### Evidence: current Work queue repaired
+
+On 2026-08-12, the installed Narrative Harness continuation route exposed a
+console of List/Board, Show, and Part controls before the work itself. Its
+default list began with completed history, and selecting the shared
+`ready_work` item reinterpreted the resulting route as a deep link, replacing
+the list selection a moment later. The repaired route at
+`/projects/narrative-harness/work?view=queue` now presented four current
+items, no filter or board controls, and no page-level horizontal overflow at
+1024px. Selecting NAR-091 remained selected after 1.5 seconds and revealed
+one visible `Resume this work item` command, matching the shared action model.
+The command was not invoked because it would start the user's active
+Narrative Harness work.
+
+`WorkTab.svelte.test.ts` and `WorkTab.focused.svelte.test.ts` pass all 54
+tests, including the no-scope action fallback, completed-history exclusion,
+filter preservation after selection, and shared resume-label regression.
+`pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm build`
+pass. The normal rendered fixture is presently protected by its required
+manual runtime migration, so the installed, already-migrated Narrative Harness
+project supplied the browser evidence for this post-migration flow rather than
+the fixture silently applying that user-owned migration.
+
+### Finding: Timeline is still an unhelpful raw transcript
+
+#### Timeline user job before implementation
+
+When an owner opens Timeline, they need to know whether the project is running,
+stopped, or needs attention, plus the one place to resolve any problem. Older
+events are supporting history, not a second live dashboard or a wall of raw
+agent messages.
+
+- [x] Replace raw failed-agent messages and duplicated work events with one
+  owner-readable latest-status summary linked to the shared next action when
+  one exists.
+- [x] Keep older event history reverse chronological and collapsed by default;
+  it must never outrank the current status or repeat it as a second live view.
+- Contract Touch Decision: `detail.actionModel` and `detail.run` remain the
+  shared owners of current status and continuation. `TimelineTab` will only
+  present those fields and move retained event payload behind history/diagnostic
+  disclosure; it will not reinterpret task lifecycle or rank a new action.
+  Considered but unchanged: event storage, history pagination API, action-model
+  ranking, readiness, task routing, and migration state. Proof required:
+  Timeline component regression and installed Narrative Harness replay.
+- Schema Migration Decision: none; this is presentation over existing shared
+  action and retained event data.
+- Evidence, 2026-08-12: installed Narrative Harness Timeline is reverse
+  chronological and has a working-looking `Show earlier updates` control, but
+  its first visible content is the unbounded reviewer-fanout error followed by
+  repeated Task 90 start/finish events. It does not explain whether the owner
+  needs to act or link to the current shared continuation NAR-091. This fails
+  the under-a-minute orientation standard.
+
+#### Evidence: Timeline handoff repaired
+
+On 2026-08-12, Timeline was reduced from an exposed event transcript to a
+single shared project-status handoff. In the fresh installed Narrative Harness
+app, its first viewport now contains `Work ready to resume`, the named NAR-091
+item, and one `Open Work` command. Activity history and technical event details
+are both closed; the prior raw reviewer-fanout failure and repeated Task 90
+events are not part of initial orientation. The page has no horizontal overflow
+at 1280px. Selecting `Open Work` reached the focused NAR-091 Work route, which
+showed the same `Resume this work item` continuation. The action was not run
+because that would start the user's active Narrative Harness work.
+
+`TimelineTab.svelte.test.ts` passes all 8 tests, including the status-first,
+collapsed-history, nested-diagnostics, and shared-action route regression.
+`pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm build`
+pass; the installed app reports `stale:false`.
+
+### Repair: Task detail must not default to the full specification
+
+#### Task-detail user job before implementation
+
+When an owner opens a task record from the current-work handoff, they need the
+task identity, current state, delivery progress, and executable next action.
+They should only read the full implementation specification after deliberately
+choosing to inspect it.
+
+- [x] Make `View task details` open the concise Overview record, never the
+  full Spec tab solely because the route came from the task handoff.
+- [x] Reduce the normal task-record navigation to owner jobs only. Journey,
+  Transcript, Experts, History, and Origin are diagnostic or audit material;
+  they must not remain peer tabs beside Overview and Spec.
+- [x] Remove task-sizing, request-shape, checkpoint, and reviewer-budget
+  panels from normal Overview; they are planning telemetry, not the owner's
+  current decision.
+- Contract Touch Decision: `TaskDrawer` owns only the detail tab route and
+  presentation. It will retain explicit `?tab=spec` deep links for review
+  actions, but the general full-record command must use Overview. Considered
+  but unchanged: task identity, shared action model, spec-review routing,
+  task payload, history/diagnostic data, and approval state. Proof required:
+  task drawer route regression and installed Narrative Harness replay.
+- Schema Migration Decision: none; this changes only the initial route tab.
+- Evidence, 2026-08-12: installed NAR-091's focused task page was concise and
+  actionable, but `View task details` forced `?detail=full&tab=spec`, exposing
+  the full multi-screen implementation plan on first entry. Its Overview tab
+  already contains the bounded task state and action context, so the forced
+  Spec route is a presentation/routing defect.
+
+#### Evidence: full task record default repaired
+
+On 2026-08-12, the installed NAR-091 task handoff's `View task details`
+command opened `/task/task-091?detail=full&tab=overview`; Overview was the
+active tab and the page had no horizontal overflow at 1280px. The full
+implementation plan remains behind the explicit Spec tab. `TaskDrawer` now
+preserves explicit `?tab=spec` review deep links, while the general full-record
+command defaults to owner-oriented Overview. The focused TaskDrawer suite
+passes all 59 tests; `pnpm typecheck`, `pnpm lint:contracts`, `git diff
+--check`, and `pnpm build` pass, and the installed app reports `stale:false`.
+
+#### Evidence: task navigation subtraction repaired
+
+Normal task detail now renders Overview and Spec only, with Action inserted
+only when it contains a distinct current owner decision. Journey, Transcript,
+Experts, History, and Origin remain valid direct links for audit or evidence
+work, but no longer advertise themselves as peer owner decisions. The focused
+TaskDrawer suite passes all 60 tests, including normal-tab subtraction and
+direct Journey/Transcript route coverage. After fresh installation, Narrative
+Harness NAR-091 rendered only Overview and Spec at 1280px with no page-level
+horizontal overflow; the installed app reported `stale:false`.
+
+#### Evidence: task Overview telemetry subtraction repaired
+
+On 2026-08-12, fresh installed NAR-091 Overview contained neither `Task size`,
+`Request shape`, `Latest checkpoint`, nor `Review plan`; it retained its
+delivery steps, task dependencies, and the `Resume only this work item` action.
+The two-tab record had no page-level horizontal overflow at 1280px. Focused
+Overview/TaskDrawer coverage passes 62 tests and `pnpm typecheck` passes.
+
+### Evidence: Narrative Harness Thread agrees with the shared handoff
+
+On 2026-08-12, installed Narrative Harness Thread showed no synthetic thread
+feed or inactive controls. Its entire first viewport was the shared `Work ready
+to resume` handoff and `Open Work` command, matching Overview, Release, Work,
+and Timeline. It had no page-level horizontal overflow at 1280px. This is a
+passing baseline, not a reason to retain Thread as a duplicate live dashboard.
+
+### Repair: Migration decisions do not expose storage internals
+
+#### Migration decision user job before implementation
+
+When Guildhall needs to update a project before it can run, the owner needs to
+know what update is required and have one safe way to apply it. Filesystem
+paths, database names, and generated-record counts do not help that decision
+and make a short recovery step look dangerous.
+
+- [x] Keep the migration name, plain-language impact, and one apply command;
+  remove affected-path and changed-path dumps from the owner flow.
+- Contract Touch Decision: shared migration status continues to own the
+  migration id, title, summary, and apply action. `ProjectView` changes only
+  their presentation. Considered but unchanged: migration execution,
+  readiness gating, task routing, migration persistence, and project state.
+  Proof required: ProjectView regression and installed Looma replay without
+  applying the user-owned migration. Apply/revert changes only what internal
+  metadata is displayed.
+- Schema Migration Decision: none; this is presentation over the existing
+  migration contract.
+- Evidence, 2026-08-12: `ProjectView.svelte.test.ts` passes all 67 tests;
+  `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm
+  build` pass. After `pnpm dev:install`, service restart, and
+  `/api/stale-server` reporting `stale:false`, Looma's required-update dialog
+  showed the migration name, its plain-language summary, and `Apply required
+  migration`. It did not show the project database pathname, an affected-path
+  list, or the `generated proof paths` record count. The migration was not
+  applied because that would mutate the active user project.
+
+### Repair: Project map is orientation first, not an exposed audit export
+
+#### Project-map user job before implementation
+
+When an owner opens Project map, they need a release name, current progress,
+and one route back to current work. The full scope ledger, proof contracts,
+source trail, capability catalog, and history are audit material; presenting
+all of them by default turns a navigation mistake into several minutes of
+reading with no clearer decision.
+
+- [x] Show only the selected scope, progress, and `Open Work` on first entry.
+  Keep the detailed map behind an explicit `Inspect project map` disclosure.
+- Contract Touch Decision: the orientation spine remains the shared owner of
+  release scope, progress, work mapping, proof, source, and gaps. This route
+  changes only which existing presentation is initially expanded. Considered
+  but unchanged: scope membership, action ranking, proof evaluation, source
+  ingestion, release selection, and task routing. Proof required: map
+  regression and installed Narrative Harness replay at desktop and narrow
+  widths. Apply/revert changes only default disclosure state.
+- Schema Migration Decision: none; no persisted data or API contract changes.
+- Evidence, 2026-08-12: `ProjectMapTab.svelte.test.ts` passes all 11 tests,
+  and `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and `pnpm
+  build` pass. After fresh installation and `/api/stale-server` reporting
+  `stale:false`, the installed Narrative Harness map at desktop width showed
+  only `Stage 2: Local Desktop Harness MVP`, `5/9 work items complete`,
+  `Open Work`, and `Inspect project map`. The former first-read ledger,
+  source trail, proof contract, blockers, and capability catalog appeared
+  only after opening that disclosure. The default route is now readable in a
+  few seconds rather than several minutes.
+
+### Repair: Project home defers fleet telemetry to the projects themselves
+
+#### Project-home user job before implementation
+
+When an owner opens Guildhall, they need to choose a project or open the
+actual attention queue. Aggregate work mix, role avatars, decorative scores,
+and historical task totals cannot answer either question and must not override
+the shared current action for an individual project.
+
+- [x] Remove fleet dashboard telemetry from the default home and make a
+  `ready_work` shared action render as ready to resume rather than paused.
+- [x] Reduce every project card to its shared current status, one plain-language
+  state sentence, and visible `Open project` / run controls. Remove the task-mix
+  bar, activity chart, inferred role roster, count strip, extra status chips,
+  and the dense click-through details drawer.
+- Contract Touch Decision: `ProjectCardSummary` now maps the shared
+  `actionModel.primaryAction.code` before historical task counts for the
+  visible project stage and formats the shared action detail before generic
+  count-derived status copy. ProjectsHome and ProjectCard remove only
+  presentation. Considered but unchanged: action ranking, task counts, run
+  state, and project routing.
+- Schema Migration Decision: none.
+- Evidence, 2026-08-12: focused `project-summary` and `ProjectsHome` tests
+  pass 44/44, and `pnpm typecheck` and `pnpm build` pass. After fresh
+  installation and `/api/stale-server` reporting `stale:false`, the installed
+  home showed the project chooser directly: no Guild hall score, Work mix,
+  aggregate active count, or running-now panel. Its Narrative Harness card
+  reported `Ready to resume`, matching the service's `ready_work` action and
+  its project Overview. Selecting either `Open project` or `Resume` remains
+  visible without reading the historical count telemetry.
+- Evidence, 2026-08-12, follow-up: focused `ProjectsHome` coverage passes
+  21/21, `pnpm typecheck`, `pnpm build`, and `git diff --check` pass. After
+  fresh installation and `/api/stale-server` reporting `stale:false`, the
+  installed 1280x720 home had no task-mix bar, activity chart, role roster,
+  count strip, extra status chips, or details drawer; it had no horizontal
+  overflow. Its buttons were the actual shared decisions: Looma's `Review next
+  spec` opened `task-import-1rpbo8n`, and Narrative Harness's `Open Work`
+  opened `task-091`. The former generic first click is no longer required to
+  reach a pending decision.
+
+### Repair: Focused Work distinguishes ready work from owner attention
+
+- [x] Label a focused `ready_work` handoff `Ready to continue`, reserving
+  `What needs your attention` for warning and danger decisions.
+- Contract Touch Decision: Work consumes only the existing shared primary
+  action code and task status to choose its section label. Considered but
+  unchanged: action ranking, task mutation, task status, run controls, and
+  route selection. Schema Migration Decision: none.
+- Evidence, 2026-08-12: focused Work coverage passes 5/5, including the ready
+  handoff assertion; `pnpm typecheck` and `git diff --check` pass. After a
+  fresh `pnpm build` and `pnpm dev:install`, the installed service reported
+  `stale:false`. At the 1280x720 Narrative Harness focused-work route,
+  `task-091` appeared as `Ready to continue`, with its milestone, `5 of 9
+  complete` progress, and `Resume this work item` visible without scrolling or
+  horizontal overflow. No owner-attention heading was present.
+
+### Repair: Migration-gated Work remains a usable repair flow
+
+- [x] Replace the empty migration-gated Work and Planner bodies, duplicate
+  shell alert, and duplicate top-bar migration control with one focused project
+  update surface that explains the gate and opens the existing review/apply
+  modal.
+- Contract Touch Decision: touched the project-shell presentation and its
+  existing migration-modal entry point only. Considered but unchanged:
+  migration detection, persisted migration status, apply endpoint, task state,
+  action ranking, and run controls. Schema Migration Decision: none.
+- Evidence, 2026-08-12: `ProjectView` coverage passes 67/67; it asserts the
+  gated Work route has exactly one `Review project update` control, the clear
+  gate heading, no shell alert, and no hidden Work controls or task rows.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `git diff --check`
+  pass. After a fresh `pnpm dev:install`, Looma's installed 1280x720 Work
+  route had one visible decision and no horizontal overflow. Its one button
+  opened the existing review modal, which named the required migration and its
+  typed safety summary. The apply mutation was intentionally not invoked.
+
+### Repair: Global Needs You is a decision queue, not five dashboards
+
+- [x] Show the API-ranked current decision for each project and defer any
+  remaining project decisions to that project's queue. Remove project paths,
+  category pills, nested cards, duplicate project navigation, and full detail
+  prose from the global owner-facing list.
+- Contract Touch Decision: touched only the fleet-queue presentation while
+  preserving canonical `/api/fleet/attention` order and item action routes.
+  Considered but unchanged: fleet attention ranking, inbox persistence, project
+  state, action-model contracts, and item mutation. Schema Migration Decision:
+  none.
+- Evidence, 2026-08-12: focused Fleet Needs You coverage passes 3/3. It proves
+  actions still route with the right project ID, no per-project inbox fetch is
+  introduced, and a repeated queue shows one current decision plus an explicit
+  `1 more decision` disclosure. `pnpm typecheck` and `git diff --check` pass.
+  After a fresh installed app restart with `/api/stale-server` reporting
+  `stale:false`, the 1280x720 queue showed five simple project rows, one action
+  each, no project paths, and no horizontal overflow. At 900x720 it retained
+  all five actions without clipping. Narrative Harness's visible `Review proof`
+  action opened its exact `task-087` review route.
+
+### Repair: Overview does not invent urgency for ready work
+
+- [x] Label an Overview decision with action code `ready_work` `Ready to
+  continue`, preserving `What needs your attention` for actual owner-facing
+  blockers and reviews.
+- Contract Touch Decision: touched only Overview's presentation of the existing
+  shared primary action. Considered but unchanged: action ranking, task routing,
+  selected drawer identity, release counts, and task state. Schema Migration
+  Decision: none.
+- Evidence, 2026-08-12: Project Overview focused coverage passes 6/6,
+  including ready-work heading and false-attention regression assertions.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `git diff --check`
+  pass. After a fresh installed restart, `/api/stale-server` reported
+  `stale:false`; the Narrative Harness route opened from the global proof queue
+  showed `Ready to continue`, no false-attention heading, and no horizontal
+  overflow at 1280x720.
+
+### Open finding: Fleet proof review must resolve to a completable decision
+
+- [x] The installed `Review proof` queue action previously opened Narrative Harness
+  `task-087`, a finished task with no reconciliation control. Its full record
+  said `No response needed` while showing a failed automatic merge caused by a
+  Git `index.lock`; the only available command was unrelated `Open Work` for
+  ready `task-091`. This is not a copy problem: fleet attention, task detail,
+  and the shared action model disagree about the owner's actual next decision.
+- Repair: proof-reconciliation inbox records now route through Work rather than
+  a terminal Spec record. More importantly, the shared attention projection
+  consumes the already-ranked primary action: stale proof debt is suppressed
+  from current owner attention whenever another action is current; it remains
+  in release/history context. The fleet reads that same projection rule, so a
+  cached fleet row cannot revive a finished-task action after this runtime
+  change.
+- Contract Touch Decision: touched the shared attention projection's bounded
+  release truth with the primary action code/task ID, the canonical proof
+  recovery route, and fleet's use of that same projection rule. Considered but
+  unchanged: proof-health detection, recovery mutation, selected-scope ranking,
+  task status, durable attention-record shape, and task-drawer actions.
+  Schema Migration Decision: none; existing records are interpreted through the
+  compatibility reader and no persisted shape or required migration changes.
+- Evidence, 2026-08-12: focused inbox and attention-projection coverage passes
+  50/50, including a durable proof record suppressed by `ready_work` and kept
+  when `proof_evidence_missing` is the shared decision. `pnpm typecheck`,
+  `pnpm build`, and `git diff --check` pass. After `pnpm dev:install`, a fresh
+  `guildhall stop` / `guildhall start` for Looma + Knit reported
+  `/api/stale-server` `stale:false`. Both installed fleet and project Inbox
+  excluded Narrative Harness's finished `task-087` proof record; the canonical
+  project response named `task-091` `ready_work`. Browser replay at 1280x720
+  showed no Narrative Harness row in Needs You, then showed `Stage 2: Local
+  Desktop Harness MVP is ready to continue`, `5 of 9 complete`, `NAR-091`, and
+  `Resume this work item` in the first Work viewport with no horizontal
+  overflow. No user-project mutation was invoked.
+
+### Repair: Failed spec approval keeps its decision surface
+
+- [x] Keep an approval modal open until its approval mutation succeeds; render
+  the returned error in the modal rather than replacing the task body or
+  dismissing the only available action.
+- Contract Touch Decision: the task approval mutation and migration routing
+  are unchanged. `TaskDrawer` owns only modal lifetime and the presentation of
+  its existing request error. Schema Migration Decision: none.
+- Evidence, 2026-08-12: focused TaskDrawer coverage passes 61/61, including a
+  409 approval response that keeps `Approve spec` open with the returned
+  message and the approval command still available. `pnpm typecheck` and
+  `git diff --check` pass. Installed replay remains pending because Looma's
+  current required project update intentionally gates its task approvals.
+
+### Repair: Release agrees when ready work needs no owner attention
+
+- [x] Label a release action with shared `ready_work` as `Ready to continue`,
+  not `What needs your attention`.
+- Contract Touch Decision: touched only Release's presentation of the existing
+  shared action code. Considered but unchanged: release verdict, release
+  readiness, task routing, action ranking, and shipping mutation. Schema
+  Migration Decision: none.
+- Evidence, 2026-08-12: focused ReleaseTab coverage passes 29/29 with a
+  ready-work regression. `pnpm typecheck` and `pnpm build` pass. After a fresh
+  installed restart with `/api/stale-server` `stale:false`, Narrative Harness
+  Release at 1280x720 showed its milestone, `5/9 done`, `Ready to continue`,
+  `NAR-091`, `Open Work`, and one optional `Inspect release details` action in
+  the first viewport with no horizontal overflow.
+
+### Repair: Project navigation defaults to decisions, not reports
+
+- [x] Keep only `Project` and `Work` in the default rail. Show `Threads` only
+  when it is the current owner decision or the active route. Move Release and
+  activity to named actions-menu follow-ups; their direct routes remain intact.
+- Contract Touch Decision: touched project navigation presentation only.
+  Considered but unchanged: route availability, routing, release state,
+  timeline data, Thread state, action ranking, and task/run mutations. Schema
+  Migration Decision: none.
+- Evidence, 2026-08-12: ProjectView coverage passes 68/68, including the
+  default-rail and follow-up-menu regressions; `pnpm typecheck` and `pnpm
+  build` pass. After a fresh installed restart with `/api/stale-server`
+  `stale:false`, Narrative Harness at 1280x720 showed only Project, Work, and
+  Settings in the rail, with milestone/progress/current task/`Open Work` in the
+  first viewport and no horizontal overflow. Its actions menu deliberately
+  offered `Release details` and `Project activity`; no task mutation was run.
+
+### Repair: Activity is history, not a second live dashboard
+
+- [x] Remove Activity's duplicate current-project/status/action block. Show the
+  reverse-chronological, owner-readable event history immediately; retain
+  technical events and older-page loading only as explicit follow-ups.
+- Contract Touch Decision: touched Timeline presentation only. Considered but
+  unchanged: event retrieval, sort order, pagination, task routing, action
+  ranking, and run state. Schema Migration Decision: none.
+- Evidence, 2026-08-12: TimelineTab coverage passes 9/9, including
+  newest-first ordering, visible loaded-update result, concise task identities
+  in runtime event text, and the absence of the duplicate `Open Work` status
+  block. `pnpm typecheck`, `pnpm build`, and `pnpm dev:install` pass. With the
+  installed app running against Narrative Harness, `/api/stale-server` reports
+  `stale:false`; the 1280x720 Activity route opens directly to reverse-
+  chronological history, has no duplicate current-status block or horizontal
+  overflow, and resolves the raw `task-091` event reference to its task title.
+
+### Installed replay: Work selection remains the user's choice
+
+- [x] In the action-driven Work list, show only the current scoped items and
+  let a deliberate item selection remain selected through the live refresh that
+  follows route navigation. The inspector must expose a single next step rather
+  than a second control dashboard.
+- Contract Touch Decision: no new contract change. This records installed
+  proof for the existing route-authoritative selection behavior. Considered but
+  unchanged: task ordering, route format, action ranking, task state, and run
+  mutation. Schema Migration Decision: none.
+- Evidence, 2026-08-12: after the fresh installed restart above, Narrative
+  Harness `/work?view=queue` at 1280x720 showed four current items with stable
+  `NAR-*` keys and no filter/control dashboard. Selecting `NAR-092`, waiting
+  through the live refresh, and opening its non-mutating inspector preserved
+  `task=task-092`, kept that row active, displayed one `Open task` action, and
+  had no horizontal overflow. Opening the task record showed one project-level
+  handoff, `Open Work`, back to the shared ready-work decision; no mutation was
+  invoked.
+
+### Repair: Fleet urgency uses the current decision
+
+- [x] Replace the competing home-card heuristic and saved-attention ranking
+  with one fleet owner-decision projection. A project with shared `ready_work`
+  must not appear in `Needs you` because it has an older import advisory; a
+  shared warning/danger decision must appear even when it has no durable inbox
+  record. Projects with no shared decision may surface their saved setup
+  attention.
+- Contract Touch Decision: touch the bounded fleet attention API projection and
+  service-summary count consumed by the Projects header. Considered but not
+  touched: project action ranking, persisted attention records, project Inbox,
+  task state, and mutation endpoints. Schema Migration Decision: none; this is
+  a read-model compatibility change with no persisted shape change. Required
+  proof: API and surface assertions demonstrate that the header count and
+  grouped fleet rows describe the same projects, and an installed replay shows
+  no stale ready-work urgency. Apply/revert: replace only the fleet read
+  projection; removing it restores the previous read behavior without data
+  migration.
+- Evidence, 2026-08-12: focused fleet-attention summary, Fleet Needs You, and
+  Projects Home coverage passes 30/30. This includes suppression of a retained
+  import advisory behind shared `ready_work`, promotion of a shared review
+  action, exact shared count consumption, and an explicit `Start setup` label.
+  The fleet read-model isolation suite also passes 8/8. `pnpm typecheck` and
+  `pnpm lint:contracts` pass. After `pnpm dev:install`, the installed server
+  reports `stale:false`; at 1280x720 Projects says `Needs you 4 projects` and
+  Needs You says `4 projects need a decision · 5 total items`, with no
+  horizontal overflow. Its four rows are the same four projects, Narrative
+  Harness and t-minus-t do not leak stale ready-work import urgency, and no
+  mutation was invoked.
+
+### Repair: Project cards are entry points, not control decks
+
+- [x] Give each project card exactly one non-mutating path into its current
+  work. Remove direct start/resume/pause controls and filesystem paths from the
+  global card grid; processing controls remain explicit inside the selected
+  project where their impact is explained.
+- Contract Touch Decision: touched Projects-home and ProjectCard presentation
+  plus unused global run-control handlers. Considered but not touched: project
+  run APIs, project-level pause/resume controls, action ranking, project card
+  summary data, and persisted state. Schema Migration Decision: none. Required
+  proof: card surface tests and an installed replay show one action per card,
+  no direct processing mutation, and the existing project-level Pause control
+  remains covered. Apply/revert: presentation-only removal of home mutations.
+- Evidence, 2026-08-12: focused project-home, project-view, and fleet-summary
+  coverage passes 92/92. `pnpm typecheck`, `pnpm lint:contracts`, and `git
+  diff --check` pass. After `pnpm dev:install` and a fresh Looma + Knit service
+  start, `/api/stale-server` reports `stale:false`. The installed 1280x720
+  chooser has one button on every project card, no direct `Resume` or `Pause`
+  button, no displayed repository path, and no horizontal overflow. Narrative
+  Harness Overview then shows its milestone, `5 of 9 complete`, NAR-091, and
+  one `Open Work` decision in the first viewport. No user-project mutation was
+  invoked.
+
+### Repair: `guildhall start` reports a real cold start
+
+- [x] Keep the launcher waiting through launchd's replacement window and the
+  initial registered-project refresh, so a successful background boot is never
+  reported as a readiness timeout.
+- Contract Touch Decision: touched only the CLI readiness wait duration.
+  Considered but unchanged: launch-agent ownership, service state format,
+  listener readiness, refresh scheduling, project data, and all user-project
+  mutations. Schema Migration Decision: none. Required proof: a fresh installed
+  `guildhall stop && guildhall start` exits successfully and reports a current
+  service at `/api/stale-server`. Apply/revert: adjusts only the bounded wait
+  before the existing start command returns.
+- Evidence, 2026-08-12: `cli.test.ts` passes 32/32, `pnpm typecheck`, `pnpm
+  build`, `pnpm dev:install`, and `git diff --check` pass. A fresh installed
+  Looma + Knit `guildhall stop && guildhall start` completed with exit status
+  zero; `/api/stale-server` immediately reported the new installed artifact
+  and `stale:false`. The service remains running at `http://localhost:7777`.
+
+### Repair: Fleet queue shows choices, not inert totals
+
+- [x] Keep the one-current-decision-per-project queue, remove its aggregate
+  item total, and prefer the shared decision label over a copied raw task
+  title. Additional decisions remain reachable only through a project's
+  explicit `more decisions` link.
+- Contract Touch Decision: Fleet Needs You presentation only. Considered but
+  unchanged: canonical fleet attention ranking, project count, API response,
+  routing, and task state. Schema Migration Decision: none.
+- Evidence, 2026-08-12: focused fleet attention and Fleet Needs You coverage
+  passes 9/9; `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, and
+  `pnpm dev:install` pass. After a fresh installed restart with
+  `/api/stale-server` reporting `stale:false`, the 1280px fleet queue reads
+  `4 projects need a decision`, shows each project's shared decision label and
+  one action, retains only the explicit `1 more decision` link, and has no
+  horizontal overflow. In particular, Looma's raw multi-file task title is not
+  shown. No user-project mutation was invoked.
+
+### Finding: The rendered flow audit is gated before it audits the flow
+
+- [x] The isolated Narrative Harness fixture requires a project migration, so
+  the rendered under-one-minute Work test times out looking for a Work list.
+  Its current assertion suite still describes the removed dense Work console
+  instead of exercising the visible migration repair, then the concise Work
+  flow. Rebuild this proof around the owner path rather than bypassing the
+  gate or retaining obsolete layout expectations.
+- Evidence, 2026-08-12: `pnpm exec playwright test
+  tests/rendered-ui/project-flow.spec.ts --grep "flow audit protocol"` failed
+  after 30 seconds on the fixture's `Project update required` screen. The
+  visible screen correctly gave one `Review project update` action, but the
+  test never took it and waited for deleted `.work-list-stack` markup. This is
+  insufficient evidence for the goal's migration and cross-route agreement
+  requirements.
+- Follow-up replay, 2026-08-12: the previous one-at-a-time control required
+  more than eight owner clicks in the isolated fixture. The repair now applies
+  the explicit required set in one action and suppresses a persisted migration
+  gate when live migration status is clear. The rendered audit then reaches
+  the focused Current work handoff instead of the deleted dense Work list.
+
+### Repair: One explicit repair action clears the required-update set
+
+- [x] User job: when a project cannot run because Guildhall needs repairs, the
+  owner should understand that one project update is required, explicitly
+  approve it once, and either enter Work or see the single remaining repair.
+  A sequence of internally numbered migrations must not become a sequence of
+  owner decisions or clicks.
+- Contract Touch Decision: extend the project-migration apply command with an
+  explicit `includeRequired` approval and use it for the visible repair action.
+  Clear a persisted required-migration readiness record once the live migration
+  status says the required set is gone, before rebuilding the shared action
+  model. Considered but not touched: migration definitions, ledger format,
+  migration ordering, manual migrations, project/task schema, and run
+  readiness rules other than removing this obsolete persisted gate.
+  Schema Migration Decision: none; this changes command execution selection,
+  not persisted data. Required proof: unit coverage proves the command applies
+  required migrations only when explicitly approved; rendered replay proves
+  the Narrative Harness repair is one visible owner action and reaches Work.
+  Apply/revert: remove the request flag and the UI returns to the former
+  one-at-a-time flow without changing migration history.
+- Evidence, 2026-08-12: ProjectView coverage passes 68/68, including an
+  explicit `includeRequired` request, truthful next-update copy, and the
+  still-enabled follow-up action if a migration remains. The focused migration
+  selection assertion in `migrations.test.ts` passes: automatic migrations do
+  not apply required prompt work by default, but explicit
+  `includeRequired:true` does. The complete migrations suite currently has
+  three unrelated pre-existing failures in proof-path reconciliation fixtures;
+  they are not hidden by this repair. The rendered Narrative Harness flow
+  audit passes in Chromium: it approves the repair once, reaches Current work,
+  checks API focus/title agreement, and verifies no clipping at 1114x692,
+  900x692, and 390x844.
+
+### Repair: Task handoff source remains buildable
+
+- [x] User job: opening the current work item must load the same executable
+  handoff that Work advertised. Verify the current source and installed flow
+  build before the task-detail audit continues.
+- Contract Touch Decision: none. This is a build and interaction audit; task
+  state, task-detail payloads, action selection, and mutations are unchanged.
+  Schema Migration Decision: none. Required proof: TaskDrawer coverage and a
+  production build pass before the task-detail flow audit continues.
+- Evidence, 2026-08-12: TaskDrawer coverage passes 61/61 and `pnpm build`
+  passes. In the fresh installed Narrative Harness app, the shared current-work
+  handoff names Stage 2, `5 of 9 complete`, and NAR-091 with only `Resume this
+  work item` and `Browse work`; browsing then selecting NAR-091 preserves the
+  selected row and exposes its one executable control. No project mutation was
+  invoked.
+
+### Repair: Required update returns to the interrupted work item
+
+- [x] User job: when an approval reveals that Guildhall needs a project update,
+  the owner can apply that one update and return to the exact selected work
+  item. The repair screen must not make the owner rediscover why they arrived.
+- Finding, 2026-08-12: installed Looma + Knit correctly reduced the old raw
+  approval error to one `Review project update` action, but the route discarded
+  the selected spec-review task. The update gate therefore had no visible
+  connection to the approval the owner had just tried to make.
+- Contract Touch Decision: touch project-scoped route construction only.
+  Considered but unchanged: migration state, task state, action ranking,
+  approval mutation, project summary, and task-detail payload. Schema
+  Migration Decision: none. Required proof: route construction returns to the
+  selected Work item with repair intent; installed replay confirms the repair
+  gate and the preserved return target. Apply/revert: remove the route helper
+  to restore the former generic Overview redirect; no persisted data changes.
+- Evidence, 2026-08-12: route and ProjectView coverage passes 76/76, including
+  the compact task marker and the absence of the raw id/title at the repair
+  gate. TaskDrawer coverage passes 61/61; `pnpm typecheck`,
+  `pnpm lint:contracts`, and `git diff --check` pass. On the fresh installed
+  Looma + Knit service, the exact repair URL preserves
+  `work?view=queue&task=task-import-1rpbo8n&repair=migration`, opens the one
+  repair modal, and identifies the interruption as `Review paused ·
+  LOO-EBUYE7`. There is no horizontal overflow at 1114x692, 900x692, or
+  390x844. The required migration was deliberately not applied to the user's
+  project during this replay.
+
+### Repair: Spec approval begins at the decision
+
+- [x] User job: when the owner opens a spec awaiting review, the first task
+  screen immediately offers `Approve spec` or `Request changes`; they never
+  have to find a tab, scroll a full record, or interpret an action-less task
+  inspector first.
+- Contract Touch Decision: none. This is a rendered interaction audit of the
+  focused spec-review presentation. Considered but unchanged: task state,
+  approval mutation, full-record route, migration state, and task payload.
+  Schema Migration Decision: none. Required proof: an isolated spec-review
+  task opens directly at its visible decision and hides tabs and record detail
+  by default. Apply/revert: test-only proof; no runtime behavior or persisted
+  data changes.
+- Evidence, 2026-08-12: isolated rendered replay opens an actual Narrative
+  Harness `spec_review` task directly at `Approve spec` / `Request changes`.
+  It has no tabs or latest-handoff record in the focused screen; clicking the
+  visible primary action opens the `Approve spec` confirmation with its final
+  `Approve` control. This proof performs no task-state mutation.
+
+### Repair: Every spec approval hands project updates to one repair flow
+
+- [x] User job: regardless of whether the owner approves a spec from the
+  focused Work detail or the Thread document preview, a required project
+  update must replace the raw internal error with the same one-action repair
+  and return them to the task they were reviewing.
+- Finding, 2026-08-12: TaskDrawer already hands this condition to the shared
+  repair route, but ThreadTab still rendered `Run required Guildhall
+  migration ...` inside its approval dialog. Two visible approval paths were
+  therefore disagreeing about the same recoverable project state.
+- Contract Touch Decision: add one shared recognition helper for the typed
+  server error text and use the existing project-task repair route from the
+  Thread approval handler. Considered but unchanged: migration selection,
+  task state, approval endpoint semantics, project summary/action ranking,
+  migration ledger, and persisted schemas. Schema Migration Decision: none;
+  routing an existing recoverable error does not persist data. Required proof:
+  Thread replay proves approval leaves the raw error behind and targets the
+  selected task's repair URL; existing TaskDrawer regression confirms the
+  other entry point uses the same rule. Apply/revert: remove the common helper
+  and navigation branch; the approval protocol and stored state are unchanged.
+- Evidence, 2026-08-12: ThreadTab coverage passes 123/123, including an
+  approval response carrying the real required-migration message. The preview
+  closes, no raw internal message is rendered, and navigation targets
+  `/projects/looma-knit/work?view=queue&task=task-link-controls&repair=migration`.
+  TaskDrawer coverage passes 61/61 against the same shared recognition helper;
+  project-route coverage passes 7/7. `pnpm typecheck` and
+  `pnpm lint:contracts` pass. After a fresh build/install and Looma + Knit
+  restart, the real repair URL is current (`stale:false`) and at 1280x720 has
+  no page overflow: the update gate is 1176px wide and its 520px dialog fits
+  fully in the viewport. The isolated Narrative Harness flow audit also passes
+  at 1114x692, 900x692, and 390x844 with no clipped current-work action.
+
+### Repair: Thread-ready handoff names the milestone and progress
+
+- [x] User job: landing on Thread when Guildhall has work ready must answer
+  three things without reopening a transcript: the current milestone, the
+  work item that will resume, and how much of that milestone is complete.
+  The owner should then take the one visible `Open Work` action or leave.
+- Finding, 2026-08-12: real Narrative Harness correctly reduced Thread to
+  `No response needed` and `Open Work`, but it omitted both the Stage 2 name
+  and `5 of 9 complete`. The action was compact but not sufficiently oriented.
+- Contract Touch Decision: none. Thread will display existing fields from the
+  shared action model and project orientation spine only; the runtime summary,
+  release calculation, task routing, persistence, and schemas are unchanged.
+  Required proof: Thread unit replay verifies the focused task, selected scope,
+  completion ratio, and one route action; installed browser proof confirms the
+  card remains compact and unclipped. Apply/revert: remove the presentation
+  line; no operational or stored data changes.
+- Evidence so far, 2026-08-12: ThreadTab coverage passes 123/123. Its
+  ready-work replay verifies there is no Thread list, selected thread, or
+  active dock, while the card names the focused work and
+  `Stage 2: Local Desktop Harness MVP · 5 of 9 complete` before its sole
+  `Open Work` action. `pnpm typecheck`, `pnpm lint:contracts`, and the fresh
+  build/install pass. In the real installed Narrative Harness screen at
+  1280x720, those four elements are visible and the page has no horizontal
+  overflow. Final installed proof, 2026-08-12: the same read-only Narrative
+  Harness route is one viewport with no horizontal overflow at 1114x900 and
+  390x844. It retains exactly `No response needed`, `Work ready to resume`,
+  `Stage 2: Local Desktop Harness MVP · 5 of 9 complete`, and `Open Work`.
+  The existing deterministic ThreadTab replay covers the typed ready-work
+  contract; the real installed path supplies the required responsive evidence
+  without mutating the user's project.
+
+### Audit: Work selection survives a refresh without choosing for the owner
+
+- [x] User job: in the Work list, after selecting an item, the owner must
+  remain on that exact item while Guildhall refreshes or reorders data. A
+  refresh may update the row but must never choose a different task or make
+  the list visibly jump to a new selection.
+- Contract Touch Decision: none. This audit covers route-owned selection and
+  presentational refresh behavior only; task ordering, task state, summary
+  ranking, persistence, and selection-route schema are unchanged. Required
+  proof: a rendered rerender reverses task order after a click and retains the
+  original selected inspector and `?task=` route. Apply/revert: test-only
+  unless the regression reveals a writer that changes selection.
+- Evidence, 2026-08-12: WorkTab coverage passes 51/51, including a queue
+  replay where the owner selects Alpha, the refresh reverses Alpha and Beta,
+  and Alpha remains the sole `aria-current` row, the selected inspector, and
+  the `?task=task-alpha` route. This establishes that a presentational data
+  reorder cannot select Beta for the owner. Remaining live check: reproduce
+  any delayed reselection against Looma + Knit only if it still occurs after
+  the installed-app refresh; no user project was mutated for this replay.
+
+### Repair: A spec review is a task decision, not a Thread destination
+
+- [x] User job: when the shared project state says a specific spec needs
+  approval, every entry surface must take the owner directly to that one
+  `Approve spec` / `Request changes` decision. Thread must not duplicate the
+  review as a dense list and inspector merely because it has a historical turn
+  for the task.
+- Finding, 2026-08-12: the shared task action labels a `spec_review` as
+  `Review in Thread`; the Thread simplification then deliberately declines to
+  show its compact project decision because the same task has a thread chain.
+  That circular routing recreates the tab-hunting workflow the focused task
+  view already removed.
+- Contract Touch Decision: change the shared project-action route and label
+  for `spec_review` task actions and `owner_review_required` readiness from a
+  task-thread query to the existing focused task route. Thread will recognize
+  that route as a direct handoff and render the shared action once. Considered
+  but unchanged: review state transitions, approval API, task payload,
+  task-detail semantics, Thread history data, migration repair route, and
+  persisted schemas. Schema Migration Decision: none. Required proof: action
+  model coverage and Thread replay agree on direct task routing; focused task
+  replay still starts at the approval decision. Apply/revert: restore the
+  thread href helper; no stored workflow data changes.
+- Evidence, 2026-08-12: project-action coverage passes 39/39: both the
+  owner-review readiness action and the focused `spec_review` task now use
+  `/task/<id>` and say `Review spec`. ThreadTab coverage passes 124/124,
+  including a represented spec review that shows one direct task decision
+  rather than the Thread list and inspector. The existing rendered browser
+  replay `spec review starts at one decision without a tab hunt` passes. A
+  fresh `pnpm build`, `pnpm dev:install`, Looma + Knit stop/start, and
+  `/api/stale-server` check confirm the installed artifact is current
+  (`stale:false`); `pnpm typecheck`, `pnpm lint:contracts`, and
+  `git diff --check` pass. Narrative Harness currently has no live
+  `spec_review` task and Looma + Knit is guarded by a required migration, so
+  this decision was not applied against either user project merely to create
+  a demo state.
+
+### Repair: An owner question is an answer surface, not a Thread dashboard
+
+- [x] User job: when Guildhall needs one answer, the owner lands on that
+  question and its response control. The page must not make them choose the
+  same question from a list, scan prior history, or interpret an activity
+  panel before they can answer.
+- Finding, 2026-08-12: the direct owner-input route still retained the Thread
+  index, historical transcript, caught-up status text, active dock, and in
+  some cases a footer composer. The actual question was present, but it had to
+  compete with the whole Thread product surface. This fails the under-a-minute
+  owner job even when the response itself is correctly wired.
+- Contract Touch Decision: Thread will use the existing shared
+  `owner_input_required` action solely as a presentation boundary. It will
+  hide the redundant index/history/status treatment while the selected active
+  owner-response turn supplies the existing answer controls. Considered but
+  unchanged: question selection, response endpoints, Thread history,
+  navigation, task state, action ranking, and persisted schemas. Schema
+  Migration Decision: none. Required proof: a focused owner-question replay
+  keeps its answer control and route while omitting the list/history; normal
+  browsed Thread remains unchanged. Apply/revert: presentation-only; remove
+  the focus condition to restore the old Thread dashboard.
+- Evidence, 2026-08-12: ThreadTab coverage passes 125/125, including an
+  active owner choice alongside an old completed thread. The direct route
+  retains the choice controls while omitting the Thread history and visible
+  index. The rendered browser replay `owner input is a response surface, not
+  a Thread dashboard` passes at `1280x720` and `390x844`: it injects only the
+  typed shared `owner_input_required` action and one bounded-chat question,
+  then proves the response control is visible, the list/history are absent,
+  and page width does not overflow. This is an isolated replay; it does not
+  answer or alter a user project.
+
+### Repair: Home names the selected review, never its queue count
+
+- [x] User job: on Projects Home, a project that needs a spec decision names
+  the one spec Guildhall selected and offers its matching review control. The
+  owner must not decode a count of other pending specs before they can act.
+- Finding, 2026-08-12: live Looma + Knit Home still said `10 specs are ready
+  for your review before work can continue` while its button already targeted
+  one selected spec. The card summary prioritized raw `startReadiness.message`
+  above the shared primary action, contradicting the single-action model and
+  repeating the exact inert-count failure reported by the owner.
+- Contract Touch Decision: change only the home card's derived activity line
+  to consume the existing `actionModel.primaryAction` before raw readiness
+  prose. It will use the selected task label where available and retain raw
+  readiness only when no shared action exists. Home will also pass that
+  existing action through the shared project-route scoper so a relative
+  `/task/<id>` cannot lose its owning project. Considered but unchanged:
+  action ranking, readiness computation, task selection, fleet counts,
+  persistence, and API schemas. Schema Migration Decision: none.
+  Required proof: summary and home regressions show a selected review title
+  and shared review href without the count prose; installed Home reflects the
+  same. Apply/revert: presentation-only priority restoration.
+- Evidence, 2026-08-12: project-summary coverage passes 23/23 and Home
+  coverage passes 22/22. The focused Home replay proves the card says
+  `LOO-EBUYE7 Shape the focused review flow is ready for review.`, omits
+  the raw `10 specs` readiness message, and scopes `/task/task-review-menu`
+  to `/projects/looma-knit/task/task-review-menu` when clicked. After a fresh
+  build/install and Looma + Knit restart, the installed service reports
+  `stale:false`; live Home now names Looma + Knit's selected document-review
+  task beside `Review next spec`, with no `10 specs` count shown.
+
+### Repair: A known project update preempts spec approval before the click
+
+- [x] User job: when a Home review link targets a spec but Guildhall already
+  knows the project must be updated first, the owner goes directly to the one
+  project-update repair route. They must never be offered an `Approve spec`
+  action that is guaranteed to reject and only then reveal the update.
+- Finding, 2026-08-12: live Looma + Knit Home correctly named and linked the
+  selected review, but opening that direct task route over a known required
+  update still displayed `Approve spec` and `Request changes`. The previous
+  repair only caught the migration response after approval, so the drawer and
+  ProjectView were disagreeing about the same shared start blocker.
+- Contract Touch Decision: TaskDrawer will consume the existing typed
+  `required_migration_pending` start blocker and invoke the existing
+  project-task repair route before a focused spec decision is presented.
+  Considered but unchanged: migration selection/application, approval API,
+  task state, action model, repair route format, persistence, and schemas.
+  Schema Migration Decision: none. Required proof: focused drawer regression
+  proves the existing repair callback occurs from initial known state; live
+  direct Looma route lands on its repair gate without an approval action.
+  Apply/revert: remove the preflight navigation; the earlier response-time
+  recovery remains as a fallback.
+- Evidence, 2026-08-12: `TaskDrawer.svelte.test.ts` passes 62/62, including
+  the initial-state preflight regression which proves no approval request can
+  be made. `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and
+  `pnpm dev:install` pass. After a fresh Looma + Knit restart, the installed
+  service reports `stale:false`; the real direct route now redirects to
+  `/projects/looma-knit/work?view=queue&task=task-import-1rpbo8n&repair=migration`.
+  At 1280px it shows one `Apply required updates` decision, has no horizontal
+  overflow, and contains no `Approve spec` control. No project data was
+  changed during this read-only replay.
+
+### Repair: Home never repeats an action as a fake task title
+
+- [x] User job: from the project list, an owner can scan one sentence per
+  project and immediately understand the next decision. A project card must
+  not echo a generic action label as though it were a task title, producing
+  nonsense such as `Work ready to resume is ready to resume.`
+- Finding, 2026-08-12: the live Narrative Harness card rendered that exact
+  duplicated sentence. Its shared ready-work action had no meaningful task
+  label, but the Home presentation treated the action label as one and added a
+  second ready-to-resume suffix.
+- Contract Touch Decision: `project-summary` will distinguish a specific task
+  label from the action's generic label and use the generic stable sentence
+  when they match. Considered but unchanged: action ranking, service payload,
+  individual task rendering, route ownership, persistence, and schemas.
+  Schema Migration Decision: none. Required proof: summary regression covers
+  the missing/same-label case; the installed Home card says `Work is ready to
+  resume.` exactly once. Apply/revert: restore the previous home-only copy
+  rule.
+- Evidence, 2026-08-12: `project-summary.test.ts` passes 24/24, including the
+  equal generic-label regression. `pnpm typecheck`, `pnpm lint:contracts`,
+  `pnpm build`, and `pnpm dev:install` pass. After a fresh Looma + Knit
+  restart, the installed service reports `stale:false`; live Home at 1280px
+  has no horizontal overflow and the Narrative Harness card says `Work is
+  ready to resume.` exactly once.
+
+### Repair: Needs You only shows owner decisions, never the project archive
+
+- [x] User job: opening `Needs you` answers one question immediately: is a
+  decision waiting for me? When none is waiting, the owner sees that answer
+  and one route back to current work, then leaves. Historical migrations,
+  optional cleanup, and already-verified checklists must not become an
+  unbounded pseudo-inbox.
+- Finding, 2026-08-12: live Narrative Harness `Needs you` stated no alerts
+  were waiting, then rendered an optional nudge and 50 long history cards
+  (with more hidden behind the server). This is exactly the wall-of-text and
+  false-urgency failure the product must stop producing.
+- Contract Touch Decision: `NeedsYouTab` will keep active owner decisions as
+  its only default content and remove optional/history inventories from the
+  route's product surface. Considered but unchanged: inbox classification,
+  action routing, history persistence/API payload, review state, project
+  summary, and schemas. Schema Migration Decision: none. Required proof:
+  rendered regression with active decisions and inactive history; installed
+  Narrative Harness route contains no historical migration/checklist cards.
+  Apply/revert: restore the historical inventory sections if this dedicated
+  decision surface is later replaced with a separate, opt-in audit tool.
+- Evidence, 2026-08-12: `InboxTab.svelte.test.ts` passes 11/11, including
+  active owner decisions, resolved history, and optional-cleanup exclusions.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install`
+  pass. After a fresh Looma + Knit restart, the installed service reports
+  `stale:false`; the live Narrative Harness route now contains only `Nothing
+  needs your decision` and `Open current work`, with no optional nudge,
+  migration/history archive, or horizontal overflow at 1280px.
+
+### Finding: The rendered matrix still certifies removed dashboards
+
+- [x] User job: the rendered UI matrix must prove the owner can orient and act
+  on the current product, not force the product back toward removed dashboards
+  by asserting legacy headings, tab bars, counters, and archive rows.
+- Evidence, 2026-08-12: `pnpm test:ui` completed with 14 failures. Several
+  assert intentionally removed surfaces (`Do this next`, `Coordinator
+  timeline`, `Tasks done`, work-list controls, and legacy project-card grid).
+  Others leak migration state between shared fixture replays, so an expected
+  required-migration response becomes an order-dependent `200`. The direct
+  spec-review replay also hit its fixture migration gate before it could test
+  approval. This is a test-contract failure; the current installed live
+  replays above remain green.
+- Contract Touch Decision: rebuild the rendered matrix around the one-minute
+  owner jobs and isolated fixture state. Considered but unchanged: production
+  route semantics, action model, migrations, task state, and schemas. Schema
+  Migration Decision: none. Required proof: the revised matrix checks one
+  decision/action or an explicit no-action return per route, protects the
+  direct approval and repair gates, and runs without cross-test fixture state.
+- Progress, 2026-08-12: the direct spec-review replay now isolates the
+  approval state from fixture migration state and passes in Playwright. Its
+  migration helper also follows the current `Review project update` /
+  `Apply required updates` controls for replays that intentionally exercise
+  updates. The remaining matrix cases still need their legacy dashboard
+  contracts replaced rather than skipped.
+- Progress, 2026-08-12: the release, update-gated mobile Work, and Timeline
+  route matrix cases now assert their bounded current surfaces and pass in one
+  Playwright run. They no longer demand the removed release counter dashboard,
+  work-view toolbar, or `Coordinator timeline` transcript.
+- Progress, 2026-08-12: Home's mobile replay now follows the card's real
+  `Review next spec` action rather than demanding a generic project-opening
+  button. Its desktop proof keeps card-height and row-layout checks while
+  adding page-level no-overflow evidence; both focused replays pass.
+- Evidence, 2026-08-12: the rebuilt rendered `project-flow` matrix passes
+  35/35. It now proves a single update action, deliberate Work browsing,
+  focused current-work geometry at desktop/mobile widths, compact map entry,
+  calm shipped completion, and selected-row stability. The obsolete re-intake
+  POST assertion was removed from this UI matrix because it mutated the shared
+  fixture after the dedicated migration replay, making a pre-update 409 an
+  order-dependent expectation rather than browser evidence.
+- The route-capability replay is likewise read-only. It records visible route
+  health rather than mutating shared fixture migrations mid-suite; the
+  dedicated Current Work repair replay owns the one approved update action.
+- Fixture isolation repair, 2026-08-12: the spec-replay harness added tasks to
+  existing fixture projects but only removed projects that it had created.
+  Its cleanup now restores both the original task file and the mirrored
+  project-state copy, so later route tests cannot inherit replay-only work.
+- Release audit correction, 2026-08-12: the rendered orientation helper had
+  compared the compact Release page with a separate diagnostic readiness
+  endpoint. That let two deliberately different payload shapes become a false
+  product disagreement. The owner-flow proof now validates the page's shared
+  compact action and heading; diagnostic detail remains separately testable.
+- Final matrix evidence, 2026-08-12: `pnpm test:ui` passes 46/46 after a
+  scratch build. This includes the route-capability replay and all 35
+  owner-path flow checks in the same run, proving the fixture cleanup and
+  non-mutating audit changes hold under the real wrapper rather than only in
+  focused invocations.
+
+### Repair: The shared migration action names its executable step
+
+- [x] User job: when a project needs an update, every surface says `Review
+  project update` before opening the explanation and explicit apply command.
+- Finding and fix, 2026-08-12: the shared action model said `Migrate project`
+  while the actual gate correctly offered `Review project update`. The model
+  now owns the latter label; its focused runtime coverage passes 39/39.
+- [x] Complete the action-label handoff: Overview still rewrote the shared
+  label to `Update project`, so its button could disagree with the same action
+  on Work, the project shell, and the flow audit. Overview now presents the
+  shared label and only owns the modal destination.
+
+### Repair: Shipped work cannot be made urgent by a project update
+
+- [x] User job: a shipped release stays a calm completion state. A later
+  maintenance migration must not turn its Overview into a fake owner
+  emergency; the only product-level invitation is `Start next release`.
+- Finding and fix, 2026-08-12: a dynamic migration blocker rebuilt the shared
+  action model without the durable release lifecycle, so it outranked a
+  shipped release. The response now carries the compact release's durable
+  `shipped` lifecycle through that rebuild, and the rendered fixture records
+  a genuinely shipped release rather than merely a done active one.
+
+### Installed proof: Narrative Harness current-work handoff is one-minute readable
+
+- [x] User job: an owner who lands anywhere in the active Narrative Harness
+  project can tell the current milestone, progress, current work, and the one
+  meaningful next route without reading a dashboard or reconciling duplicate
+  status panels.
+- Evidence, 2026-08-12: after `pnpm build`, `pnpm dev:install`, and a fresh
+  `guildhall stop && guildhall start` in the Narrative Harness workspace,
+  `/api/stale-server` reported `stale:false`. Read-only browser proof at
+  `localhost:7777` found the same state on every owner route: `Stage 2: Local
+  Desktop Harness MVP`, `5 of 9 complete`, `NAR-091`, and ready-to-resume
+  work. Overview provides that one handoff in a single viewport; Work presents
+  the focused card and deliberate `Browse work` escape hatch; Thread says no
+  response is needed and routes back to work; Release exposes only the compact
+  readiness handoff and `Inspect release details`; Needs You says nothing needs
+  a decision and returns to current work. All of those routes fit without
+  horizontal overflow at 1280px. Work also fits without overflow at 1114px and
+  390px, with the same focused card and actions. Browser console logs were
+  empty. This is evidence for the current-work handoff only, not a claim that
+  every Guildhall route has reached the standard.
+
+### Repair: Remove Structure as a second owner-facing project report
+
+- [x] User job: an owner who needs orientation uses Map; an owner who needs to
+  act uses Work. They are never led to a separate `Structure` route merely to
+  read internal work-area, contract, handoff, and task-start context that does
+  not change a current choice.
+- Finding, 2026-08-12: the installed Narrative Harness `/structure` route
+  duplicated the milestone, project map, and top blocker, then added a long
+  charter paragraph, work-area inventory, zero-value contract and handoff
+  panels, and maintenance explanations. This is precisely the report-shaped
+  surface the stop-ship reset rejects.
+- Contract Touch Decision: remove Structure from the project rail and stop
+  Map, Settings, and setup completion from routing owners there. Legacy
+  `/structure` routes will render the existing compact Map surface so retained
+  bookmarks have one coherent orientation destination. Considered but not
+  touched: the structural graph store, task-start context, handoff and
+  contract data, project schemas, graph APIs, and task routing. Those remain
+  available to the runtime/agents where they are operationally relevant; they
+  are not elevated as a product route. Schema Migration Decision: none.
+  Required proof: direct legacy URLs show compact Map, project navigation has
+  no Structure entry, and setup/settings no longer advertise the report.
+  Apply/revert: presentation and route composition only; restoring the old
+  panel requires no data migration.
+- Evidence, 2026-08-12: `pnpm typecheck`, `pnpm lint:contracts`, the focused
+  ProjectView/Settings/Map component suites (89/89), and the rendered
+  owner-path matrix (33/33) pass. After a fresh build/install and service
+  restart, the installed server reported `stale:false`. A read-only visit to
+  Narrative Harness' legacy `/structure` URL renders the compact Map in one
+  1280x720 viewport: project name, selected milestone, `5/9 work items
+  complete`, `Open Work`, and optional map inspection. There is no Structure
+  navigation control, no horizontal overflow, and no console warning/error.
+
+### Repair: Facts and activity history are not project destinations
+
+- [x] User job: a legacy bookmark must return the owner to a live decision or
+  compact orientation. A project-facts inventory and raw coordinator event log
+  are neither, so they cannot remain routes that look like normal project work.
+- Finding, 2026-08-12: Narrative Harness `/facts` exposed package commands,
+  filesystem identity, old verification metadata, internal routing, and design
+  configuration with no immediate decision. `/timeline` exposed raw start/stop
+  and agent-error lines plus a `Show earlier updates` control. Both are
+  information dumps that make a human parse internal operations rather than
+  act; the timeline also reproduces the reported inert older-activity control.
+- Contract Touch Decision: remove Facts from project navigation and project
+  activity from the action menu. Legacy `/facts` will render the compact Map;
+  legacy `/timeline` will render the normal Overview handoff. Considered but
+  not touched: facts and activity APIs, retained event history, runtime
+  telemetry, project schemas, and agent diagnostics. Schema Migration
+  Decision: none. Required proof: legacy paths expose a decision/orientation
+  surface with no raw facts/activity controls. Apply/revert: route composition
+  only; the retained engineering data is unchanged.
+- Evidence, 2026-08-12: `pnpm typecheck`, focused router/ProjectView/Settings
+  coverage (83/83), the rendered route matrix (33/33), `pnpm lint:contracts`,
+  and `git diff --check` pass. After a fresh build/install and service restart,
+  `/api/stale-server` reported `stale:false`. On the installed Narrative
+  Harness service, `/facts` shows the compact Map and `/timeline` shows the
+  current-work Overview; neither exposes `Project facts`, `Project activity`,
+  raw event rows, or a load-older control. Both fit the 1280x720 viewport with
+  no horizontal overflow and no browser warning/error.
+
+### Repair: Settings opens as a chooser, not a configuration report
+
+- [x] User job: entering Settings gives the owner a small set of named
+  configuration destinations. It does not make them parse bootstrap history,
+  runtime probes, mounts, provider state, and verification commands unless
+  they deliberately open the relevant setting.
+- Finding, 2026-08-12: the installed default Settings route stacked its
+  seven-section navigation above the entire Ready panel, including bootstrap
+  status, container runtime diagnostics, folder mounts, and historical
+  verification commands. That is a technical report on an otherwise simple
+  settings entry route.
+- Contract Touch Decision: make `/settings` a settings chooser; detailed
+  panels require an explicit section route. Considered but not touched:
+  settings APIs, identity state, bootstrap/run behavior, migrations, provider
+  configuration, runtime checks, persistence, and schemas. Schema Migration
+  Decision: none. Required proof: default settings has no bootstrap/runtime
+  report; a chosen settings section keeps its existing focused behavior.
+  Apply/revert: presentation-route default only.
+- Evidence, 2026-08-12: `pnpm typecheck`, ProjectView and SettingsTab coverage
+  (79/79), the rendered owner-path matrix (34/34), `pnpm lint:contracts`, and
+  `git diff --check` pass. After a fresh build/install and service restart,
+  `/api/stale-server` reported `stale:false`. Installed Narrative Harness
+  Settings is one 1280x720 viewport containing only `Settings` and its seven
+  named destinations. It does not load the Ready/bootstrap or Local runtime
+  report until the owner enters that specific section; browser logs are empty.
+
+### Repair: The shared current-work packet names the current task
+
+- [x] User job: when Guildhall says work is ready, every owner surface names
+  both the stable work key and the actual task title. A generic readiness label
+  describes state; it must never replace the identity of the work to resume.
+- Finding, 2026-08-12: live Narrative Harness `/api/project` correctly
+  returned `task-091` with title `Present draft review evaluation and
+  provenance`, but its shared `startReadiness.focusTaskTitle` and action-model
+  task label both said `Work ready to resume`. Overview therefore made an
+  owner read a generic status twice instead of showing the task itself.
+- Contract Touch Decision: canonicalize a response readiness focus title from
+  the task in that same compact response snapshot before rebuilding the shared
+  action model. Considered but not touched: readiness ranking, task state,
+  persisted project summary, release scope, task routing, and schemas. Schema
+  Migration Decision: none. Required proof: the API, Overview, Work, Thread,
+  and Release retain the same task id/title pair. Apply/revert: read-model
+  correction only; no task data changes.
+- Evidence, 2026-08-12: `pnpm typecheck` and the read-boundary regression
+  pass. After `pnpm build`, `pnpm dev:install`, and restart, the installed
+  Narrative Harness service reported `stale:false`. Its API and Overview,
+  Work, Thread, and Release routes all show `NAR-091` paired with `Present
+  draft review evaluation and provenance` at 1280x720, with no browser errors
+  or horizontal overflow.
+
+### Repair: Release details show exceptions, not a check ledger
+
+- [x] User job: after deliberately opening release details, an owner sees only
+  unfinished checks and can open the affected task without expanding another
+  row. Clear checks, task-state totals, and unrelated setup diagnostics do not
+  consume the decision surface.
+- Finding, 2026-08-12: Narrative Harness `Inspect release details` opened a
+  ledger of clear rows, an unrelated design-system record, a task-state tally,
+  and closed exception rows. The one real proof and repository problem was
+  present, but neither was the page's visual focus.
+- Contract Touch Decision: filter the existing release-check categories to
+  unresolved items at the Release presentation boundary and render their
+  existing task routes directly. Considered but not touched: readiness,
+  release verdicts, action ranking, task/repository state, APIs, persistence,
+  and schemas. Schema Migration Decision: none. Required proof: exception
+  tasks are visible without disclosure; clear/tally content is absent.
+- Evidence, 2026-08-12: ReleaseTab coverage passes 29/29, the rendered
+  owner-path matrix passes 45/45, and `pnpm typecheck` passes. After a fresh
+  build/install and restart, `/api/stale-server` reported `stale:false`.
+  Installed Narrative Harness release checks fit at 1280x720 with no horizontal
+  overflow or browser errors: four visible proof-task routes and one visible
+  repository finding, with no clear-check ledger, design-system record, or
+  task-state tally. The same route has no horizontal overflow or errors at
+  390x844.
+
+### Repair: Project cards name the work, not the state twice
+
+- [x] User job: on `/projects`, an owner scans a project once and can choose
+  where to go. Each card supplies a state chip, one current-work or decision
+  label, and one direct action; it does not make the owner read a second
+  editorial sentence that merely restates the state.
+- Finding, 2026-08-12: cards turned shared actions into report-like sentences
+  such as `TASK title is ready for review.` and `Work ready to resume is ready
+  to resume.` The status chip and action button already communicated those
+  states, while the extra clause made the chooser taller and harder to scan.
+- Contract Touch Decision: derive card activity from the existing shared
+  primary action's task label when it has one, otherwise from its action label;
+  retain the stable `Work is ready to resume.` fallback only when no task is
+  available. The card clamps that one line with the complete value retained in
+  its title attribute. Considered but not touched: action ranking, readiness,
+  project/task state, routes, service payloads, persistence, and schemas.
+  Schema Migration Decision: none. Required proof: summary and Home rendering
+  regressions cover review, ready-work, and zero-task owner-input cases; the
+  browser matrix rejects multi-line card activity. Apply/revert: a read-model
+  presentation change only.
+- Evidence, 2026-08-12: `project-summary.test.ts` and
+  `ProjectsHome.svelte.test.ts` pass 46/46, `pnpm typecheck` passes, and the
+  full rendered UI matrix passes. After a fresh build/install and Looma + Knit
+  restart, `/api/stale-server` reports `stale:false`. Installed `/projects`
+  has a single state/action/current-work packet per card at 1280x720 and
+  390x844, with no console warning/error or horizontal overflow; each measured
+  activity line is 17px high, including deliberately long task titles.
+
+### Repair: Saved fleet attention is a shared primary action
+
+- [x] User job: when a project has no task-derived action but does have a
+  current owner decision, `/projects` and `Needs you` name the same decision
+  and offer the same destination. Neither surface may claim that the project
+  is ready just because its task inventory is empty.
+- Finding, 2026-08-12: Commerce project appeared as `Ready / No task activity
+  yet / Open project` on the chooser, while the same saved attention snapshot
+  made `Needs you` say `Give the project direction / Start setup`. The action
+  model was absent from the compact fleet record, so each surface told a
+  different story.
+- Contract Touch Decision: add a shared runtime fallback that promotes the
+  already-prioritized saved attention item through `buildProjectActionModel`
+  only when the compact summary has no action model; persist it in the fleet
+  summary and apply the same compatibility repair when reading older fleet
+  rows. The project-read boundary consumes that same cached fleet action when
+  its direct compact response has none, so opening the project cannot lose the
+  decision the chooser just named. A saved `setup_pending` action suppresses
+  the unrelated top-shell run control; the Thread surface presents one setup
+  decision and keeps coordinator inventory behind collapsed setup details.
+  Considered but not touched: inbox ordering, attention persistence,
+  task/action ranking when an action already exists, task state, routes,
+  project schemas, and database schema.
+  Schema Migration Decision: no persisted schema shape changes; old rows are
+  upgraded at the read boundary and rewritten by the normal projection refresh.
+  Required proof: action-model and card-summary regressions, plus installed
+  card/Needs You agreement. Apply/revert: remove the fallback; retained
+  attention records remain intact.
+- Evidence, 2026-08-12: focused action-model, project-summary, ProjectView,
+  and Thread suites pass 259/259; `pnpm typecheck`, `pnpm lint:contracts`, and
+  `git diff --check` pass. The full rendered UI matrix passes 45/45. After a
+  fresh build/install and Looma + Knit restart, `/api/stale-server` reports
+  `stale:false`; the installed Commerce card shows `Needs you / Give the
+  project direction / Start setup`. Following it at 1280x720 yields one
+  `Needs you` marker, the short brief form, collapsed `Setup details`, and
+  `Save`: no Thread-list duplicate and no fake Resume/Start control. The same
+  decision route at 390x844 has no horizontal overflow or browser warning/error.
+
+### Repair: Fleet actions cannot skip a required project update
+
+- [x] User job: when a global decision card names an action, following it
+  opens that action. A required project update comes before downstream review
+  or work; the owner never has to discover the precondition after navigating.
+- Finding, 2026-08-12: Looma + Knit advertised `Review next spec` from the
+  saved fleet projection, but its project route correctly preempted the task
+  with `Required migration`. The button therefore led to a different action
+  than its label promised.
+- Contract Touch Decision: during the asynchronous fleet projection refresh,
+  resolve the existing required-migration entry gate and replace both saved
+  `startReadiness` and the shared action model's primary/run-control fields
+  when it is present. This reuses the established migration/start-readiness
+  contract and keeps fleet reads bounded to their saved payload. Considered
+  but not touched: request-time fleet reads, migration persistence, migration
+  application, task ordering, route redirects, and schemas. Schema Migration
+  Decision: none; the existing compact projection is rewritten on refresh.
+  Required proof: a fleet integration regression and an installed global
+  decision click. Apply/revert: remove the refresh-time preemption; no project
+  data is modified.
+- Evidence, 2026-08-12: fleet migration, project-route, and global-needs-you
+  routing regressions pass; `pnpm typecheck`, `pnpm lint:contracts`, and
+  `git diff --check` pass, and the full rendered UI matrix passes 45/45. After
+  a fresh build/install and Looma + Knit restart, `/api/stale-server` reports
+  `stale:false`. Installed `Needs you`
+  shows `Required migration / Review project update` for Looma + Knit; its
+  button opens the project overview with the `Migrate project` dialog and
+  visible `Apply required updates` command at 1280x720, with no horizontal
+  overflow or browser warning/error.
+
+### Repair: Starting focused work must not reveal the legacy dashboard
+
+- [x] User job: an owner opens the one work item Guildhall has chosen, starts
+  it, and remains oriented to that item. The full work inventory appears only
+  after choosing `Browse work`, never as a delayed side effect of the start.
+- Finding, 2026-08-12: Narrative Harness opened as a concise ready-work
+  handoff, then starting `NAR-091` cleared the pending primary action and
+  silently replaced that handoff with filters, list, inspector, duplicate task
+  content, and recent-progress inventory. The route still selected NAR-091;
+  the presentation had simply stopped recognizing the active handoff.
+- Contract Touch Decision: focused Work remains active when the project is
+  running and the route carries a selected task id. This is route/run state,
+  not a route-local task ranking; it does not make arbitrary stopped task URLs
+  look owner-selected. Considered but not touched: task state, action ranking,
+  run lifecycle, selected-task persistence, Work inventory, APIs, and schemas.
+  Schema Migration Decision: none. Required proof: focused Work regression
+  and installed ready-work entry proof. Apply/revert: remove the active-route
+  condition; no persisted state changes.
+- Evidence, 2026-08-12: focused Work suite passes 6/6 and `pnpm typecheck`
+  and `git diff --check` pass. After a fresh build/install and Looma + Knit
+  restart, `/api/stale-server` reports `stale:false`; Narrative Harness is
+  returned to a stopped ready-work state with `NAR-091` as its one direct
+  action. Browser proof of the active post-start state is represented by the
+  deterministic focused-run regression and will be repeated in the next
+  interactive run without leaving background work active.
+
+### Repair: Pause only represents active processing
+
+- [x] User job: a project with a pending approval or repository follow-up
+  shows the relevant review action. `Pause` appears only while Guildhall is
+  actually processing that project, and it stops that processing.
+- Finding, 2026-08-12: Font Something's live approval screen exposed `Pause`
+  even though its authoritative project read had `run: null`. The shared action
+  model treated a stopped start gate as pause-capable, and the shell converted
+  that false capability into a red command.
+- Contract Touch Decision: make `pauseEnabled` true only for a running
+  execution, and make the shell derive pause presentation solely from live
+  `running`/`stopping` status. Considered but not touched: readiness ranking,
+  approval state, repository follow-up behavior, run lifecycle, task state,
+  and schemas. Schema Migration Decision: none. Required proof: action-model
+  and shell regressions plus installed review-route/API agreement. Apply/revert:
+  remove the execution-only pause constraint; no persisted state changes.
+- Evidence, 2026-08-12: action-model and ProjectView suites pass 109/109;
+  `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` pass. After
+  a fresh build/install and Looma + Knit restart, `/api/stale-server` reports
+  `stale:false`; Font Something's authoritative read has `run: null` and
+  `pauseEnabled: false`, while its installed spec-review screen has no Pause
+  control and has visible Review spec, Request changes, and Approve spec
+  controls. The same route has no horizontal overflow or browser warning/error
+  at 1280x720 and 390x844; Approve spec is 214px from the mobile viewport top.
+
+### Repair: Repository exceptions lead to an executable decision
+
+- [x] User job: when release details says an exception needs attention, the
+  owner can resolve that exception from its destination. A completed task whose
+  old worktree no longer exists must not create a repository exception or send
+  the owner into an unrelated task record.
+- Finding, 2026-08-12: Narrative Harness release details displayed `Could not
+  inspect this checkout.` for completed `NAR-087`. The project checkout is
+  clean and pushed, but the task retained a deleted `worktreePath` string and
+  a historical `mergeRecord.result: skipped`. The Git Story projection treated
+  that string as a live worktree, emitted an `unknown` blocker, and linked the
+  owner to a task record with no repository recovery command. The task's
+  missing proof is a separate real exception and already owns the one valid
+  recovery route; it does not restore a deleted repository landing surface.
+  Live inspection refined this finding: `NAR-087` also has an existing clean
+  task branch with unmerged commits and no upstream. That is a real landing
+  decision, but the `skipped` marker incorrectly classified the successfully
+  inspected branch as `unknown`, making Release claim the checkout could not
+  be inspected. The first repaired route then exposed an old raw `index.lock`
+  failure and large runtime-context dumps beneath the valid branch decision,
+  proving that even deliberate full-record navigation must not default to
+  forensic history. The generic terminal-outcome banner also repeated that raw
+  historical failure above the decision and must yield to the repository route.
+- Contract Touch Decision: repair the shared Git Story eligibility predicate
+  to use the existing-worktree fact, not stale persisted path text, before a
+  skipped merge can become a live follow-up. A missing proof remains in the
+  task/proof exception category and must not duplicate itself as repository
+  work. Considered but not touched: task completion/proof state, merge-record
+  persistence, release membership, task routing, and schemas. Schema Migration
+  Decision: none; old records are interpreted correctly at read time. Required
+  proof: a deleted worktree produces no Git Story blocker while a real existing
+  worktree, conflict, override, or pending PR remains actionable. Apply/revert:
+  read-model-only; no task record is mutated.
+- Evidence, 2026-08-12: focused Git Story, release-readiness, ReleaseTab,
+  TaskDrawer, and drawer-tab suites pass; `pnpm typecheck`,
+  `pnpm lint:contracts`, `git diff --check`, `pnpm build`, and
+  `pnpm dev:install` pass. After the Looma + Knit restart,
+  `/api/stale-server` reported `stale:false`. The installed Narrative Harness
+  release API reports the real `no_upstream` branch blocker for `NAR-087`, not
+  an inspection failure. At 1280x720 and 390x844, Release shows four proof
+  exceptions plus one `A branch needs a sharing decision` exception; one click
+  reaches that task's visible `Open pull request` action (217px desktop, 238px
+  mobile). No horizontal overflow, browser error, raw `index.lock` error, or
+  runtime-context dump appears on that decision route. The button was not
+  invoked because it would create a real pull request.
+
+### Repair: Live refresh retains the open work surface
+
+- [x] User job: while browsing a Work list, the visible count and rows stay
+  stable as live project events arrive. A background refresh may update task
+  state, but it must not replace the list with a smaller Overview projection
+  and restore it seconds later.
+- Finding, 2026-08-12: Narrative Harness `/work?view=queue` repeatedly changed
+  from four current items to one, then back to four on the five-second surface
+  refresh. The authoritative Work API consistently returned the same 40-item
+  inventory and four current rows. A `supervisor_*` event called the compact
+  project refresh without the active `surface=work` and overwrote that
+  inventory with an Overview-sized response.
+- Contract Touch Decision: route all ProjectView-triggered live, run-lifecycle,
+  and post-migration refreshes through the current surface and selected-task
+  parameters already owned by the project store. Considered but not touched:
+  task ordering, selection persistence, project summary schema, API shape,
+  SSE event schema, and persistence. Schema Migration Decision: none. Required
+  proof: a supervisor event on Work requests the Work payload and a live browser
+  list stays stable across the refresh interval. Apply/revert: read routing
+  only; no task data is changed.
+- Evidence, 2026-08-12: `pnpm exec vitest run
+  src/web/surfaces/__tests__/ProjectView.svelte.test.ts` passed (70 tests),
+  including the supervisor-event regression: the refresh requests
+  `surface=work` with the current inventory parameters and never the default
+  compact response. `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`,
+  `pnpm build`, and `pnpm dev:install` passed. After `guildhall stop &&
+  guildhall start` in Looma + Knit, `/api/stale-server` reported `stale:false`
+  on the installed build. In the actual Narrative Harness Work route, 28
+  desktop samples over seven seconds stayed at four current items/four rows,
+  with no error or horizontal overflow. Selecting NAR-091 remained on its task
+  URL through a second six-second sample run. At 390x844, 24 samples again
+  stayed at four rows with no clipped buttons, error, or horizontal overflow.
+  The full rendered owner-flow suite, `pnpm test:ui`, also passed 45/45 after
+  this repair.
+
+### Repair: Browse work refreshes after leaving a focused handoff
+
+- [x] User job: after choosing `Browse work` from the one-item current-work
+  handoff, the owner sees the actual Work inventory immediately. Browsing
+  cannot retain an obsolete focused-task payload and masquerade as a one-item
+  list.
+- Finding, 2026-08-12: the focused Narrative Harness handoff correctly showed
+  NAR-091. Clicking `Browse work` changed the URL to `?view=queue`, but the
+  page continued to show only that task for seven seconds while the
+  authoritative unfiltered Work API returned the full inventory. ProjectView
+  watched `path.value` (pathname) for route refreshes; query-only navigation
+  updates `path.href`, so removing `?task=` never requested a new Work payload.
+- Contract Touch Decision: make ProjectView's focused-task derivation and
+  route refresh effect depend on the full route href, while retaining the
+  existing Work surface/inventory contract. Considered but not touched: task
+  filtering, Work selection, task ordering, API payload shape, navigation
+  history, persistence, and schemas. Schema Migration Decision: none. Required
+  proof: a focused-to-queue query transition sends a new Work request without
+  `task`, and the installed Browse work flow reveals the complete current Work
+  slice without a delayed change. Apply/revert: route-read reactivity only; no
+  task data changes.
+- Evidence, 2026-08-12: ProjectView and focused Work coverage pass 78/78,
+  including a query-only focused-to-queue refresh and a focused handoff that
+  receives the complete current-release slice before Browse is pressed.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install`
+  pass. After a Looma + Knit restart, `/api/stale-server` reports `stale:false`.
+  In the actual installed owner flow (`Projects` -> Narrative Harness `Open
+  Work` -> `Browse work`), the queue immediately renders four current items:
+  NAR-091 through NAR-094. The route has no browser error or horizontal
+  overflow at 1280x720. The full rendered owner-flow suite, `pnpm test:ui`,
+  passed 45/45 after this repair.
+
+### Release gate repair: canonical readiness projection remains replay-safe
+
+- [x] User job: a release candidate must have one durable readiness answer that
+  can be recomputed after a legitimate task-state migration without making the
+  server or its verification suite fail. Proof totals and release membership
+  must reflect the current shared execution model rather than stale fixture
+  assumptions.
+- Finding, 2026-08-29: the current usability PR's Verify job is red. A focused
+  rerun of `serve-release-readiness.test.ts` completed 83/88 tests but exposed
+  five release-boundary regressions: inferred Narrative Harness proof fixtures
+  expect one proof path after the canonical model records two; two migration
+  fixtures replay `release.readiness` under a fixed claim id with changed
+  content; and a split-parent assertion expects the parent execution node even
+  though the selected scope correctly contains its three materialized children.
+  The archived CI run also timed out most tests under parallel load, so release
+  verification must be made deterministic before a 0.13.2 release is prepared.
+- Contract Touch Decision: writeProjectStateDatabaseSummarySnapshot now treats
+  a semantic difference in its canonical decision claims as a project-state
+  mutation, bumping the revision and rebasing those immutable claim ids before
+  writing. Touched contracts: current project revision, summary-resolution
+  snapshot, and canonical claim identity. Considered but not touched: queue
+  revision semantics, claim payload schema, migrations, API payloads, and
+  release-scope rules. Rejected: accepting mismatched claim replays or
+  downgrading the decision to cache-only metadata. Schema Migration Decision:
+  none; stored shapes are unchanged and old rows remain readable. Apply/revert:
+  write-time revision choice only, with no destructive migration.
+- Evidence, 2026-08-29: the focused release-readiness fixture set passes for
+  both changed proof contracts, the migration replay cases, and split-child
+  execution scope. pnpm test:release passes 310/310 under the same parallel
+  command used by Verify; the readiness suite completes 88/88 without timeout
+  failures. pnpm typecheck and pnpm lint:contracts pass. The release artifact
+  contract now asserts the intentional Map chunk instead of the removed
+  Structure-panel chunk. pnpm test:ui passes 45/45, including the mobile
+  Projects flow: a migration-blocked card exposes Review project update and
+  opens the named migration dialog rather than a misleading spec action.
+  After pnpm dev:install and a Looma + Knit restart, the installed 0.13.2
+  service reports stale:false. Its actual overview and Work routes show the
+  single required update, named migration, and Apply required updates action
+  without browser-console errors.
+
+### Repair: Overview attention action remains visible after a project update
+
+- [x] User job: after applying a required project update, the owner can tell it
+  succeeded and can immediately take the one newly selected next action. The
+  action stays visible beside a bounded task label at every supported width.
+- Finding, 2026-08-29: Looma + Knit successfully applied its required
+  migration, then silently returned to Overview with `Review a spec` selected.
+  The authoritative project status confirms no migration remains and ten specs
+  now await review, but the long task label expanded its flex column beyond the
+  card and pushed the already-rendered `Review next spec` button off-screen.
+  The result reads as an unresolved warning with neither proof of completion
+  nor a reachable action.
+- Contract Touch Decision: keep selection, label, href, and action ownership in
+  the existing shared action model. Repair only the overview presentation
+  contract: its copy column must be shrinkable, the task title must truncate
+  inside that column, and an applied migration must publish a success notice.
+  Considered but not touched: action ranking, migration persistence, task
+  state, readiness projection, API response shape, and schemas. Schema
+  Migration Decision: none. Required proof: component action rendering, a
+  rendered narrow overview with no horizontal overflow and a visible action,
+  and installed Looma + Knit proof after a real completed update. Apply/revert:
+  view-state and layout only; no persisted project data changes.
+- Evidence, 2026-08-29: ProjectOverviewTab and ProjectView focused suites pass
+  77/77; `pnpm typecheck` and `pnpm lint:contracts` pass. The full rendered
+  suite passes 45/45, including the narrow Overview regression: the visible
+  `Review project update` button stays inside `.overview-decision-card` with no
+  horizontal overflow. After `pnpm dev:install` and a Looma + Knit restart,
+  `/api/stale-server` reports `stale:false`. The installed actual Overview
+  presents `Review next spec` fully inside its card (right edge 914px in a
+  971px viewport); the task title has `text-overflow: ellipsis` with a 570px
+  client width and 945px intrinsic width. One non-mutating click opens the
+  selected task record directly, where `Approve spec` is visible. The real
+  project status confirms the migration completed and the ten pending spec
+  reviews are now the authoritative next action.
+  `pnpm test:release` also passes 310/310 after the public curl examples were
+  aligned with the 0.13.1 docs release; `pnpm docs:build` passes.
+
+### Repair: Work starts with the owner review queue, not a mixed backlog
+
+- [x] User job: when the project is waiting for spec approval, opening Work
+  shows only the ordered specs that need review, why they matter, and a
+  deliberate path to the complete inventory. Paused, blocked, and unrelated
+  planning work cannot compete with the owner decision.
+- Finding, 2026-08-29: the installed Looma + Knit `/work?view=queue` route
+  renders sixteen mixed rows (paused, waiting, blocked, and ten spec reviews)
+  with only `Work list` and `16 current items` as orientation. The shared
+  start-readiness result already carries the authoritative ordered
+  `reviewTaskIds`, but Work ignores that scope and reconstructs an all-current
+  backlog at the exact point the owner needs to choose a spec.
+- Contract Touch Decision: retain review membership and ordering in the shared
+  `startReadiness.reviewTaskIds` contract. Work will consume that list directly
+  for its default review queue and will not classify tasks from local status or
+  prose. Considered but not touched: readiness ranking, task status semantics,
+  work inventory pagination, task selection, release membership, API payloads,
+  persistence, and schemas. Schema Migration Decision: none. Required proof:
+  component and rendered flows show review-only rows from shared ids, retain a
+  direct item action, and expose a deliberate all-work route without overflow.
+  Apply/revert: presentation selection only; no project state is changed.
+- Evidence, 2026-08-29: `WorkTab.svelte.test.ts` passes 52/52, including the
+  shared review-id ordering, absence of an unrelated paused row, and the
+  explicit `Show all work` transition. `pnpm typecheck`, `pnpm lint:contracts`,
+  and `pnpm test:ui` pass (45 rendered flows). After `pnpm build`,
+  `pnpm dev:install`, and a Looma + Knit restart, `/api/stale-server` reports
+  `stale:false`. The installed default Work route shows `Specs to review`,
+  `10 specs need your review`, ten rows, no generic Work controls, and no
+  paused row; both page and card horizontal overflow are zero. `Show all work`
+  opens `?view=queue&all=1`, restores the 16-row inventory and its controls,
+  and still has zero overflow. The focused review queue keeps its action
+  visible at 960px desktop and 390px mobile widths with zero card/page overflow.
+  A non-mutating installed replay of the first selected review row opens its
+  action-only inspector, then the task review route, where both `Approve spec`
+  and `Request changes` are visible above the fold at 1280px, 960px, and 390px
+  with zero page overflow. Approval itself was intentionally not invoked
+  against the user's active project during this presentation audit.
+
+### Repair: Release details must not compete with the current owner decision
+
+- [x] User job: when a release is waiting for an owner review, Release either
+  takes the owner directly to that review or repeats the same executable action.
+  It does not lead them into a release-wide exception report that makes every
+  future concern look equally urgent.
+- Finding, 2026-08-29: Looma + Knit Release correctly presents `Review next
+  spec`, but its `Inspect release details` button opens `/release/criteria`.
+  That route renders eighteen rows spanning ten duplicate spec approvals,
+  incomplete briefs, a stopped-agent escalation, and repository follow-up.
+  Several rows have no executable control and none outranks the current review.
+  This is the previously reported actionless wall of text under a new heading.
+- Contract Touch Decision: preserve the shared `actionModel.primaryAction` as
+  the owner-action authority and preserve release-readiness data for cases that
+  have no current owner action. The release view will use the shared action to
+  suppress its competing detail entry and make a direct `/release/criteria`
+  visit action-only while an owner decision is active. Considered but not
+  touched: readiness ranking, release-check categories, task/repository state,
+  API shapes, persistence, and schemas. Schema Migration Decision: none.
+  Required proof: component and installed Looma routes show one matching review
+  action, do not render the exception report while that action is active, and
+  preserve the exception report where no owner action exists. Apply/revert:
+  presentation and route behavior only; no release state is altered.
+- Evidence, 2026-08-29: `ReleaseTab.svelte.test.ts` passes 30/30, including
+  a direct `/release/criteria` visit with an active shared review action: it
+  renders the review action and suppresses both `Release exceptions` and a
+  later brief. The existing exception cases without an owner action remain
+  covered. `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm test:ui` pass
+  (45 rendered flows). After build, install, restart, and `stale:false`, the
+  installed Looma Release landing has `Review next spec`, no `Inspect release
+  details` control, and no overflow. Its direct criteria URL repeats only the
+  same review action at desktop, 960px, and 390px, with zero overflow. A
+  non-mutating click routes directly to the selected task approval surface,
+  where `Request changes` and `Approve spec` are visible above the fold.
+
+### Repair: Review actions must have one canonical destination
+
+- [x] User job: every surface that says `Review next spec` opens the same
+  approval surface. The compact readiness payload, shared action model, and
+  route consumers must not carry alternate URLs and rely on client routing to
+  make them converge by accident.
+- Finding, 2026-08-29: installed Looma API state reports
+  `startReadiness.actionHref` as `/work?task=task-import-1rpbo8n`, while the
+  same snapshot's `actionModel.primaryAction.href` is
+  `/task/task-import-1rpbo8n`. The browser currently lands on the task drawer
+  through route reconciliation, but API consumers and every route that falls
+  back to readiness retain a second action contract.
+- Contract Touch Decision: make the existing shared
+  `projectTaskActionHref` map typed `owner_review_required` to its task review
+  destination, matching the action-model conversion. Considered but not
+  touched: review membership/order, task approval endpoints, task selection,
+  release state, persistence, API field shape, and schemas. Schema Migration
+  Decision: none. Required proof: shared href regressions and installed API,
+  Overview, Work, Thread, and Release agreement. Apply/revert: one centralized
+  action resolver; do not normalize URLs in individual surfaces.
+- Evidence, 2026-08-29: the `projectTaskActionHref` regression passes with
+  typed `owner_review_required` and returns the direct task route. `pnpm
+  typecheck` and `pnpm lint:contracts` pass; release and rendered test suites
+  were started after the runtime change, and the focused runtime action suite
+  completed 40/40 before installed proof. After build, install, restart, and
+  `stale:false`, Looma API state reports the owner-review task as the
+  project-scoped task route in `startReadiness` and the equivalent
+  project-relative task route in `actionModel`; both carry the same task ID and
+  resolve through the same shared route helper. Installed Overview, Thread,
+  Release, and direct Release-details routes show `Review next spec` with zero
+  overflow. A click from Overview opens the task approval surface with both
+  `Request changes` and `Approve spec` visible. Work intentionally presents the
+  ordered ten-spec queue instead of duplicating that action card, with no
+  generic controls or overflow.
+
+### Looma + Knit V1 release-drive baseline
+
+- [ ] User job: an owner resumes Looma + Knit, orients to the active V1
+  milestone and its progress, completes the one real pending decision, and
+  leaves knowing what Guildhall will do next. This must take under one minute
+  without reading a diagnostic report, hunting tabs, or interpreting internal
+  state.
+- Finding, 2026-08-29: the migration repair route opens a modal and applies
+  quickly, but its only durable outcome is a generic `Migration complete.`
+  notice and a `Close` control. The owner is not told what changed, whether the
+  project is now unblocked, or where the release flow resumes. The brief toast
+  is not a handoff. Installed follow-up also shows that the routed
+  `?repair=migration` query survives after an update, reopening a generic
+  `No required migrations are blocking this project.` modal on refresh. A
+  completion or already-clear repair state must explicitly say that the update
+  gate is gone, offer the typed next action from the refreshed shared project
+  snapshot, and clear the transient repair route. The first installed repair
+  also rendered the new handoff beside the old neutral migration-status banner;
+  a resolved repair must have exactly one outcome, not two competing summaries.
+#### Contract Touch Decision
+
+Preserve the migration result and the existing shared
+`actionModel.primaryAction`; add a presentation-only completion handoff that
+uses the refreshed action model rather than inferring release state from
+migration text. Considered but not touched: migration execution, migration
+order, readiness ranking, action-model selection, task status, API shapes,
+persistence, and schemas.
+
+#### Schema Migration Decision
+
+None. Required proof: a successful migration visibly reports completion, clears the
+transient repair intent when continuing or closing, and opens the shared next
+action when one exists. A routed repair intent whose status is already clear
+must also offer the same continuation. Apply/revert: client
+presentation/navigation only; it never mutates project state after the
+migration endpoint succeeds.
+
+- Evidence, 2026-08-29: `ProjectView.svelte.test.ts` passes 72/72, including
+  both a just-applied required update that refreshes into `Review spec` and an
+  already-clear `?repair=migration` route that has one handoff, no duplicated
+  migration-status banner, clears the query, and returns to the project. `pnpm
+  typecheck`, `pnpm lint:contracts`, and `pnpm build` pass. After `pnpm
+  dev:install`, a Looma + Knit restart reports `stale:false`. The installed
+  repair route presents one `Project ready` status: `No project update is
+  blocking this release`, states that the project is unblocked, and exposes
+  `Review next spec` without scrolling at desktop, 960px, and 390px. Desktop
+  page width is exactly 1280px with no horizontal overflow. A non-mutating
+  click opens `/projects/looma-knit/task/task-import-1rpbo8n`, where `Request
+  changes` and `Approve spec` are visible. The installed project is already
+  clear, so the required-migration application itself is covered by the
+  deterministic component regression rather than mutating the owner's project
+  during this audit.
+
+### Finding: Invalid specs must not enter the owner-approval queue
+
+- [ ] User job: when a release pauses for a spec review, the owner can trust
+  that the displayed decision is real: the spec explains a coherent outcome,
+  its source decisions are resolved, and it has a usable completion boundary.
+  If Guildhall cannot form that record, it must route the task into explicit
+  repair or one focused clarification rather than ask the owner to approve
+  malformed work.
+- Finding, 2026-08-29: the first Looma + Knit `Review next spec` task,
+  `LOO-EBUYE7`, opens an approval card even though its full spec records the
+  unresolved owner decision `depends on what migration status you're talking
+  about? Not sure whta this was about.` and reports `Current proof evidence is
+  missing` for every criterion. The queue calls this `owner_review_required`
+  and offers `Approve spec` before showing any of that evidence. A person who
+  follows the visible action is being asked to legitimize an incoherent task.
+#### Contract Touch Decision
+
+Extend the shared typed spec-completion boundary with one derived
+`readyForOwnerApproval` decision. Summary, scope, Thread, scheduler selection,
+and fallback readiness must consume that same decision; an incomplete
+`spec_review` becomes derived `spec_shaping` work rather than an owner block.
+The compact task point carries only that typed Boolean, calculated from the
+same core boundary as rich task reads, so compact projections never reopen raw
+spec prose. Considered but not touched: generated prose wording, task-drawer
+tab layout, release ordering, approval endpoint, and the full task schema.
+Required proof: the malformed Looma task leaves the review queue and exposes a
+clear repair continuation, while a well-formed review task remains directly
+approvable. Apply/revert: shared derived readiness only; do not auto-edit,
+approve, or discard task data.
+
+#### Schema Migration Decision
+
+Additive compact-read-model migration only. The existing
+`currentSummary` JSON receives `specReviewReadyForOwnerApproval`, a Boolean
+recomputed from the authoritative task definition by an automatic migration;
+it has a fail-closed compatibility reader and no table/column change. Existing
+task records remain authoritative and are not rewritten. An incomplete
+spec-review record follows the existing normal spec-repair run path; this
+change only prevents its invalid state from being represented as a pending
+owner approval. Rollback ignores the additive field and recomputes current
+summary from task detail.
+
+- Evidence, 2026-08-29: targeted spec-ownership, project-summary,
+  project-scope, Thread, and migration tests pass (163 assertions). The
+  installed Looma + Knit project applied the automatic compact readiness repair
+  before its overview was read. Its shared summary now reports no owner review,
+  marks legacy malformed `spec_review` records as `spec_shaping`, and points
+  the owner to the paused `Component implementation` work item instead of
+  `Approve spec`.
+
+### Repair: Safe project updates must repair before they interrupt the owner
+
+- [ ] User job: when Guildhall has a safe, automatic local read-model repair,
+  opening a project or starting its work should complete that repair first. The
+  owner should arrive at the actual next decision, not a migration detour they
+  cannot evaluate or meaningfully improve.
+- Finding, 2026-08-29: after installing the compact spec-review readiness
+  repair, real Looma + Knit reports it as a blocking required migration and
+  replaces the release flow with a project-update route. The migration is
+  explicitly marked `automatic`, is an additive bounded-summary backfill, and
+  has a fail-closed reader. Requiring the owner to initiate it recreates the
+  exact opaque, fast, and confusing migration interaction this audit is meant
+  to remove.
+
+#### Contract Touch Decision
+
+Add one request-scoped, coalesced safe-migration boundary before a project API
+route consumes summary, readiness, inbox, or task state. It runs only
+definitions marked automatic via the existing migration executor and leaves
+prompt/manual definitions as visible owner decisions. Considered but not
+touched: migration definitions, application semantics, project action ranking,
+UI modal copy, task/release state, and API response shapes. Required proof: a
+safe migration is applied before the installed Looma route renders and its
+primary action reflects the repaired shared state; a prompt/manual migration
+still remains explicit. Apply/revert: the existing idempotent executor and
+ledger own writes; a failed automatic repair remains blocked and visible.
+
+#### Schema Migration Decision
+
+None. This changes when existing automatic migrations execute, not their
+stored records, schemas, or rollback behavior.
+
+- Evidence, 2026-08-29: the server regression seeds the same legacy compact
+  state and proves that one owner-facing GET converges both automatic
+  migrations, with no remaining automatic blocker. In the installed Looma +
+  Knit app, `/api/project/migrations` now has no blocked migrations and the
+  only remaining update is explicitly manual runtime setup. The restarted
+  service reports `stale:false`.
+
+### Finding: A focused paused task must own the resume decision
+
+- [ ] User job: when a project is paused on one named work item, the owner sees
+  one clear route to that item and one explicit resume command there. The
+  overview must not pair a contextual `Open Work` handoff with a second,
+  generic `Resume` command that has a different side effect.
+- Finding, 2026-08-29: the installed Looma + Knit overview accurately says
+  `Work paused` and names `Component implementation`, but the global chrome
+  also offers `Resume`. `Open Work` navigates to the focused task while
+  `Resume` starts the project immediately, leaving a fresh owner to guess
+  whether they are alternatives or a required sequence. The focused Work
+  surface already exposes the task-specific resume action, so it must own the
+  decision.
+
+#### Contract Touch Decision
+
+Keep the existing shared action model and start command unchanged. Extend the
+shell's existing focused-work presentation rule to cover the typed
+`paused_live_work` action code as well as `ready_work`, so the shared
+project-relative Work handoff is the only overview action. Considered but not
+touched: scheduler selection, start endpoint, paused-state persistence,
+project-summary API, task-drawer command, and task schema. Required proof: a
+paused focused task has no global Resume control, presents one Open Work action,
+and the focused task retains its explicit resume control. Apply/revert:
+presentation-only suppression of duplicate shell chrome.
+
+#### Schema Migration Decision
+
+None. No stored state or schema changes.
+
+- Evidence, 2026-08-29: `ProjectView.svelte.test.ts` passes 73/73, including
+  both ready and paused focused-work cases. Installed Looma + Knit renders
+  only `Open Work` on the overview at 1280px, 960px, and 390px; each viewport
+  has no page or nested horizontal overflow and keeps the action in the first
+  viewport. The owner path reaches focused Work and then the task drawer's
+  visible `Resume only this work item` command without starting live work.
+
+### Finding: Work lists must not relabel repair work as an owner review
+
+- [ ] User job: when an owner opens the Work list after the overview has
+  oriented them, each row uses the same actionable state as the project
+  decision. An item Guildhall must repair is visibly repair work; it never
+  looks like an approval awaiting the owner.
+- Finding, 2026-08-29: installed Looma + Knit overview and API agree that
+  malformed legacy spec-review tasks are not owner reviews. Yet `/work?view=queue`
+  renders ten of those raw `spec_review` rows as `Review spec`, including
+  `LOO-EBUYE7`. The owner is again told to approve work that the shared
+  readiness model has already ruled invalid. The Work list is deriving its
+  label from raw status instead of the canonical scope handoff state.
+
+#### Contract Touch Decision
+
+Reuse the existing typed `orientationSpine.scopeRows[].handoffState` from the
+shared scope projection at the Work presentation boundary. It must control the
+row chip, Review filter, focused handoff, and selected-item command, rather
+than letting raw `task.status` recreate an owner-review state. Considered but
+not touched: task status, spec approval authority, scheduler selection,
+release ordering, raw task title, and list sorting. Required proof: an invalid
+`spec_review` row says it is being repaired while a valid owner review remains
+`Review spec` on the same list. Apply/revert: existing read-model presentation
+only; no task mutation.
+
+#### Schema Migration Decision
+
+None. The state already exists in the shared scope projection and API; this
+only consumes it at the presentation boundary.
+
+- Evidence, 2026-08-29: focused WorkTab and task-presentation regressions pass
+  (66 assertions), including a list that mixes an invalid raw spec_review /
+  spec_shaping task with a valid owner review: only the valid row is available
+  from Review, while the invalid row reads Spec repair and offers Open task,
+  not Review spec. pnpm typecheck, pnpm lint:contracts, and pnpm
+  model:independence pass. After pnpm build, pnpm dev:install, and a Looma +
+  Knit service restart, /api/stale-server reports stale:false. The actual
+  malformed Looma task LOO-X3CVCC renders as SPEC REPAIR, explains that
+  Guildhall must repair it before requesting review, and provides only Open
+  task. At 1280px, 960px, and 390px, the focused route has no page horizontal
+  overflow; its action remains in the mobile first viewport and no Review spec
+  command is present.
+
+### Finding: Task detail must not resurrect a rejected owner decision
+
+- [ ] User job: after opening a Work item marked Spec repair, the owner sees
+  that Guildhall is repairing it and has no approval decision to make. Reading
+  the record must never convert repair work back into an approval prompt.
+- Finding, 2026-08-29: following the real Looma task LOO-X3CVCC from its
+  repaired Work handoff opens Task Drawer, which ignores the shared
+  spec_shaping handoff state and renders Approve this spec?, Request changes,
+  and Approve spec. This is the same rejected approval decision reintroduced
+  one navigation later.
+
+#### Contract Touch Decision
+
+Reuse the existing typed scope handoff state from the loaded project snapshot
+through Task Drawer and its focused, overview, current, and Spec presentations.
+When the state is spec_shaping, suppress every approve-spec entry point and
+show one explicit Guildhall-owned repair handoff. Considered but not touched:
+task status persistence, spec approval endpoint authority, scheduler
+selection, task content, and migration state. Required proof: the real
+malformed Looma task cannot display an approval command in either concise or
+full-record detail, while a valid spec_review remains approvable. Apply/revert:
+presentation consumes the existing projection only and never mutates task data.
+
+#### Schema Migration Decision
+
+None. This uses the existing project projection and introduces no persisted
+state or schema.
+
+- Evidence, 2026-08-29: focused and full-detail TaskDrawer regressions cover
+  the malformed raw spec_review record with the shared spec_shaping handoff,
+  while existing coverage retains the valid spec-review approval path. Targeted
+  UI tests passed: 129 assertions across TaskDrawer, WorkTab, and task
+  presentation. Typecheck, contract lint, and model-independence gates passed.
+  After production build, dev install, and Looma service restart, stale-server
+  reported stale:false. In the installed Looma project, opening LOO-X3CVCC
+  showed the concise repair handoff and no Approve spec or Request changes
+  command; reading the full record kept the same handoff above every detail
+  tab and still offered no approval command. At 1280px, 960px, and 390px, the
+  task detail had no page horizontal overflow; the mobile repair action remained
+  visible.
+
+### Verification: Browse work leaves the focused handoff
+
+- [x] User job: after a project handoff points to one current item, the owner
+  can choose Browse work to leave that focused handoff and see a stable list of
+  the current release work. The route change must visibly alter the screen.
+- Initial observation, 2026-08-29: an attempted click while a task drawer was
+  still layered over the focused handoff appeared to navigate to /work without
+  changing the visible surface. This was treated as a suspect, not a repair.
+
+#### Contract Touch Decision
+
+No contract change. The route query already selects queue mode and Work owns
+the focused/list state. Considered but not touched: task status, task ordering,
+release projection, action ranking, persistence, and navigation code.
+
+#### Schema Migration Decision
+
+None. No schema or behavior change is required.
+
+- Evidence, 2026-08-29: from the installed Looma focused paused-work route,
+  Browse work changed the URL to /projects/looma-knit/work?view=queue and
+  visibly replaced the focused card with the 16-item current-release list.
+  The route remained stable after the project connected. Selecting the first
+  item updated the route to its task ID and retained that selected item after a
+  2.2-second refresh window; it did not jump to another row. The selected
+  preview exposed one Resume action. No repair follows from the initial
+  drawer-layered observation.
+
+### Finding: Active release must not contradict the current owner action
+
+- [x] User job: when active work is paused, the owner can tell that the next
+  choice is to resume that work. Release status, work summary, and owner-input
+  counts must not imply a separate blocker or hidden approval queue.
+- Finding, 2026-08-29: the installed Looma API projects one primary action,
+  Work paused / Resume, with ownerInput.active false. The same response says
+  the active release is blocked, reports 21 awaiting approvals in workSummary,
+  and has a release count with ownerBlocked 1, while the selected release has
+  only 16 items and the orientation headline says it is ready to continue.
+  These surfaces are describing incompatible priorities for the same release.
+
+#### Contract Touch Decision
+
+The shared action model reconciles persisted work-summary approval counts
+against current readiness, and the release projection treats paused work as
+active progress while retaining separate release blockers. Considered but not
+touched: task records, release membership, task statuses, scheduler policy,
+persisted approval decisions, and route-local presentation. Required proof: the
+API and all owner-facing surfaces agree that paused live work is the one
+current decision, while repair/spec debt is neither counted as an owner
+approval nor presented as a competing blocker. Apply/revert: reproject the
+existing compact summary through the automatic migration; source task data is
+unchanged.
+
+#### Schema Migration Decision
+
+Persisted project summary projection is refreshed by automatic migration
+0.13.101/active-release-progress-reprojection. Scope: existing SQLite summary
+and decision packet only; task records, release membership, and owner answers
+are unchanged. Change class: derived-state reprojection. Existing-data impact:
+rebuilds the current compact projection through the canonical indexed-state
+writer. Safety: automatic and repeat-safe through the migration ledger;
+required before an existing project presents the revised state. Compatibility:
+existing readers consume the same summary shape. Proof: migration and summary
+projection tests plus installed Looma restart. Owner-facing plan text: no owner
+action; Guildhall refreshes the saved release read model itself. Revert: restore
+the prior projection semantics in code and reproject again; no source task data
+is lost.
+
+- Evidence, 2026-08-29: ProjectActionModel now reconciles a persisted
+  work summary with the current start-readiness contract, so a paused_live_work
+  action clears stale raw spec-review approval counts. Project-action-model
+  regressions passed 42 assertions; typecheck, contract lint, and
+  model-independence passed. After production build, dev install, and Looma
+  restart, the installed API reported paused_live_work, ownerInput:false, and
+  awaitingApproval:0 with stale:false. Automatic migration
+  0.13.101/active-release-progress-reprojection rebuilt Looma's persisted
+  summary without owner intervention: guildhall status --json reports release
+  state active, five retained blockers, and the same paused-work next action.
+  Project-scope and project-summary regressions passed 85 assertions. The full
+  migration suite still has three unrelated pre-existing proof-path fixture
+  failures; they are not used as evidence for this change.
+
+### Finding: Thread must not bury the current owner action in duplicate activity
+
+- [x] User job: opening Thread while work is paused immediately explains the
+  paused item and presents the one Resume action. Past activity is optional
+  context, not a competing second work surface.
+- Finding, 2026-08-29: the installed Looma Thread begins with Component
+  implementation paused, but then renders a long stack of historical and
+  duplicated shaping entries before the only Resume work control appears near
+  the bottom. Several entries say READY while also saying their brief is not
+  ready. The page forces the owner to read unrelated history and reconcile
+  contradictory labels before taking the same action already known elsewhere.
+
+#### Contract Touch Decision
+
+Reused the shared action model and current task state to make Thread's
+owner-facing top level a single handoff for both ready_work and paused_live_work.
+Activity remains available only when no resumable current-work action owns the
+route. Considered but not touched: task lifecycle state, activity persistence,
+run history, task titles, scheduler policy, and route-local action ranking.
+Required proof: the real paused Looma Thread shows the current action in its
+first viewport and no duplicated or stale activity can change its meaning.
+Apply/revert: presentation derives from the existing shared action only and
+does not mutate project state.
+
+#### Schema Migration Decision
+
+None anticipated. This is a shared projection and presentation boundary over
+existing activity and task records.
+
+- Evidence, 2026-08-29: ThreadTab regression coverage passed 126 assertions,
+  including a paused_live_work action whose represented thread would otherwise
+  render history. Typecheck, contract lint, and model-independence gates passed.
+  After production build, dev install, and Looma service restart, stale-server
+  reported stale:false. The installed Looma Thread now renders Current work,
+  Work paused, Component implementation, Stage 1 progress, and Open Work with
+  no Thread list or detail transcript. At 1280px, 960px, and 390px, the action
+  was visible and there was no page-level horizontal overflow.
+
+### Finding: Starting focused work must confirm the outcome, not expose the task internals
+
+- [ ] User job: after choosing to resume the single current work item, the owner
+  immediately knows that work has started, what Guildhall is doing next, and how
+  to pause it. They do not have to parse a task record or decide between another
+  duplicate resume action and unrelated task metadata.
+- Finding, 2026-08-29: in the installed Looma + Knit project, choosing `Resume
+  only this work item` correctly starts the run, but then replaces the concise
+  handoff with a task drawer containing duplicate `Overview` labels, a raw
+  checkpoint instruction, task description, implementation metadata, task links,
+  delivery-step accounting, and a second `Resume only this work item` command.
+  The owner can see `Pause` in the shell, but Guildhall never plainly confirms
+  that it started the selected work or states the next expected outcome. This
+  breaks the one-minute test immediately after the primary action succeeds.
+
+#### Contract Touch Decision
+
+The focused run action and task-drawer presentation contract own the immediate
+post-start state: a task begun through the owner-facing focused handoff exposes
+a typed running confirmation, while full task records remain deliberately
+optional. Considered but not touched in this presentation repair: run lifecycle
+persistence, scheduler selection, task status, checkpoint persistence, delivery
+step schema, and route-local CSS. Required proof: a genuinely running Looma item
+leaves one first-viewport confirmation with the shell Pause command; internal
+record detail is absent until explicitly requested. The conflicting scheduler
+state discovered in the live run is a separate shared execution-boundary repair,
+not a reason for this surface to present another Resume command.
+
+#### Schema Migration Decision
+
+Pending investigation. No persisted-schema change is assumed; record one before
+changing any stored task/run/summary shape.
+
+- Evidence, 2026-08-29: TaskDrawer regression coverage passes 64 assertions.
+  A focused `in_progress` task with a running one-task run now renders only
+  `Work is underway`, the selected title, the expected next outcome, and the
+  optional `View task details` route. It renders no tabs, task links, delivery
+  accounting, or second Resume command. Production build passes. Installed
+  proof remains blocked on the scheduler repair below: the real owner start
+  stopped after one tick while the visible task remained `in_progress`.
+
+### Finding: A focused start must run the task the owner just selected
+
+- [x] User job: after resuming a named paused work item, Guildhall either starts
+  that exact work or refuses before changing the screen, with a clear recovery
+  action. It must never briefly claim success, stop with an unrelated
+  `all_terminal` result, and leave the owner looking at a task still labelled
+  working/paused.
+- Finding, 2026-08-29: the real Looma `Component implementation` start accepted
+  the scoped one-task command and created a run, then stopped 699ms later with
+  `No actionable tasks remain: 1 done`. No model call occurred. The authoritative
+  task detail and indexed work item still say `in_progress`, while the shared
+  start-readiness/action model says `paused_live_work`. The scheduler's queue
+  selection therefore disagrees with both the owner-facing state and the indexed
+  task state.
+
+#### Contract Touch Decision
+
+The repair belongs at the promoted project-state execution boundary. Landing
+reconciliation may settle historical completion only when it is still a
+worker-state row, the current task contract proves completion, and no fresh
+recovery lifecycle is active. Neither an old merge nor an old done-summary may
+override current missing proof or turn a fresh exploration into an in-memory
+terminal row after blueprint recovery. Indexed task lifecycle fields,
+including a null completion timestamp, must replace stale rich-detail values in
+the scheduler queue just as they do in the owner-facing task point. Considered
+but not touched: task lifecycle semantics,
+checkpoint recovery policy, worktree state, provider selection, task drawer
+copy, release-scoping rules, and task persistence shape. Required proof: a real
+Looma start dispatches the selected indexed `in_progress` task, or returns an
+explicit typed reason without changing run/task state; shell, API, Work, task
+drawer, Thread, release, and status then agree.
+
+#### Schema Migration Decision
+
+None. This corrects the runtime interpretation of existing task evidence; it
+does not change persisted schema or edit Looma's task rows. Existing projects
+pick up the corrected rule on their next run. Apply/revert: change the shared
+completion predicate; historical evidence remains intact throughout.
+
+- Evidence, 2026-08-29: a real scoped Looma run for `Component implementation`
+  dispatched the selected task and processed two focused ticks before reaching
+  the typed spec-repair handoff; it no longer stopped immediately as
+  `all_terminal` from historical merge/done evidence. The orchestrator and
+  project-state boundary regression suites cover both stale rich queue detail
+  and a fresh recovery lifecycle. The installed project summary now identifies
+  the same named task as the repair target rather than silently treating it as
+  complete. The broader running-state presentation audit remains open above.
+
+### Finding: Automatic repair work must still have one executable owner action
+
+- [x] User job: when Guildhall has detected a malformed draft and needs one
+  more automated pass, the owner can understand that this is not an approval,
+  start that exact repair from the first screen, and then see a clear running
+  or review handoff. A stopped project must never say both "ready to continue"
+  and "nothing is waiting on you" while offering only a link to another view.
+- Finding, 2026-08-29: after the real focused Looma run processed
+  `Component implementation`, the task correctly landed in `spec_review` but
+  without a usable spec payload. The shared scope projection recognized it as
+  Guildhall-owned repair work, but flattened that into `ready_work` / `Open
+  Work`. Overview then said `Ready to continue` and `Work ready to resume`,
+  while the task route said `Guildhall is repairing this spec`, `Nothing is
+  waiting on you`, and exposed no repair command. The existing Work route did
+  contain a later Resume control. That is an avoidable three-screen, mutually
+  contradictory action path.
+
+#### Contract Touch Decision
+
+Extend the shared project action model with a typed focused execution operation
+for runnable work, including the distinct `repair_spec` operation. Scope
+projection marks non-human-blocking malformed spec review as `spec_repair` so
+all owner-facing surfaces derive the same action and never infer the condition
+from prose. The task-start endpoint must consume that same typed readiness
+decision after its narrow recovery reconciliation; it may not use raw
+`spec_review` plus legacy spec text as a second owner-review gate. Overview and
+focused task presentation execute that operation against the existing
+task-start endpoint; Work reuses the same operation for its current direct-run
+behavior. A focused task route suppresses its background project surface so
+the same operation cannot appear as two competing buttons. Considered but not touched: task status,
+spec persistence, approval semantics, scheduler policy, task ordering, and
+release membership. Required proof: the installed Looma overview and task
+route show one `Repair spec` action for this state, the action starts only the
+named task, and the running/review handoff has no competing background action.
+Apply/
+revert: remove the presentation operation; no task data changes.
+
+#### Schema Migration Decision
+
+Persisted project summary projection is refreshed by automatic migration
+`0.13.102/spec-repair-action-reprojection`. Scope: existing SQLite summary and
+decision packet only; task records, specs, release membership, and owner
+answers are unchanged. Change class: derived-state reprojection. Existing-data
+impact: rebuilds the current compact projection through the canonical indexed
+writer so an old `ready_work` focus cannot hide a current `spec_repair` state.
+Safety: automatic and repeat-safe through the migration ledger; required before
+an existing project presents the revised action. Compatibility: existing readers
+consume the same start-readiness/action shape, with the new typed operation
+optional. Proof: migration, action-model, and installed Looma restart. Owner-
+facing plan text: no owner action; Guildhall refreshes the saved read model
+itself. Revert: restore the prior projection semantics and reproject again; no
+source task data is lost.
+
+- Partial evidence, 2026-08-29: after `0.13.102/spec-repair-action-reprojection`, the
+  installed Looma summary reports `repair_spec` for `Component implementation`.
+  At `1280px`, the overview presents `Repair this spec` with one `Repair spec`
+  action; the exact task route presents the same single action with no duplicate
+  project background. Its visible handoff is limited to the task title, `Run one
+  repair pass.`, one sentence explaining the outcome, `Repair spec`, and the
+  optional full record. No checkpoint, delivery accounting, or page-level
+  horizontal overflow was present; `/api/stale-server` reported `stale: false`.
+  Action-model, overview, Work, and TaskDrawer regressions pass, including a
+  checkpoint-bearing fixture that proves old recovery prose stays out of this
+  compact state. Live owner proof then found the action was not executable: the
+  task start endpoint returned `no_unattended_progress` because a raw
+  `spec_review` status and legacy spec string overrode the shared
+  `spec_repair` readiness decision. This finding remains open until the exact
+  action starts the named repair or returns the same typed failure the UI
+  presents.
+
+- Evidence, 2026-08-29: installed Looma + Knit at `1280px` showed exactly one
+  compact repair/resume handoff for `Component implementation`, with no
+  horizontal overflow. Activating its visible focused action started only that
+  task; the route then showed `WORK IS UNDERWAY`, the task title, a clear
+  no-owner-action message, and one `Pause` command. The API, stored summary,
+  and CLI subsequently agreed on the same paused task after an intentional
+  pause. The start-endpoint regressions cover both malformed spec repair and a
+  genuinely owner-reviewable spec; TaskDrawer shows an inline failure instead
+  of silently leaving a clicked action unchanged.
+
+### Finding: A live run must never advertise a paused action
+
+- [x] User job: after the owner starts or repairs a focused task, every surface
+  that reports the project state says it is running until the owner actually
+  pauses it. The dashboard, `guildhall status`, and the saved action model
+  must not require the owner to decide which of two incompatible states to
+  believe.
+- Finding, 2026-08-29: live Looma proof showed the dashboard's in-memory run
+  and execution projection as `running` on `Component implementation`, while
+  `guildhall status` read the same saved summary as `paused_live_work` and
+  printed `Resume`. The execution writer updated the decision packet but left
+  the denormalized next-action and action-model entries from the prior paused
+  state intact. This is a shared compact-summary consistency defect, not a CLI
+  formatting problem.
+
+#### Contract Touch Decision
+
+Runtime execution owns running/stopping state. When it changes, refresh the
+decision packet and every compact presentation field derived from that packet:
+next action and action model. Considered but not touched: task lifecycle,
+scheduler selection, release counts, CLI rendering, and persisted schema.
+Required proof: a summary updated from paused to running has a typed `running`
+next action, an `Open Work` primary action, and no `Resume` text; after a real
+pause, all three return to the same resumable decision. Apply/revert: update
+the shared summary projection only; no task data is changed.
+
+#### Schema Migration Decision
+
+None. The existing compact summary fields are recomputed from the existing
+execution projection on every runtime change; no persisted shape changes.
+
+- Evidence, 2026-08-29: a real Looma focused start produced `running` from the
+  API, `Open Work` from the project action model, and a saved CLI next action
+  with code `running`, the same task identity, and a running message. The
+  prior failing path was reproduced in a regression: a task-progress write
+  after the supervisor start must retain that live decision rather than restore
+  `Resume`. After an intentional pause, API, action model, and CLI all return
+  to `paused_live_work` for the same task. The installed focused browser route
+  was checked at `1280px` with `scrollWidth === clientWidth`.
+
+### Finding: Milestone progress must have one owner-visible total
+
+- [x] User job: when an owner opens Looma + Knit, the V1 milestone progress
+  total is the same in Overview, Work, Release, API, and `guildhall status`.
+  Internal parent/container membership must not create a second number that
+  makes progress look contradictory.
+- Finding, 2026-08-29: installed Overview, Work, and Release all report the
+  shared compact release total as `0 of 16 complete`, while `guildhall status`
+  independently re-counts raw release `nodeIds` and reports `0/17`. The extra
+  record is a containing task omitted from the executable owner-progress view.
+  The CLI is reopening scope membership after the saved summary has already
+  made the product decision, violating the summary-state ownership boundary.
+
+#### Contract Touch Decision
+
+The shared `releaseSummary` is the sole owner-facing release-progress contract,
+and it must count the same collapsed execution rows as Overview/Work. CLI
+status forwards that summary; it must not reconstruct totals from raw scope
+membership. A summary rebuild must likewise not restore parent/container rows
+to the total after a task mutation. Considered but not touched: raw release
+membership, hierarchy semantics, scheduler execution scope, task persistence,
+and release membership itself. Required proof: a fixture with a container and
+its included children yields one compact total after both initial projection
+and a task write; installed Looma API and `guildhall status` report `0/16`.
+Apply/revert: alter shared release-progress projection and CLI presentation;
+no project data changes.
+
+#### Schema Migration Decision
+
+Derived summary reprojection `0.13.103/collapsed-release-progress-reprojection`
+is automatic and required. It rebuilds the existing SQLite summary and decision
+packet through the corrected hierarchy rule; task definitions, raw release
+membership, and history are unchanged. The migration is ledger-idempotent and
+reversible by restoring the prior projection rule and reprojecting again.
+
+- Evidence, 2026-08-29: the regular and indexed summary regressions both
+  collapse a release container and its child into one owner-visible work item;
+  the CLI regression proves it forwards the saved summary rather than
+  recalculating raw membership. Installed Looma applied
+  `0.13.103/collapsed-release-progress-reprojection` through the normal
+  migration ledger. Its API release summary, Work selected counts, start scope,
+  and `guildhall status --json` now all report `0/16`, with the same paused
+  `Component implementation` action. `/api/stale-server` reported
+  `stale: false` after the installed restart.
+
+### Finding: Live execution must outrank resumable readiness in every owner surface
+
+- [ ] User job: after the owner presses `Resume work`, they can immediately
+  tell that Guildhall is working, what item it is working on, and that the one
+  available control is Pause. Neither Overview nor Work may also describe that
+  same release as merely ready to continue, and after a deliberate pause the
+  label must say paused rather than silently retaining `WORKING`.
+- Finding, 2026-08-29: the installed Looma Overview correctly turned its one
+  `Resume work` action into `Guildhall is running "Component implementation"`
+  and `Open Work`. Opening Work then rendered `STAGE 1: V1 RELEASE HARDENING
+  IS READY TO CONTINUE.` above a `WORKING` Component implementation card. After
+  Pause completed, the shell changed to `Resume` but the card still said
+  `WORKING`. A live run and a resumable decision are competing state claims;
+  this forces the owner to infer whether the command actually took effect.
+
+#### Contract Touch Decision
+
+The shared projection-surface response owns live execution precedence. A
+running or stopping supervisor state must override saved readiness in the
+orientation headline, next-action copy, and action model before Overview,
+Work, Thread, or project chrome render it. The focused Work status must take
+the same run state when it describes the focused task. Considered but not
+touched: task lifecycle persistence, scheduler selection, release membership,
+historical activity, and task-detail content. Required proof: one real Looma
+resume produces only running/paused language appropriate to the live state
+across Overview and Work, with exactly one Pause or Resume control. Apply/
+revert: adjust the shared runtime projection and focused status presentation;
+no task or run data is rewritten.
+
+#### Schema Migration Decision
+
+None. This changes the live precedence of existing supervisor and summary
+state; it introduces no persisted schema or data migration.
+
+- Partial evidence, 2026-08-29: focused Work regressions cover a running
+  selected task with no duplicate `Open task` control and a paused focused task
+  with a direct `Resume this work item` control. After a production build,
+  install, and fresh Looma restart (`stale:false`), the installed 1280px route
+  read `STAGE 1: V1 RELEASE HARDENING IS PAUSED`, `Work paused`, `PAUSED`, and
+  one `Resume this work item` action. Starting it then read `IS UNDERWAY`,
+  `Work is underway`, `WORKING`, the exact task title, and only the shell
+  `Pause` plus optional Browse work. During stop it accurately changed to
+  `IS PAUSING` before the run settled. The remaining terminal handoff failure
+  is recorded below.
+
+### Finding: A bounded run that stops on a blocked task must hand the owner to that result
+
+- [x] User job: when the owner starts one named work item and Guildhall stops
+  because that item needs human judgment, the next screen identifies that
+  outcome and gives the owner one clear recovery choice. It must not silently
+  redirect project-level attention to unrelated ready work while leaving the
+  owner on a stale task route.
+- Finding, 2026-08-29: the real Looma focused run for `Component
+  implementation` stopped after two ticks and marked that task `blocked` with
+  `human_judgment_required: Worker made no visible progress after 5 passes.`
+  The saved project action immediately selected a different ready task instead.
+  The still-open task route therefore displayed `Open this work to resolve what
+  is blocking it` and `Open task`, while the project headline said `ready to
+  continue` for unrelated work. The owner has no explanation of the failed run
+  and no direct way to resolve or explicitly defer its escalation.
+- Root-cause evidence, 2026-08-29: the canonical Looma + Knit queue lives in
+  its registered workspace state, while the worker escalation was persisted
+  under the nested `looma` checkout. The escalation tool used a task's code
+  checkout as the evidence root even though its `TASKS.json` handle belonged to
+  the parent workspace. The parent task retained the blocked lifecycle and
+  reason but had no open escalation record, so the shared action model could
+  not offer its recovery action. This is a state-authority fault, not a missing
+  local Work-tab button.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-owner-escalation-state-boundary-2026-08-29`.
+Touched contracts: a task-state handle names the registered workspace that owns
+the queue, runtime overlay, and task evidence. A child repository remains the
+execution checkout only; it cannot become the owner-facing evidence root merely
+because a task targets files there. Recovery action ranking continues to read
+the same canonical task evidence and effective task record.
+Considered but not touched: child-project execution routing, task lifecycle
+enums, action ranking policy, agent prose, and release membership.
+Required follow-up: repair orphaned child-checkout escalation evidence into the
+canonical workspace without duplicating an equivalent open recovery, then let
+the shared action model expose the existing typed owner recovery. Proof
+required: a nested-repo task writes escalation/runtime evidence to the
+workspace state; the repaired real task has one open escalation; and the
+installed Work route presents its single recovery action before unrelated ready
+work.
+
+#### Schema Migration Decision
+
+No task schema shape change. Migration
+`0.13.104/nested-task-evidence-root-repair` copies already-misrouted evidence
+into the existing canonical task record, allocating a fresh canonical ID only
+when a historical child-checkout ID collides. It never deletes the child
+checkout's historical file. The repair is idempotent, reports its apply result,
+and leaves the original evidence available for rollback/audit. Summary
+projection version 33 forces existing derived decision/orientation packets to
+rebuild from the repaired canonical evidence; it changes no task data shape.
+
+- [x] Installed proof, 2026-08-29: after `pnpm build`, `pnpm dev:install`,
+  restart, and a `stale:false` response, real Looma + Knit now selects
+  `Component implementation` as the shared primary action. API action model,
+  decision packet, execution focus, and orientation pin all name the same
+  `blocked_work` task. Overview has one `Open task` action; opening it leads
+  directly to the visible `Retry worker` recovery action. At 1280x720 and
+  960x720 that action remains visible with no horizontal overflow; at 390x844
+  the Overview action remains visible with no horizontal overflow.
+
+### Finding: Thread must not turn passive execution into an operational dashboard
+
+- [x] User job: when the owner opens Thread while Looma + Knit is actively
+  working and no answer is needed, they immediately learn that no response is
+  required, what task is moving, and how to leave or pause it. Thread must not
+  make them scan queued backlog items, historical ages, or agent telemetry.
+- Finding, 2026-08-29: while `Component implementation` was running, installed
+  Thread listed the active task plus ten old queued tasks, a waiting dependent,
+  an optional project check-in, duplicated task titles and ages, a live dock,
+  recent agent-thought text, and a disabled composer. The same run was already
+  intelligible in Overview and Work. This route therefore adds cognitive load
+  without offering an owner decision and violates the one-minute test.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-thread-passive-execution-handoff-2026-08-29`.
+Touched contracts: the existing project/thread action model's typed
+`primaryAction`, `ownerInput.active`, and run status distinguish an active
+owner conversation from passive execution. Thread consumes that shared state
+and preserves its normal decision path whenever owner input is active.
+Considered but not touched: task history persistence, worker transcript
+retention, scheduler selection, composer transport, capability-request
+persistence, and project queue ordering. Required follow-up: prove the
+installed route hides passive operational detail while retaining the shared
+open-work handoff, then prove owner questions still remain actionable.
+
+#### Schema Migration Decision
+
+No schema migration. Thread and event persistence remain intact; only the
+normal presentation chooses the existing typed action state over passive
+operational history. The original transcript remains available through a
+deliberate task/work route when it supports an owner decision.
+
+- [x] Regression and installed proof, 2026-08-30: `ThreadTab` now renders one `No response
+  needed` handoff for a represented running task with `ownerInput.active:
+  false`; it omits the Thread list, selected-thread region, active dock, raw
+  worker activity, and queued history. It keeps the shared `Open work` route.
+  The next real Looma reframe run confirmed the installed 1280px route shows
+  only `No response needed`, `Component implementation`, `Guildhall is
+  running...`, and `Open Work`, with global `Pause`; there is no Thread list,
+  worker activity, agent transcript, or disabled composer.
+
+### Finding: Global run control must not contradict the owner’s actual next action
+
+- [x] User job: when active work stops because a named task needs recovery, the
+  global control and the project action must agree that the owner should open
+  that task. The owner must not be invited to resume the whole project before
+  they can see or resolve why the current work stopped.
+- Finding, 2026-08-29: after the real Looma `Component implementation` retry
+  stopped again with `human_judgment_required`, Thread correctly showed the
+  single `Open task` action. The global chrome instead showed `Resume`.
+  Those controls imply competing next steps for the same shared run and task
+  state, violating the one-minute orientation requirement.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-blocked-run-control-reconciliation-2026-08-30`.
+Touched contracts: the shared action model's recorded blocked-task action owns
+the owner run-control label, enabled state, href, and decision focus. The
+compact serve boundary reconciles the response decision and orientation pin
+with that same action after current task records are available. Considered but
+not touched: project availability persistence, scheduler stop semantics, task
+escalation schema, and pause/resume transport. Required proof: action model,
+decision packet, orientation spine, chrome, Thread, and task drawer all name
+the same recovery task.
+
+#### Schema Migration Decision
+
+No schema migration. This repairs derived action/decision reconciliation and
+read-time projection only; task, availability, escalation, and run persistence
+are unchanged.
+
+- [x] Installed proof, 2026-08-30: after `pnpm dev:install`, restart, and a
+  `stale:false` response, the real Looma API reports `Component
+  implementation`, `blocked_work`, `Needs recovery`, one blocked decision
+  focus, and one matching orientation pin. The 1280px installed task drawer
+  has no top-bar Resume and exposes `Retry worker`; installed Thread has one
+  plain-language `Open task` action with no queue or agent transcript.
+
+### Finding: Repeated no-progress recovery must explain and route to a reframe, not a blind retry
+
+- [ ] User job: when a worker has already failed more than once without a
+  durable change, the task recovery surface tells the owner why retry is no
+  longer the sensible default and offers the corrective action directly. The
+  owner should not have to discover stale checkpoints, generic criteria, or a
+  hidden Reframe menu item to avoid repeating the same failure.
+- Finding, 2026-08-30: the real `Component implementation` task's visible
+  recovery panel offered `Retry worker` as its only direct action. Its actual
+  record has two consecutive `worker_no_progress` escalations, a June
+  checkpoint from an earlier attempt, and a generic recovery-written spec with
+  review-only criteria. The useful corrective action, `Reframe task`, is hidden
+  in `More task actions`. A retry would repeat a known unproductive state with
+  no explanation of what needs to change.
+
+#### Contract Touch Decision
+
+Pending investigation. The task recovery action must be derived from typed
+recovery history and current task-contract quality, then reused by the task
+drawer and project action model. Considered but not touched yet: escalation
+persistence, worker retry transport, task status, product-brief schema, and
+spec schema. Required proof: one no-progress event keeps a retry executable;
+repeated no-progress with an insufficient task contract selects direct
+reframing instead of hiding it in an overflow menu.
+
+#### Schema Migration Decision
+
+Pending investigation. Existing escalation reason, recovery code, resolution
+history, and task-contract fields may already be sufficient; do not introduce
+new stored state until their authoritative read boundary is inspected.
+
+### Finding: A two-pass clean-worktree stall needs an explicit retry
+
+- [x] User job: when a sound, approved task has two worker passes without a
+  durable change, the owner sees one plain-language explanation and one direct
+  action to retry the worker. Guildhall must not call that state ordinary
+  paused work or make the owner infer whether the task contract needs changing.
+- Finding, 2026-08-30: the primary proof project `t-minus-t` had an approved
+  `Open supported documents as TypeScript` task with a concrete implementation
+  contract and clean isolated worktree, while its typed runtime record reported
+  two no-progress attempts. Guildhall previously showed only `Work paused` and
+  `Resume work`. Reframing would discard a sound contract; the correct owner
+  action is a fresh worker retry with its reason visible.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-repeated-no-progress-owner-retry-2026-08-30`.
+Touched contracts: the shared summary projection derives a bounded
+`worker_retry_recommended` progress fact from the focused paused task and its
+typed runtime `workerRecovery.noProgressAttempts`; the shared action model
+owns the matching label, explanation, executable retry operation, and
+run-control state. Considered but not touched: escalation persistence, worker
+retry transport, task status, product-brief schema, spec schema, and task
+reframing transport. Required proof: one no-progress event remains an ordinary
+resume; two typed no-progress events with a sound current contract produce one
+direct `Retry worker` action and no competing generic resume across the action
+model and focused Work handoff.
+
+#### Schema Migration Decision
+
+No schema migration. `TaskRuntimeState.workerRecovery.noProgressAttempts` is
+already a validated, persisted runtime field and current task status remains
+the source of execution truth. This work only adds a deterministic read-time
+projection after two consecutive typed no-progress attempts; it neither writes
+new state nor interprets provider prose.
+
+- [x] Regression and installed proof, 2026-08-30: focused action-model,
+  summary-projection, and Work handoff coverage proves one no-progress attempt
+  remains an ordinary resume while two typed attempts produce one
+  `worker_recovery` action, `Retry worker` command, and no `Paused` status.
+  After `pnpm build`, `pnpm dev:install`, restart, and a `stale:false`
+  response, the real `t-minus-t` API reported that same action, task focus,
+  warning detail, and enabled run control at both the project and task
+  boundaries.
+
+### Finding: Active task detail must not present a historical checkpoint as current work
+
+- [x] User job: after choosing Reframe, the owner can tell that the new
+  coordinator pass is underway and, if progress is shown, it is from that pass
+  rather than an older worker attempt.
+- Finding, 2026-08-30: immediately after the real reframe began, the task
+  drawer correctly changed to `Working` and `Assigned: Spec author`, but its
+  prominent status panel read `Checkpoint saved` and displayed a June worker
+  checkpoint from an earlier retry. The owner has no timestamp or clear
+  boundary between historical checkpoint and the active reframe.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-current-checkpoint-boundary-2026-08-30`.
+Touched contracts: the shared current-task API decides whether a saved worker
+checkpoint belongs to the task's current lifecycle before ordinary drawer and
+work payloads can present it. A checkpoint written before the typed
+`currentLifecycle.reopenedAt` boundary is history, not current progress.
+Considered but not touched: checkpoint persistence, worker event retention,
+task status, reframe transport, and the deep evidence/history routes. Required
+proof: a reframed task with a pre-reframe checkpoint omits that checkpoint from
+its normal detail response; a checkpoint written in the new lifecycle remains
+available to the normal current-work surface.
+
+#### Schema Migration Decision
+
+No schema migration. Existing typed `currentLifecycle.reopenedAt` and
+checkpoint `writtenAt` timestamps establish the boundary. Historical evidence
+is retained; the ordinary current-task projection will stop misrepresenting it
+as live work.
+
+- [x] Regression and installed proof, 2026-08-30: focused current-lifecycle
+  and task-endpoint coverage proves that a checkpoint written before a reframe
+  is absent from the normal task response while a current-lifecycle checkpoint
+  remains eligible. After `pnpm build`, `pnpm dev:install`, and restart, the
+  installed Looma task route reported `stale: false` and no longer rendered the
+  June checkpoint as current work.
+
+### Finding: A spec-repair action must preserve a concrete task boundary, not replace it with recovery boilerplate
+
+- [ ] User job: when Guildhall says a spec needs one repair pass, the owner can
+  trust that running it produces a more concrete, reviewable task. It may not
+  replace the visible source-backed scope with generic template language or
+  resolved agent-failure history.
+- Finding, 2026-08-30: the real Looma `Verify ui-context-menu component
+  implementation` task had a specific reframe describing the component,
+  adapters, proof command, and explicit non-goals. The installed `Repair spec`
+  action completed in one tick and overwrote it with generic text such as
+  “bounded implementation contract,” copied four resolved escalation records
+  into `keyDecisions`, and replaced concrete acceptance criteria with two
+  generic review checks. The next project action silently moved to another
+  task. This is destructive loss of owner-relevant task contract, not repair.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-preserve-current-spec-repair-2026-08-30`.
+Touched contracts: the shared deterministic spec-repair selector may replace a
+recovery seed only when the task lacks a valid structured review contract and
+nonempty acceptance contract. Approval remains stricter and still requires a
+complete product brief, but a brief-save failure cannot let recovery discard
+an otherwise concrete current scope. An inherited recovery note or missing
+copied parent references cannot authorize a rewrite. Considered but not
+touched: task persistence, reframe transport, reviewer approval, worker
+dispatch, and inherited-reference storage. Required proof: a repair pass cannot
+reduce a valid concrete spec to a generic contract, and it cannot surface
+resolved recovery prose in the normal spec view.
+
+#### Schema Migration Decision
+
+No schema migration. Existing structured planning and completion-boundary
+contracts establish whether recovery may mutate the task; recovery provenance
+and inherited references remain evidence rather than a new persisted authority.
+
+- [x] Regression and installed state proof, 2026-08-30: the recovery queue
+  test supplies a current, schema-valid ContextMenu contract with a recovery
+  note and missing inherited references but no product brief. The deterministic
+  repair returns no mutation and preserves the task byte-for-byte; under-shaped
+  recovery seeds still route through the existing deterministic repair. The
+  installed Looma reframe now retains its specific seven-criterion structured
+  ContextMenu contract after the brief writer fails, rather than replacing it
+  with recovery boilerplate. Focused recovery coverage, `pnpm typecheck`,
+  `pnpm model:independence`, and `pnpm lint:contracts` pass.
+
+### Finding: A failed spec-author tool call must resolve to one explicit recovery, not a stranded review
+
+- [ ] User job: when Guildhall has produced a concrete spec but cannot save a
+  required companion record, the owner sees one clear outcome and one useful
+  next action. The task must not look reviewable while approval is impossible,
+  and the run must not imply hidden ongoing work after it stops.
+- Finding, 2026-08-30: the real Looma ContextMenu reframe created a specific
+  seven-criterion structured spec, but `update-product-brief` failed repeatedly.
+  Guildhall stopped with `spec_review`, no product brief, and an unavailable
+  approval contract. The structured scope is correctly preserved now, but the
+  owner still lacks an explanation and direct way to repair the missing brief.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-product-brief-tool-contract-2026-08-30`.
+Touched contracts: the spec agent's `update-product-brief` tool must advertise
+the same structured fields it accepts at execution time. A model must receive
+the typed user job, success metric, boundary, and optional context fields,
+instead of an empty-object schema that makes a correct durable write
+impossible. The shared spec-repair/approval action model remains a follow-up:
+it must eventually name the missing brief directly rather than calling it a
+spec repair. Considered but not touched: product-brief persistence, review
+approval transport, and run-stop semantics. Required proof: the tool schema
+contains the writable brief fields, a focused spec-agent run saves the brief,
+and the normal task record never appears ready for an approval it cannot accept.
+
+#### Schema Migration Decision
+
+No schema migration. This corrects the model-visible contract for an existing
+write operation; persisted task and product-brief shapes are unchanged.
+
+- [x] Regression proof, 2026-08-30: `update-product-brief` now advertises
+  `userJob`, `successMetric`, non-goals, and supporting structured fields to
+  the model instead of an empty object. The product-brief suite, `pnpm
+  typecheck`, `pnpm model:independence`, and `pnpm lint:contracts` pass.
+
+- [ ] Installed regression, 2026-08-30: with the corrected tool schema, the
+  real ContextMenu task's first spec-agent run produced a detailed seven-
+  criterion structured contract but failed the brief write. Starting the
+  visible `Repair spec` action after the preservation fix still replaced that
+  contract with a two-criterion recovery seed. The task detail/API and the
+  queue projection consumed by `/start` disagreed about the current structured
+  contract, and the repair writer's promoted mutation does not copy
+  `structuredSpec`. This is a shared authoritative-state defect; do not treat
+  it as a model retry or copy problem.
+
+### Finding: Start-time recovery must use and preserve the same task contract shown to the owner
+
+- [ ] User job: when the owner starts the one visible recovery action, Guildhall
+  acts on exactly the structured scope they just reviewed. No private queue
+  projection may replace it with older data.
+- Finding, 2026-08-30: the ContextMenu detail endpoint displayed the current
+  seven-criterion structured spec, while `/api/project/task/:id/start` hydrated
+  a different queue record, decided it needed recovery, and wrote a generic
+  two-criterion seed. Its promoted mutation copied `spec`, criteria, and brief
+  but not `structuredSpec`, so the action both chose from and persisted an
+  incomplete authority.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-start-repair-current-task-boundary-2026-08-30`.
+Touched contracts: the start-time repair selector must load the same promoted
+current task boundary the route already uses for later readiness checks, before
+it decides whether a recovery seed may replace anything. A legitimate promoted
+repair write must include `structuredSpec` along with the rest of the planning
+contract. Considered but not touched: evidence merging order, queue/index
+synchronization, product-brief authoring, UI wording, and review approval.
+Required proof: a current structured task displayed by the API cannot be
+classified as weak by `/start`, and a legitimate recovery writes the full typed
+contract atomically.
+
+#### Schema Migration Decision
+
+No schema migration. The promoted current-task store and `structuredSpec`
+already exist; this aligns which authority the start-time repair reads and the
+existing fields it writes.
+
+- [x] Focused regression proof, 2026-08-30: the start endpoint's spec-repair
+  coverage passes after its database-authoritative repair path reads the
+  promoted current task boundary and includes `structuredSpec` in promoted
+  writes. `pnpm typecheck` and `pnpm lint:contracts` pass. Installed replay
+  reframed ContextMenu from its current state, saved a new owner-authored
+  five-criterion spec, and made `/start` reject an unattended start while that
+  owner review was pending.
+
+### Finding: Reframing must clear the old review owner before it creates a new review decision
+
+- [ ] User job: after the owner asks Guildhall to reframe a task, the resulting
+  review screen tells the truth about who must act. A coordinator-owned recovery
+  gate cannot survive and make a new owner-authored spec look like a decision
+  the owner must approve.
+- Finding, 2026-08-30: the live ContextMenu reframe cleared the old brief and
+  spec but retained its `coordinator` review gate. The fresh spec writer saved
+  a complete six-criterion contract; the project decision correctly treated it
+  as coordinator-runnable, while the Task drawer ignored the typed gate and
+  showed `Approve spec`. Starting the same task was accepted, proving that the
+  screen and executable action disagreed.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-reframe-review-authority-2026-08-30`.
+Touched contracts: a reframe starts a new planning lifecycle and must clear the
+previous `specReviewGate`; the next spec handoff owns the new authority. The
+Task drawer must render an owner approval only for the typed owner gate, not
+from `spec_review` status alone. Considered but not touched: review approval
+persistence, task status values, provider behavior, and release ranking.
+Required proof: a reframed coordinator-owned task has no stale gate while it is
+exploring; its freshly authored spec receives an owner gate; the owner drawer
+and `/start` agree on whether the task can proceed.
+
+#### Schema Migration Decision
+
+No schema migration. `specReviewGate` already represents the authority; this
+is a lifecycle write-boundary correction and a read-side presentation fix.
+
+- [x] Regression and installed proof, 2026-08-30: a reframe clears a
+  coordinator-owned gate before shaping begins. The installed Looma reframe
+  saved an owner-authored spec with `specReviewReadyForOwnerApproval:true`, and
+  `/start` returned the same pending-owner-review boundary the drawer showed.
+
+### Finding: Approving a spec must move immediately to the shared next action
+
+- [ ] User job: after approving the one visible spec decision, the owner sees
+  what Guildhall will do next and one way to continue it. The old full spec is
+  not left on screen as though more reading is required.
+- Finding, 2026-08-30: after the live ContextMenu approval succeeded, the
+  drawer reloaded only its task record. Its project decision stayed stale as
+  `Review needed`, so the view fell through to a long Spec tab rather than the
+  compact `Ready to continue` handoff. The action completed, but the owner had
+  no visible confirmation or next step.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-spec-approval-next-action-refresh-2026-08-30`.
+Touched contracts: a successful owner spec approval must refresh the shared
+project decision before Task drawer presentation chooses its next branch.
+Considered but not touched: approval persistence, spec rendering, task status,
+and release ordering. Required proof: after approval, the same drawer receives
+the current shared focused action and renders the compact continuation command
+instead of its previously selected document tab.
+
+#### Schema Migration Decision
+
+No schema migration. This is a client read-refresh boundary after an existing
+typed approval mutation.
+
+### Finding: A task drawer must not navigate from an older project decision
+
+- [ ] User job: when Guildhall directs the owner from one completed decision to
+  the next task, that task is the current shared project action. Opening a
+  drawer cannot resurrect a previous decision from an older page response.
+- Finding, 2026-08-30: after ContextMenu approval, the drawer showed the
+  correct current project action, but its action button opened a cached
+  AlertDialog recovery. The AlertDialog detail response itself named a different
+  current primary task. The drawer used `project.detail.actionModel` from the
+  old page cache instead of its own revision-matched detail decision, so one
+  click led the owner to an unrelated, non-executable recovery card.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-task-drawer-current-action-boundary-2026-08-30`.
+Touched contracts: the task-detail API must carry the shared action model from
+the same current summary revision as its decision; Task drawer navigation and
+focused handoff presentation must prefer that payload over a page-level cache.
+Considered but not touched: task ranking, release blocker selection, task
+state persistence, and browser routing. Required proof: a stale cached action
+cannot win over the task-detail action model, and the drawer opens the current
+target task.
+
+#### Schema Migration Decision
+
+No schema migration. The shared action model is already persisted in the
+project summary; task detail will expose that existing current projection.
+
+- [x] Regression and installed proof, 2026-08-30: the task-detail packet now
+  carries a revision-matched shared action model. Focused drawer coverage gives
+  the page cache an intentionally stale target and proves the detail target
+  wins. The installed ContextMenu drawer's `Open Work` command opened
+  `task-import-gh97p0`, the actual current action, rather than the stale
+  AlertDialog task.
+
+### Finding: A recovery card must expose the action it recommends on the view the owner landed on
+
+- [x] User job: when a task says it can resume, that exact recovery command is
+  visible without changing tabs, finding a footer, or decoding a vague label.
+  The secondary action must say what it does.
+- Finding, 2026-08-30: the installed docs/storybook task told the owner that
+  its most likely next step was `Resume task`, but its Overview drawer showed
+  only `Reframe task...` and `I handled this...`. The usable retry lived only
+  in a different action view. That makes the task sound actionable while
+  withholding its action from the route Guildhall chose.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-recovery-action-visibility-2026-08-30`.
+Touched contracts: `escalationPrimaryAction` is the shared primary recovery
+command. Every task-drawer branch that presents the same unresolved escalation
+must show that command, while reframe remains an overflow option and manual
+resolution is named `Mark blocker resolved`. Considered but not touched:
+escalation persistence, retry transition semantics, task ranking, and agent
+dispatch. Required proof: an owner-owned escalation on Overview visibly offers
+the shared recovery command and opens its resolution path.
+
+#### Schema Migration Decision
+
+No schema migration. This aligns existing typed escalation actions and their
+presentations.
+
+- [x] Regression and installed proof, 2026-08-30: focused TaskDrawer,
+  CurrentTab, ThreadTab, and escalation-label coverage proves that an
+  owner-owned escalation exposes `Resume task` and a separately named manual
+  resolution path. After installation and restart with `stale:false`, the real
+  docs/storybook task's Overview drawer showed `Resume task` and `Mark blocker
+  resolved...`; opening `Resume task` presented the concrete recovery modal
+  without requiring a tab change.
+
+### Finding: The project response and the always-on activity response must name the same next action
+
+- [x] User job: no matter where the owner looks, Guildhall names one current
+  task and one next action. The header, Overview, Work, and task drawer may
+  present it differently, but they cannot send the owner to competing tasks.
+- Finding, 2026-08-30: the installed Looma `/api/project/activity` response
+  named `Work ready to resume` for the docs/storybook task as its primary
+  action, while `/api/project` named the unrelated AlertDialog recovery as the
+  primary action and demoted the docs task. Both asserted current data. This
+  contradicts the shared-summary contract before the UI even renders.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-project-activity-action-agreement-2026-08-30`.
+Touched contracts: project summary and activity responses must resolve the
+same shared `ProjectActionModel` from the same current projection, readiness,
+task boundary, and run state. Considered but not touched: task ranking policy,
+release persistence, UI component layout, and task mutations. Required proof:
+the two real endpoints agree on primary task, action code, button label, and
+run-control state for Looma after a service restart.
+
+#### Schema Migration Decision
+
+No schema migration. The correction is an API projection/read-authority
+alignment for existing summary data.
+
+- [x] Regression and installed proof, 2026-08-30: the existing
+  `resolveProjectActionModel` stale-action regression and `pnpm typecheck`
+  pass. After rebuilding, installing, and restarting with `stale:false`, both
+  live Looma endpoints named `task-import-gh97p0` with `ready_work`, `Open
+  Work`, and an enabled `Resume` run control. The Overview then rendered the
+  docs/storybook task, not AlertDialog; that command remained visible without
+  horizontal overflow at 1024px and 390px.
+
+### Finding: A routed project decision must name the task before asking for an action
+
+- [x] User job: when a completed task drawer sends the owner to the next
+  project decision, the owner can see which task the command affects and why
+  it is next without opening a second record.
+- Finding, 2026-08-30: after approving Looma's docs/storybook spec, the drawer
+  correctly refreshed to the shared next action but showed only `Repair this
+  spec`. The action packet already held the current roadmap-sync task title
+  and explanation; the handoff presentation discarded both, making the owner
+  guess what would be repaired.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-project-decision-orientation-2026-08-30`.
+Touched contracts: the task-drawer project-decision handoff must present the
+existing shared action's `taskLabel` and detail along with its executable
+button. Long identity is clamped locally for layout but not re-ranked or
+rewritten. Considered but not touched: task selection, action ranking, spec
+repair semantics, and task persistence. Required proof: a cross-task repair
+handoff visibly names its target and presents the action without overflow.
+
+#### Schema Migration Decision
+
+No schema migration. `ProjectActionModel.taskLabel` and `detail` already carry
+the owner orientation contract.
+
+- [x] Regression and installed proof, 2026-08-30: focused TaskDrawer coverage
+  proves a cross-task decision renders its typed task label and that a
+  `repair_spec` operation is not mislabeled as an owner decision. The shared
+  decision projection now preserves `taskLabel` rather than replacing it with
+  the generic action label. After rebuild, install, and restart with
+  `stale:false`, the Looma Activity and project responses agreed on the same
+  task id, action, and full task label; the real prior-task drawer read `One
+  repair is ready`, named the roadmap-sync task, and exposed `Repair spec`.
+
+### Finding: A focused repair must retire its completed command before the owner can click it again
+
+- [x] User job: after the owner starts the visible repair, that button becomes
+  unavailable immediately and the same drawer refreshes to the next shared
+  action as soon as the repair completes.
+- Finding, 2026-08-30: the cross-task repair ran successfully in one focused
+  pass, but the originating drawer kept its completed `Repair spec` button
+  visible and clickable until its normal four-second poll. The project action
+  had already advanced to a different repair, so the displayed command was
+  stale during the most important moment of the handoff.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-completed-repair-drawer-refresh-2026-08-30`.
+Touched contracts: a TaskDrawer run action refreshes both the shared project
+summary and its revision-bound task payload on the same bounded cadence; the
+action is disabled while the request is in flight. Considered but not touched:
+repair selection, task persistence, run orchestration, and polling interval.
+Required proof: the installed cross-task repair button disables during start
+and the originating drawer replaces it with the next action without waiting
+for ordinary polling.
+
+#### Schema Migration Decision
+
+No schema migration. This is a client refresh boundary after an existing run
+mutation.
+
+- [x] Regression and installed proof, 2026-08-30: TaskDrawer coverage passes
+  with the cross-task repair start route. After installation and restart with
+  `stale:false`, the real Looma repair button disabled as soon as it was
+  clicked, stayed on the originating drawer, then refreshed to the next
+  shared repair task and re-enabled only after the focused pass had stopped.
+
+### Finding: A release-level repair action must execute rather than route to a duplicate command
+
+- [ ] User job: when Release says a spec repair is the one thing preventing
+  forward progress, the owner can execute that repair from Release. The action
+  must not navigate to Work and present the exact same command again.
+- Finding, 2026-08-30: live Looma Release showed `Repair this spec` and an
+  executable-looking `Repair spec` button for the current editor task. Clicking
+  it navigated to Work, where it rendered the same `Repair spec` command and
+  did not start the repair. The primary action was therefore neither an action
+  nor a useful handoff.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-release-repair-execution-2026-08-30`.
+Touched contracts: Release must consume the shared action model's typed
+`operation`; when that operation is `repair_spec`, it invokes the existing
+ProjectView focused-run boundary for the shared `taskId`, exactly as the task
+drawer does. The release command remains disabled while that mutation is in
+flight. Considered but not touched: action ranking, repair selection, release
+readiness calculation, task persistence, and ordinary review navigation.
+Required proof: a release repair invokes one focused task run without changing
+routes, immediately disables the command, and updates the Release action to
+the next shared state after the run.
+
+#### Schema Migration Decision
+
+No schema migration. `ProjectActionModel.operation` and `taskId` already
+express the typed repair contract; this removes a Release presentation boundary
+that discarded those semantics.
+
+- [x] Regression and installed proof, 2026-08-30: ReleaseTab coverage proves
+  a typed `repair_spec` action calls the focused run boundary without navigating
+  to `/work`, and locks the command while it is in flight. With a rebuilt,
+  installed app reporting `stale:false`, Looma Release stayed at `/release`,
+  disabled `Repair spec` immediately, ran `task-import-twwvys`, and then
+  displayed the next shared repair task. At 1024x800 and 390x844 the entire
+  page had no page-level horizontal overflow and the primary action was visible
+  without scrolling.
+
+### Finding: Release cannot transiently replace the next action with unrelated migration urgency
+
+- [ ] User job: a completed repair settles on the same next owner decision
+  everywhere. A transient response cannot flash an unrelated project update
+  that asks the owner to change course.
+- Finding, 2026-08-30: during the installed release repair refresh, Release
+  briefly rendered `Required migration` and `Review project update` before
+  settling on the authoritative next repair. The later project and activity
+  responses agreed on that repair, so the one-frame migration action is either
+  a stale response or an unstable server projection. Its source remains to be
+  isolated before the overall one-minute route can be called stable.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-release-action-projection-stability-2026-08-30`.
+Touched contracts: pending investigation. The likely boundary is the shared
+project-action projection or its client response ordering, not Release-specific
+ranking. Considered but not touched: migration execution, repair selection,
+release readiness calculation, and task persistence. Required proof: repeated
+focused repair refreshes either retain the same authoritative next action or
+show a migration only when the authoritative API exposes that same action.
+
+#### Schema Migration Decision
+
+Pending investigation. No persisted schema change is implied by the observed
+projection flicker.
+
+### Finding: Work and the task drawer must not infer an owner approval from `spec_review` alone
+
+- [ ] User job: following `Review spec` opens one calm decision with both
+  `Approve` and `Request changes`. A task that Guildhall still owns for
+  recovery must never look like an owner approval, and an old task URL cannot
+  displace the current shared project action.
+- Finding, 2026-08-30: after the final visible repair, Work locally rendered
+  `Review spec` for grouped accordion behavior and routed there. Its
+  revision-matched task response instead had a coordinator-owned recovery gate
+  and the shared project action was a different `Repair spec` task. The drawer
+  then rendered an `Approve spec` card from raw `spec_review` status alongside
+  an unrelated worker escalation, while hiding `Request changes` and dumping
+  the full mechanical spec below the fold. This is a direct reintroduction of
+  the false-review and wall-of-text failures.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-owner-review-authority-and-review-surface-2026-08-30`.
+Touched contracts: Work focus chooses the current typed shared action or
+readiness focus before a route task id; a mismatched route cannot synthesize
+its own next action from task status. TaskDrawer and SpecTab expose approval
+only when `specReviewGate.authority` grants it to the owner. A valid focused
+owner review uses the compact shared `SpecReviewDecision`, which contains both
+approval outcomes; the full record is an explicit secondary path. Considered
+but not touched: task status persistence, recovery-gate lifecycle, escalation
+persistence, task ranking, and spec content schema. Required proof: a
+coordinator-owned `spec_review` task cannot render approval; Work redirects a
+mismatched focused route to the shared task; an owner gate renders both choices
+without the raw spec body or recovery card.
+
+#### Schema Migration Decision
+
+No schema migration. `specReviewGate.authority`, action task id, and action
+operation already express the ownership contract; this removes client views
+that ignored them.
+
+- [x] Regression and installed proof, 2026-08-30: WorkTab coverage proves a
+  stale coordinator-owned route cannot override the shared repair action;
+  TaskDrawer coverage proves coordinator recovery never renders approval from
+  either focused or full Spec presentation, while a valid owner gate renders
+  only `Request changes` and `Approve spec` without stale escalation clutter.
+  After install/restart with `stale:false`, Looma Work opened an old grouped-
+  accordion route but showed the current `EditorBlockMenu` repair instead.
+  That repair advanced to one implementation-ready task with `Resume this work
+  item`. The old direct full-record route had no approval command.
+
+### Finding: Work must preserve orientation while its current decision refreshes
+
+- [ ] User job: after taking the visible repair action, the owner sees that it
+  started, then sees the next decision or result. A transient refresh cannot
+  replace the entire decision surface with generic loading copy.
+- Finding, 2026-08-30: twice after a focused Work repair, the screen replaced
+  the action card with `Project summary ready` followed by a broad project
+  description and `Loading the selected view...` for several seconds. The
+  owner could not tell whether the repair ran, whether it completed, or what
+  would happen next until a later refresh restored the Work card.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-work-refresh-orientation-2026-08-30`.
+Touched contracts: the ProjectView surface-detail-loading boundary. A current
+owner decision must remain oriented while its more detailed work inventory
+refreshes, unless the shared project summary itself is unavailable. The
+interim state uses the typed project run state to say whether work is underway
+or the last pass completed, without reusing broad project-summary prose.
+Considered but not touched: repair execution, task ranking, project summary
+contents, and run persistence. Required proof: the installed Work route
+retains a truthful running/result handoff through a post-repair inventory
+refresh instead of replacing it with generic loading.
+
+#### Schema Migration Decision
+
+Pending investigation. No persisted schema change is implied by a transient
+surface-loading presentation.
+
+- [ ] Regression proof: ProjectView coverage proves the Work transition does
+  not reuse broad project-summary copy while it waits for the correct work
+  inventory. Installed post-repair refresh proof remains open because the
+  current Looma action is now real implementation work and the flow audit does
+  not start delivery merely to force a spinner.
+- [x] Installed handoff proof, 2026-08-30: after install/restart with
+  `stale:false`, Looma Work presented the current ContextMenu implementation
+  task with one `Resume this work item` action at desktop, 1024x800, and
+  390x844. The action was above the fold in each viewport and no page-level
+  horizontal overflow occurred.
+
+### Finding: Global run chrome must reconcile a completed focused pass
+
+- [ ] User job: after the owner runs one focused repair, the global command
+  immediately reflects whether the project is still running. It must never
+  keep offering `Pause` after the repair has already stopped.
+- Finding, 2026-08-30: the real release repair completed in 608ms. Both the
+  authoritative project response and activity response reported `stopped`,
+  but Release chrome still rendered `Pause` more than four seconds later. The
+  optimistic `running` prediction only cleared after observing a running
+  response, so a quick completed pass could make it permanent.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-optimistic-run-reconciliation-2026-08-30`.
+Touched contracts: ProjectView optimistic run chrome is temporary only until
+the first successful authoritative project refresh after start or stop. It
+must yield to the returned shared project run state, even when a one-task pass
+finishes before that refresh. Considered but not touched: run orchestration,
+task selection, agent status persistence, action ranking, and API payload
+shape. Required proof: a focused run whose first refresh is already stopped
+returns chrome to `Resume` rather than leaving a false `Pause` command.
+
+#### Schema Migration Decision
+
+No schema migration. The existing typed project run status remains
+authoritative; this removes a client-side cache state that could outlive it.
+
+- [x] Regression and installed proof, 2026-08-30: ProjectView coverage proves
+  a one-task start whose first refresh is already stopped returns chrome to
+  `Resume`, and the explicit running-to-stopped regression keeps reconciling a
+  focused run rather than leaving the stale state until the old 1.5-second
+  check. Installed Overview replay showed that parallel timed refreshes can be
+  coalesced into one stale request, so focused runs now use a bounded serial
+  refresh loop. After rebuild, install, restart, and `stale:false`, the real
+  Overview repair disabled at once and, 1.25 seconds later, had replaced its
+  task and removed false `Pause` chrome. The project and activity APIs both
+  agreed on the resulting next repair task.
+
+### Finding: A stopped focused task must hand off to the shared next decision
+
+- [ ] User job: after the owner starts one focused item and it stops, the
+  resulting screen explains that outcome and offers the one authoritative next
+  action. It must not leave a prior task's optional retry buried below its
+  record while the shared project action has advanced to a different task.
+- Finding, 2026-08-30: a real Looma + Knit focused ContextMenu implementation
+  pass stopped after three ticks with an escalation. The selected task drawer
+  continued to say `Queued` and exposed `Retry worker` after task links and
+  delivery detail. At the same time, the authoritative project response named
+  the docs/storybook task as the ready shared next action. An owner therefore
+  has two competing paths and no clear explanation of why Guildhall switched
+  focus.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-stopped-focused-handoff-2026-08-30`.
+Touched contracts: selected-task drawer handoff. The selected record may retain
+a concise outcome, but the primary decision is always the current typed project
+action; the drawer cannot independently elevate a stale task recovery.
+Considered but not touched: action ranking, escalation persistence, focused-run
+execution, and task status lifecycle. Required proof: when a focused run ends
+on a different shared action, every owner-facing surface names the same next
+task, explains the completed task's outcome, and offers the next action above
+the fold.
+
+#### Schema Migration Decision
+
+No schema migration. This corrects a client presentation exception that
+overrode the existing shared action contract.
+
+- [x] Regression proof, 2026-08-30: focused TaskDrawer coverage proves a
+  stopped selected task with an open escalation yields to the project's typed
+  next action, explains that the prior task stopped, and keeps the recovery
+  command out of the primary surface. `pnpm exec vitest run
+  src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot` passes
+  72/72.
+- [x] Installed proof, 2026-08-30: after `pnpm build`, `pnpm dev:install`,
+  service restart, and `stale:false`, the real stopped ContextMenu drawer
+  showed `Next action`, named the docs/storybook task, and explained why
+  Guildhall advanced. `Open Work` was above the fold without page-level
+  horizontal overflow at 1280x800, 1024x800, and 390x844. It opened the exact
+  named task, whose focused screen offered one `Resume only this work item`
+  action. The owner can now understand the handoff in two reads and one click,
+  without hunting through the stopped task's mechanics.
+
+### Finding: Unrelated repository failures cannot block a scoped task's handoff
+
+- [ ] User job: when Guildhall runs a narrowly scoped documentation task, a
+  pre-existing failure outside that task's declared verification scope cannot
+  turn it into an unexplained blocked item. The owner should receive the real
+  next decision, not be asked to retry work that cannot change the failure.
+- Finding, 2026-08-30: a real Looma + Knit docs/storybook convention task
+  stopped after three ticks with `gate_hard_failure`: pre-existing failures in
+  `packages/core` blocked review for a Markdown-only task. Its own acceptance
+  contract names the docs build, and the resulting project action simply
+  advanced back to ContextMenu without explaining that the docs task could not
+  resolve the unrelated failure. This makes a routine documentation task look
+  like an owner recovery problem and prevents meaningful release progress.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-scoped-gate-failure-authority-2026-08-30`.
+Touched contracts: gate-failure escalation authority. `gate_hard_failure` may
+block work only when the task already has durable, typed failed hard-gate
+evidence; a model's command summary or claimed unrelated baseline failure is
+display-only material and cannot create release-blocking state. A selected task
+with a system-resolved unsupported blocker must say that it is ready again
+while the shared project action remains the single next move. Considered but
+not touched: task priority, release ranking, provider selection, Markdown
+content, and hard-gate command selection. Required proof: an unsupported
+worker gate escalation is rejected without blocking the task, while a recorded
+failed hard gate still creates the recovery path.
+
+#### Schema Migration Decision
+
+Persisted state touched: legacy task escalation records. Change class:
+required corrective project migration. Existing-data impact:
+`0.13.105/unproven-gate-failure-recovery` resolves only open
+`gate_hard_failure` escalations whose effective task has no persisted failed
+hard `GateResult`, then returns that task to `ready`. Safety: a typed failed
+hard gate remains blocked, and reapplying the migration has no effect after the
+system resolution. Compatibility reader: existing effective-task and
+escalation readers already understand the resolution fields. Fixtures and
+tests cover an unsupported legacy blocker and a genuine failed gate. Owner
+plan text: Guildhall clears the unsupported blocker and returns the task to its
+own verification path. Revert behavior: disable the migration before applying
+it to leave existing records unchanged; after application, restore the prior
+blocked status only through an explicit recovery decision.
+
+- [x] Regression proof, 2026-08-30: `raise-escalation` now rejects a
+  `gate_hard_failure` without a durable failed hard-gate result, while a typed
+  failed gate remains eligible for recovery and an explicit scope disposition.
+  The automatic `0.13.105/unproven-gate-failure-recovery` migration resolves
+  only legacy unsupported blockers and returns them to `ready`; it leaves a
+  recorded hard-gate failure blocked. Focused escalation and migration tests
+  pass. TaskDrawer coverage also proves a system-repaired gate blocker explains
+  that the task is ready again while retaining the one shared next action.
+- [x] Installed proof, 2026-08-30: after `pnpm build`, `pnpm dev:install`,
+  restart, and `stale:false`, the real docs/storybook task was `ready` with its
+  old `gate_hard_failure` system-resolved. Its direct drawer says why the
+  blocker was cleared and presents the single shared `Open Work` action; that
+  action opens the named ContextMenu work item with one focused resume action.
+  The repair route had no page-level horizontal overflow at 1280x800,
+  1024x800, or 390x844. Migration coverage preserves a separate task with a
+  recorded typed failed hard gate as blocked.
+
+### Finding: Live execution must have one authoritative status
+
+- [ ] User job: after choosing `Resume only this work item`, an owner can tell
+  in one glance that Guildhall accepted the instruction, which release work is
+  running, and whether anything is needed from them. Every surface must agree
+  about that state.
+- Finding, 2026-08-30: the real Looma + Knit task drawer correctly switched to
+  `Work is underway` and the chrome exposed `Pause`, but the same project API
+  returned both `decision.planExecution.state: paused` and
+  `decision.execution.state: running` for the exact same focused task. The
+  action model, start readiness, and run state correctly report running. This
+  duplicate decision field is a latent contradiction: any consumer that picks
+  the stale plan-execution state can tell the owner the opposite of what just
+  happened.
+- Follow-up finding, 2026-08-30: the installed Overview repeats the live
+  action but labels its only card `What needs your attention` even though the
+  card says Guildhall is working and no owner decision exists. A running task
+  is orientation, not a demand for the owner's attention.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-live-status-authority-2026-08-30`. Candidate touched
+contract: project decision execution status. The repair must identify a single
+authoritative live execution field. `execution` owns liveness;
+`planExecution` is retained only as the stopped-run fallback, not as a
+competing owner-facing status. The shared action packet must also carry the
+typed `running` code whenever it represents live work; presentation cannot
+infer urgency from prose. Considered but not touched: task lifecycle, release ranking,
+owner-input priority, and provider state. Required proof: immediately after a
+real resume, all summary, chrome, overview, Work, drawer, Thread, release,
+inbox, and status consumers show the same running task or intentionally omit
+live state.
+
+#### Schema Migration Decision
+
+No persisted-schema change is proposed. This is an in-memory snapshot contract
+reconciliation; existing task and run records remain unchanged.
+
+- [x] Regression and installed proof, 2026-08-30: the shared action builder
+  now emits `code: running` for both task-backed and start-readiness-backed
+  live work. Project Overview uses that typed code, not copy or tone, to say
+  `Work is underway`. After a fresh build, install, restart, and `stale:false`,
+  real Looma + Knit changed from one visible `Resume work` action to
+  `Work is underway` plus `Pause` after resume, then returned to exactly one
+  `Resume work` action after pause. Action-model and Overview regressions pass.
+- [ ] Remaining surface proof: compare the authoritative execution state with
+  Work, drawer, Thread, release, inbox, and status during a real one-task run;
+  the saved `planExecution` fallback must never be presented as current work.
+- Finding, 2026-08-30: with the same paused action-model record, Overview,
+  Thread, and Release locally called it `What needs your attention`, while
+  Inbox truthfully said `Nothing needs your decision`. Resume is a work
+  control, not an unresolved decision, so the owner received contradictory
+  urgency based solely on which route they opened.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-owner-action-presentation-2026-08-30`. Touched contract:
+the shared project action model. Its primary action must carry the canonical
+owner-facing state heading, computed once from its typed code, and every owner
+route must present that field rather than locally interpreting action code or
+tone. Considered but not touched: task ranking, inbox membership, run control,
+and persisted task state. Required proof: paused work reads `Work paused` on
+Overview, Thread, and Release, while Inbox continues to reserve its empty state
+for the absence of a decision.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. `ownerHeading` is an additive API presentation
+field computed from the current shared snapshot; older readers retain their
+existing generic fallback until they receive a fresh project packet.
+
+- [x] Regression and installed API proof, 2026-08-30: the runtime action
+  builder now emits `ownerHeading: Work paused` for paused focused work, and
+  Overview, Thread, and Release consume that shared presentation field rather
+  than reinterpreting action code or tone. Runtime and surface regressions pass;
+  after build, install, restart, and `stale:false`, the real Looma + Knit
+  project API returned the same `paused_live_work` action with that heading.
+  The direct browser replay remains open below.
+- Follow-up finding, 2026-08-30: after a fresh installed restart, the cold
+  Overview route settled but cold Thread, Release, and Inbox remained on their
+  `Loading project...` shells even though the shared project, Thread, and Inbox
+  APIs all returned 200 with the paused action. ProjectView created a new
+  dynamic-import promise from its template on every reactive render, allowing
+  a summary refresh to replace an in-flight owner-surface import indefinitely.
+- [x] Regression repair, 2026-08-30: ProjectView now memoizes each lazy owner
+  surface import for the life of the shell, so refreshes preserve the pending
+  import rather than replacing it. ProjectView route tests pass alongside the
+  shared-action regressions. The packaged Chromium flow test
+  `managed project state keeps Thread readable after migration` also passes on
+  the cold Looma + Knit Thread route.
+- [ ] Remaining installed browser proof: rerun cold Thread, Release, and Inbox
+  after the import-cache repair. The browser harness timed out while navigating
+  before it could return DOM or console evidence, so the API and unit proof do
+  not substitute for a real owner-route replay.
+- Finding, 2026-08-30: after the canonical paused-state heading was added,
+  Overview rendered `Work paused` twice in the same decision card: once as the
+  card title and again as the action label. The same label can repeat in Thread
+  and Release. A state heading plus task and action is enough; repeat labels
+  add no orientation value.
+- [x] Regression proof, 2026-08-30: Overview, Thread, and Release now suppress
+  an action label only when it exactly duplicates the shared heading. The
+  paused Overview regression proves one `Work paused` heading remains alongside
+  the distinct task title; the owner-surface component suites and typecheck
+  pass. Installed browser proof remains grouped with the pending route replay.
+- Follow-up finding, 2026-08-30: after the owner resumed the real docs/storybook
+  task, Work correctly withheld stale inventory while its focused snapshot
+  refreshed, but replaced the entire page with `Guildhall is working`. The
+  temporary state omitted the task name and release progress, so the owner
+  could not tell what was underway or where it fit.
+- [x] Regression and installed proof, 2026-08-30: the shared ProjectView
+  pending surface now keeps the active task title and `Stage 1: V1 Release
+  Hardening · 0 of 16 complete` visible instead of a generic working panel.
+  ProjectView coverage proves that compact state. The installed Looma + Knit
+  replay showed the same focused task and milestone progress during a real
+  resume, followed by a single Pause control and no competing task action.
+
+### Finding: Owner routes must not flash a contradictory saved state
+
+- [ ] User job: opening any release route during active work immediately shows
+  the current milestone, the focused task, and one truthful status. The route
+  may load, but it cannot first present an older status, a different layout,
+  or an invented owner demand and then replace it.
+- Finding, 2026-08-30: during a real ContextMenu run, Overview, Work, Release,
+  and Inbox agreed on active work. A direct Thread route first rendered an
+  old, dense thread list and a `Paused` active-thread dock, then about 2.6
+  seconds later replaced the whole page with the correct compact
+  `No response needed` handoff and running task. Release also called the same
+  running work `What needs your attention`. The owner gets contradictory
+  status and a disruptive layout shift before the actual current screen.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-owner-route-freshness-2026-08-30`. Touched contracts:
+owner-route freshness and action-status presentation. A route must not render
+a persisted project packet as current while its authoritative snapshot is
+loading; it must show a stable loading state until the same shared revision
+that drives chrome is available. All owner-facing action headings derive from
+the shared typed action code, including `running`. Considered but not touched:
+thread persistence, run orchestration, task ranking, and release readiness.
+Required proof: a direct reload of Thread and Release during real live work
+shows no stale content or status before the final action is visible.
+
+#### Schema Migration Decision
+
+No schema migration. Existing persisted summaries remain usable as cache data;
+the change governs when an owner-facing route may present them as current.
+
+- [x] Regression and installed proof, 2026-08-30: ProjectView now preserves
+  the project shell but waits for the shared project packet before mounting
+  Thread, Release, or Inbox. A cold Thread regression proves no thread request
+  or stale thread list can render first; Release coverage reserves
+  `What needs your attention` for an owner decision and labels typed running
+  work `Work is underway`. After a fresh build, install, restart, and
+  `stale:false`, cold direct Thread, Release, and Inbox routes for real Looma
+  + Knit showed only a stable shell while connecting, then their single current
+  action with no stale paused status, activity wall, or layout replacement.
+
+### Finding: A focused resume cannot leave its only action inert
+
+- [ ] User job: when an owner resumes the selected Work item, Guildhall either
+  shows the run as underway or returns the item to a visibly actionable state
+  with a clear result. It cannot leave a disabled resume button beside a
+  paused task.
+- Finding, 2026-08-30: on the real docs/storybook item, `Resume this work
+  item` became disabled while both its screen and the authoritative project
+  snapshot still reported `paused_live_work` and `run: stopped`. Work had set a
+  local active-task flag after the start response, but that flag did not clear
+  when the authoritative run state was already stopped.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-focused-resume-reconciliation-2026-08-30`. Touched
+contract: focused Work optimistic-run state. A local active marker is valid
+only while the shared project snapshot says the run is active; it must be
+cleared whenever an authoritative stopped snapshot is observed, including
+after a start that ends before the first refresh. Considered but not touched:
+task lifecycle, start endpoint semantics, action ranking, and provider state.
+Required proof: a focused task whose post-start snapshot is stopped is
+immediately resumeable again, rather than indefinitely disabled.
+
+#### Schema Migration Decision
+
+No schema migration. This corrects an ephemeral view-state reconciliation
+rule; persisted task and run records remain authoritative and unchanged.
+
+- [x] Regression and installed proof, 2026-08-30: the focused Work regression
+  proves that a stopped post-start snapshot restores the visible, enabled
+  `Resume this work item` action. A local running marker survives only through
+  a confirmed shared running state, then clears after the next shared stopped
+  state; a running card has no competing `Open task` control. After a fresh
+  build, install, restart, and `stale:false`, the real Looma + Knit docs task
+  moved from enabled Resume to `Work is underway` with its exact title and
+  `0 of 16 complete`, then Pause returned it to the same enabled Resume action.
+
+### Finding: One recovery decision must clear duplicate escalation records
+
+- [ ] User job: when a task stopped for one recoverable reason, the owner can
+  choose its recovery once. Guildhall clears matching duplicate escalation
+  records, returns the task to its named next stage, and says what will happen
+  next. The owner never has to repeat the same approval for historical copies
+  of the same failure.
+- Finding, 2026-08-30: the real Looma + Knit `Build AlertDialog primitive`
+  task carries three unresolved `human_judgment_required` escalations from the
+  same stalled spec-agent loop. All three have the same typed recovery, yet
+  the task would require one resolve action per record before it could leave
+  `blocked`. The release summary consequently reports an owner-blocked item
+  while the canonical decision says no owner input is open and points at the
+  paused current work.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-duplicate-escalation-recovery-2026-08-30`. Touched
+contract: escalation recovery. A direct owner recovery may resolve the
+selected unresolved escalation and its unresolved siblings only when their
+typed recovery identity matches (`reason`, `agentId`, `handling`, and
+`recoveryCode`). It must not group gate-scope exceptions or match prose.
+Considered but not touched: release priority, task ranking, task status
+semantics, and general inbox ranking. Required proof: one direct recovery
+returns a task with duplicate matching records to its requested next state;
+a distinct escalation remains open and keeps the task blocked.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. The repair reuses the existing structured
+escalation resolution fields and writes several matching existing records in
+one atomic task mutation. Older callers retain single-record behavior unless
+they explicitly request grouped recovery. Revert behavior: stop sending the
+optional grouped-recovery request; previously resolved records remain durable
+history and are never silently reopened.
+
+- [x] Regression and installed proof, 2026-08-30: the duplicate-recovery
+  unit and HTTP regressions prove one direct recovery clears matching records
+  while preserving a distinct escalation. Acting as the delegated Looma + Knit
+  owner resolved all three real records in one request and returned
+  `resolvedCount: 3`; the task then moved to `exploring` and the project
+  owner-blocked count fell to zero.
+
+### Finding: Promoted task details must not leak legacy escalation summaries
+
+- [ ] User job: after resolving a recovery, every route sees the same clear
+  task state. Historical definition fields cannot make a resolved task look
+  blocked again in a drawer, action model, or worker controller.
+- Finding, 2026-08-30: the real Looma + Knit recovery wrote the authoritative
+  runtime `openEscalationIds` as an empty array, but the task-detail API still
+  returned three open IDs. The promoted effective-task boundary correctly
+  stripped legacy escalation records but left behind their old top-level ID
+  summary fields.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-promoted-escalation-summary-2026-08-30`. Touched
+contract: promoted effective-task projection. In database-authoritative
+projects, legacy open escalation and issue ID summaries are excluded with the
+other legacy runtime fields; only the normalized runtime overlay may supply
+them. Considered but not touched: escalation resolution, task status, stored
+runtime rows, and project-summary ranking. Required proof: a promoted task
+with old definition IDs and an empty current runtime exposes no stale IDs.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. This is a read-boundary correction for data
+already migrated into the task runtime overlay. Existing records are untouched;
+revert restores the old read behavior only, with no data conversion.
+
+- [x] Regression and installed proof, 2026-08-30: the effective-task
+  regression proves old top-level summary IDs are excluded from a promoted
+  definition. After build, install, restart, and `stale:false`, the real Looma
+  + Knit task-detail API returned `exploring`, no block reason, no top-level
+  open escalation IDs, an empty runtime list, and all three recovered records
+  marked resolved.
+
+### Finding: Every live surface must preserve the selected release denominator
+
+- [x] User job: whether an owner sees progress on Overview, Release, Work, or
+  the persistent activity surface, `Stage 1: V1 Release Hardening` means the
+  same bounded work. Counts cannot silently include later work in one place
+  and exclude it in another.
+- Finding, 2026-08-30: while the real Looma + Knit docs task was running, the
+  primary project read correctly reported `0` deferred items in the selected
+  16-item release, but `/api/project/activity` reported `26` deferred items.
+  The compact summary reused an old scalar count, and its orientation record
+  described later work rather than authoritative selected-release membership.
+  The normalized `release_membership` relation records no deferred work for
+  this release.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-release-denominator-shell-2026-08-30`. Touched contract:
+the promoted project summary shell. Every reader of the shared release summary
+must derive the selected release's deferred count from normalized
+`release_membership`, not from an orientation payload or a stale scalar cache.
+Compact readers may omit orientation entirely. Considered but not touched: task
+inventory, release ranking, activity polling frequency, and view copy. Required
+proof: a shell/activity read and a project read return the same selected-release
+counts when later work exists.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. The normalized membership relation already
+exists and remains its current authority; this change stops a summary reader
+from falling back to non-authoritative presentation data.
+
+- [x] Regression and installed proof, 2026-08-30: the compact-shell
+  regression seeds a stale cached count without an orientation payload and
+  proves the normalized membership relation supplies the correct deferred
+  count. After a fresh build, install, restart, and `stale:false`, real Looma
+  + Knit `/api/project` and `/api/project/activity` both returned the same
+  selected-release counts: `total: 16`, `done: 0`, `active: 2`, `blocked: 4`,
+  and `deferred: 0`. The paused Overview stayed oriented and actionable at
+  1280px, 1024px, and 390px with no page-level horizontal overflow; its sole
+  enabled `Resume work` control was visible above the mobile fold. A fresh
+  installed Release and Thread route both named the same paused `LOO-1CWL9M`
+  task and sent their lone `Open Work` command directly to its resume handoff.
+  The persistent activity API returned the same counts and `paused_live_work`
+  action as the project read.
+
+### Finding: Work lists must preserve the active owner decision
+
+- [x] User job: after choosing `Browse work` from the current-work handoff, an
+  owner sees the same named paused item and the same executable next action.
+  A queue cannot promote an unrelated draft, duplicate the current item, or
+  describe the paused item as working.
+- Finding, 2026-08-30: real Looma + Knit `Browse work` displayed a prominent
+  `Draft task brief` control for a different imported draft and listed the
+  paused `LOO-1CWL9M` item as `WORKING`. The focused handoff correctly said
+  `Work paused` with `Resume this work item`, but the queue discarded that
+  shared execution/action state and re-ranked raw list rows.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-work-queue-active-owner-decision-2026-08-30`. Touched
+contract: shared Work queue presentation model. When the project action model
+has a focused live-work decision, every Work entry surface must retain that
+item, render its current execution state, and expose its one action before
+unrelated queue readiness. Considered but not touched: task lifecycle status,
+task ranking for a project with no focused work, spec approval semantics, and
+worker scheduling. Required proof: a paused focused item remains visibly
+paused and resumeable from the queue without a competing primary action.
+
+#### Schema Migration Decision
+
+No schema migration. The repair consumes the existing shared action and
+execution projections; no durable task or project data changes.
+
+- [x] Regression and installed proof, 2026-08-30: focused Work regressions
+  prove that a paused shared action overrides stale worker assignment metadata,
+  remains the sole queue action after `Browse work`, and removes unrelated
+  imported-draft prompting plus the duplicate task row. After fresh build,
+  install, restart, and `stale:false`, the real Looma + Knit queue showed
+  `LOO-1CWL9M` once as `Paused` with one `Resume this work item` button and
+  `15 other current items`; it showed no `Draft task brief` control. At 390px,
+  the action remained above the fold with no page-level horizontal overflow.
+
+### Finding: Queue labels must respect typed approval ownership
+
+- [x] User job: when the current action is paused work, an owner can browse
+  later items without being told to review specifications that Guildhall owns.
+  List state must distinguish an owner decision from queued coordinator work.
+- Finding, 2026-08-30: real Looma + Knit showed ten `Review spec` rows while
+  the shared action was paused work and no owner review IDs were present. A
+  full task detail correctly marked a recovered spec `authority: coordinator`,
+  while the compact queue intentionally omitted its gate detail. The Work list
+  ignored the authoritative shared owner-review ID list and rendered the raw
+  `spec_review` lifecycle status as a false owner action.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-coordinator-review-queue-label-2026-08-30`. Touched
+contract: shared task-stage presentation. The explicit owner-review task IDs
+from the shared readiness model are the authority for a Work-list `Review spec`
+label; a `spec_review` task absent from that list is queued work. A typed
+coordinator gate remains a direct-detail safeguard. Considered but not touched:
+approval mutation authority, queue ordering, and owner review readiness. The
+same shared ID list also governs the selected-work and Task Drawer surfaces so
+a click cannot recreate the rejected approval action. Required proof: an
+unlisted review row has a non-actionable queued label while an explicitly
+listed owner review keeps `Review spec`.
+
+#### Schema Migration Decision
+
+No schema migration. This consumes the existing typed spec-review gate from
+the effective task projection and changes no stored approval data.
+
+- [x] Regression and installed proof, 2026-08-30: task-presentation,
+  WorkTab, WorkTreePreview, and TaskDrawer regressions prove that an explicit
+  empty owner-review list keeps a selected legacy `spec_review` item queued
+  and removes its approval control, while payloads without that list preserve
+  legacy owner-review compatibility. After a fresh build, install, restart,
+  and `stale:false`, real Looma + Knit Work at 1280px showed the one paused
+  `Resume this work item` action, zero `Review spec` labels, and selected
+  `LOO-EBUYE7` as queued rather than a second approval. The queue remained
+  unclipped at 1024px and 390px; the one resume action stayed above
+  the mobile fold, and selecting that row offered `Open task`, not approval.
+
+### Finding: Resuming work must never preserve an out-of-scope task sandbox
+
+- [ ] User job: when an owner resumes paused work, Guildhall either continues
+  the named task from its real in-scope progress or silently repairs its own
+  disposable sandbox first. The owner never restarts a docs task only to have
+  Guildhall direct work at an unrelated source file or failed build.
+- Finding, 2026-08-29: the real paused Looma + Knit task `LOO-1CWL9M` is
+  scoped to adding a convention in `docs/component-system.md`, but its retained
+  task worktree has an uncommitted `packages/core/stencil.config.ts` edit and a
+  stale checkpoint that directs the next worker to that core build file. The
+  recovery path classifies any dirty task worktree as partial progress, and
+  reusable-worktree synchronization then checkpoints it without verifying that
+  the change belongs to the current task.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-task-worktree-scope-integrity-2026-08-29`. Touched
+contracts: task worktree recovery and task worktree lifecycle. Before a
+no-progress timeout or a worker dispatch can preserve or reuse a task sandbox,
+Guildhall compares both uncommitted files and the branch delta from its base
+with the task's authoritative likely targets. A sandbox containing unrelated
+work is disposable system state: Guildhall snapshots only in-scope target
+content, tears down the worktree and branch, forgets its workspace registration
+and stale recovery checkpoint, recreates a fresh task branch from the task's
+configured base (falling back only when no base was stored), and restores only
+that scoped content. It must not expose raw file paths
+or a repair choice to the owner. Considered but not touched: task scope
+inference, source-reference schema, worker prompt wording, and release ranking.
+Required proof: unrelated dirty or committed work is discarded, valid scoped
+work survives, and the next worker receives a target-only context.
+
+- [x] Scope-integrity recovery now runs before a resumed worker dispatch as
+  well as on a no-progress timeout. It compares uncommitted files and the
+  branch delta, keeps only target-matching content, and rebuilds from the
+  stored task base.
+  Evidence: focused orchestrator coverage creates a real mixed task branch,
+  verifies the target documentation edit remains as the only pending edit,
+  verifies the unrelated core change is absent, and verifies the non-default
+  configured base is retained. Focused suite: 4/4; typecheck passed.
+- [x] Drive the repaired path against the real Looma + Knit paused worktree.
+  Evidence: the installed `guildhall run looma-knit --task task-import-gh97p0
+  --max-ticks 1` replaced the stale sandbox with a new `per_task` workspace
+  rooted at its stored `codex/component-audit-roadmap` base. Before the
+  deliberately interrupted provider turn, `git diff --name-only` in that
+  workspace reported only `docs/component-system.md`; the unrelated
+  `packages/core/stencil.config.ts` edit was absent. `localhost:7777` reports
+  the installed build as `stale:false` and the owner-facing next action remains
+  the single explicit `Resume` action for that task.
+
+- [x] Installed owner-orientation proof after recovery. At the default desktop
+  view, 1024px narrow desktop, and 390px mobile, the live Overview presents
+  only the project, active milestone, meaningful completion count, concise
+  task key/title, and visible `Resume work` action. The route had no page-level
+  horizontal overflow at either constrained width (`scrollWidth ===
+  clientWidth`), and the task action was visible without scrolling. This gives
+  the owner the current release state and one executable next move in a single
+  read; the direct bounded CLI run separately proved the target task's repaired
+  execution path without invoking the browser action again.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. This corrects the lifecycle of already
+disposable task-worktree and checkpoint state. Existing task, workspace, and
+checkpoint records retain their format; an invalid workspace is removed through
+the existing lifecycle boundary before dispatch. Revert behavior: stop invoking
+the scope-integrity reset; no owner data is transformed or lost.
+
+### Finding: Isolated worktree proof must prepare generated workspace packages
+
+- [ ] User job: when Guildhall asks an owner to resume or review a task in an
+  isolated workspace, its declared proof commands run in that workspace. A
+  valid docs change must not look broken merely because local workspace package
+  outputs are absent.
+- Finding, 2026-08-30: Looma + Knit's recovered docs task has valid `pnpm`
+  workspace links, but `pnpm build:docs` fails before evaluating the docs
+  change because `@looma/core` and `@looma/layout` point to source packages
+  whose ignored `dist/` outputs are missing. `pnpm check:docs-sync` passes, so
+  this is execution-environment preparation rather than a content failure.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-isolated-worktree-build-preparation-2026-08-30`.
+Touched contracts: task-worktree bootstrap ownership and task proof
+classification. A task worktree bootstrap failure is an environment setup
+boundary by default, even when Guildhall restored an in-scope partial diff
+before retrying the task. Dirty files and a stale worktree-local bootstrap
+record do not prove that a setup failure belongs to the task. A worker receives
+a failed bootstrap only when the task explicitly owns bootstrap repair.
+Considered but not touched: task scope inference, acceptance-command
+execution, worker prompt wording, release ranking, and persisted bootstrap
+status. Required follow-up:
+repair the Looma setup contract or its underlying core build so a fresh
+workspace can produce package outputs before docs proof. Required proof: a
+fresh isolated Looma + Knit worktree surfaces its first setup failure as
+environment setup without discarding the valid docs diff, while a post-setup
+task-owned verification failure still returns to the worker.
+
+- [x] Preserve the valid task-local result without treating the baseline
+  bootstrap failure as a docs regression. The docs-sync command passed and the
+  scoped naming convention is committed as Looma task-branch commit `b4e61dd`.
+  The attempted dependency build then failed in `@looma/core` on unresolved
+  generated `../dist/esm/loader.js`, before Docusaurus evaluated the changed
+  document. The task remains resumable for normal Guildhall review; no status
+  was bypassed or marked complete from the partial proof.
+
+- [x] First-bootstrap classification: a scoped partial diff does not turn a
+  missing or failed worktree setup into a worker-owned code repair. Focused
+  orchestrator coverage proves that a dirty fresh sandbox blocks on setup, a
+  stale bootstrap record from an abandoned sandbox does not transfer to its
+  replacement, and an explicit task-owned bootstrap repair still reaches the
+  worker. `pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts -t
+  "bootstrap" --reporter=dot` passed 13 assertions; `pnpm typecheck` passed.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. Bootstrap status, task runtime state, and
+checkpoint formats are unchanged. This is a runtime ownership correction over
+existing task and worktree state: failed setup becomes an environment block by
+default, while explicit bootstrap-repair tasks retain their current worker
+handoff. Any later Looma bootstrap-contract or proof-evidence-format change
+requires its own migration decision.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts -t
+  "bootstrap" --reporter=dot` passed 13 focused assertions, including a dirty
+  fresh sandbox, stale bootstrap evidence from an abandoned sandbox, and an
+  explicit bootstrap-repair task.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence` passed
+  (`127` model-independence tests). `pnpm build`, `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start` refreshed the installed app; its
+  stale-server API reports `stale:false`.
+- The installed Looma + Knit Overview still shows its visible saved-progress
+  detail and `Resume work` action at 1280px with no horizontal overflow. The
+  actual Looma bootstrap branch remains unexercised here because that project's
+  declared bootstrap does not run the broken full package build; the documented
+  Looma build boundary remains a separate direct-product handoff.
+
+### Finding: Task actions must name the stage they will run
+
+- [ ] User job: after deliberately opening a non-focused work item, the owner
+  can tell what the visible action will do without translating a status chip or
+  guessing whether it restarts implementation, review, or checks.
+- Finding, 2026-08-30: the live Looma + Knit Work inspector labels
+  `LOO-WPL1BT` as `Gates` but offers `Start work`. The task is actually in
+  `gate_check`; the generic label makes an executable action look unrelated to
+  the selected task's stated stage.
+
+#### Contract Touch Decision
+
+Work id: `stage-named-work-actions-2026-08-30`. Touched contract: shared
+owner-facing task run-action presentation. `ready` remains `Start work`, while
+`in_progress`, `review`, and `gate_check` describe their next execution stage
+as `Resume work`, `Continue review`, and `Run checks`. Considered but not
+touched: task lifecycle state, start endpoint, run scheduling, worker prompts,
+and owner-review authority. Required proof: every Work inspector action uses
+the typed status rather than copied route-level logic, and the live gate task
+renders `Run checks`.
+
+#### Schema Migration Decision
+
+No persisted schema change. This is a deterministic presentation mapping over
+existing task status.
+
+- [x] Prove the shared action mapping in focused UI coverage and in the
+  installed project. The Work tests cover ready, active, review, and gate
+  action labels (73 assertions across the focused suites). After `pnpm build`,
+  `pnpm dev:install`, and a fresh installed service (`stale:false`), selecting
+  the live `LOO-WPL1BT` Gates item at
+  `/projects/looma-knit/work?view=queue` renders the visible `Run checks`
+  action. At the 1280px desktop view, the route has no page-level horizontal
+  overflow (`scrollWidth === clientWidth`). The action was not executed during
+  this proof because it would start the task's real gate run.
+
+### Finding: Browsing must not turn the current release into a wall of backlog
+
+- [x] User job: after seeing the one current action, an owner can look ahead
+  without losing orientation. They see a small, readable next-up preview; they
+  only enter the full backlog when they deliberately choose backlog management.
+- Finding, 2026-08-30: the installed Looma + Knit `Browse work` action opens
+  fifteen current-release rows at once. Although each row technically clamps
+  its title, the page still turns brief-length task names into a dense backlog
+  dump. The top action menu also offers `Advance one task` alongside the
+  already-visible current-work action, leaving two apparently competing ways
+  to start work.
+- Follow-up finding, 2026-08-30: the same live paused decision is serialized
+  by the API as `Open Work`, rendered on Overview as `Resume work`, and
+  rendered in Work as `Resume this work item`. Those controls invoke the same
+  focused run, so this is a shared action-model disagreement, not helpful
+  context-specific copy.
+
+#### Contract Touch Decision
+
+Work id: `bounded-current-release-preview-2026-08-30`. Touched contracts:
+the Work route's owner-facing information architecture and project-shell
+secondary action visibility. The shared `actionModel` remains the sole owner
+of the primary current-work action; the queue route will present a bounded
+preview derived from that model and make the full inventory a deliberate
+separate choice. The shell must hide its generic one-step command while the
+shared primary action already owns attention. Considered but not touched:
+task ordering, lifecycle status, release membership, task persistence, and run
+scheduling. Required proof: an installed paused release shows one resume
+action, a bounded upcoming-work preview, and an explicit path to the full
+inventory without conflicting run commands.
+
+#### Schema Migration Decision
+
+No persisted schema change. This only changes how existing shared summary and
+task-list data are revealed to an owner.
+
+- [x] Bounded preview proof, 2026-08-30: the focused Work, shell, Overview,
+  and action-model suites pass. In the installed Looma + Knit project after a
+  fresh build, install, restart, and `stale:false`, Browse Work shows one
+  current `Resume work` action, three readable next-up rows, `12 more in this
+  milestone`, and one deliberate `Show all 15 work items` path instead of
+  dumping the current milestone by default. The shell menu no longer repeats
+  the current run command. The focused rendered route passes at 1114px and
+  900px without page-level horizontal overflow.
+
+### Finding: Task-detail API must reuse the project action model
+
+- [x] User job: when an owner opens the task named by the current project
+  action, task detail confirms the same state and presents the same executable
+  command, rather than inventing a new priority or label.
+- Finding, 2026-08-30: after the installed action-model repair,
+  `/api/project?projectId=looma-knit` reports the paused current task as
+  `Resume work`, but `/api/project/task/task-import-gh97p0` rebuilds it as
+  `Open task`. The task drawer therefore says `What needs your attention` and
+  offers an inert-looking task-opening action for the task already open.
+
+#### Contract Touch Decision
+
+Work id: `task-detail-action-model-reuse-2026-08-30`. Touched contract:
+the detail payload's project action projection. Task-detail responses must
+reuse the same project-level action snapshot/cached computation as Overview,
+Work, and Thread; task-local metadata may add record detail but may not rerank
+or replace the owner action. Considered but not touched: task status storage,
+drawer's full-record diagnostics, route identifiers, and run dispatch.
+Required proof: the live project API and task-detail API expose identical
+primary-action code, task id, label, and button label for the paused Looma +
+Knit task, and its drawer shows `Resume work`.
+
+#### Schema Migration Decision
+
+No persisted schema change. This repairs derivation and caching of existing
+project action data.
+
+- [x] Action-model reuse proof, 2026-08-30: task-detail API regressions cover
+  both ordinary primary-action equality and the escaped stale-cache case where
+  a stored `Open task` action sits beside a typed `paused_live_work` decision.
+  Both now resolve to the shared `Resume work` action. After `pnpm build`,
+  `pnpm dev:install`, `guildhall stop`, and `guildhall start`, the installed
+  service reported `stale:false`; its Looma + Knit project and direct task
+  responses had identical primary-action objects: `paused_live_work`,
+  `task-import-gh97p0`, `Work paused`, and `Resume work`. The rendered drawer
+  flow passes at 1114px, 900px, and 390px, keeps the shared action visible and
+  unclipped, and confirms no `Open task` button is rendered for the already
+  open focus task.
+
+### Finding: A resumed worker pass must make saved progress visible
+
+- [x] User job: after Guildhall runs the current task and stops at a bounded
+  turn limit, the owner can immediately tell whether useful work was saved,
+  what will happen on resume, and whether a decision is required. The owner
+  must not have to open task history, inspect a worktree, or infer that from
+  an unchanged paused status.
+- Finding, 2026-08-30: acting as the Looma + Knit owner, a one-tick resume of
+  `LOO-1CWL9M` preserved a scoped 38-line change to
+  `docs/component-system.md` after the worker turn budget ended. Its typed
+  runtime state records `workerRecovery.dirtyTimeoutRetries: 1`, but Overview,
+  Work, and task detail return the same generic `Work paused` / `Resume work`
+  card as before the run. The owner cannot see the meaningful progress or know
+  that Resume continues the saved task workspace.
+
+#### Contract Touch Decision
+
+Work id: `saved-partial-work-action-state-2026-08-30`. Touched contracts:
+the derived project start-readiness, decision, and action-model presentation
+packets gain one typed saved-progress state for a focused paused task. Its
+source is the existing runtime recovery counter written only after Guildhall
+has verified a dirty scoped worktree on a worker turn-limit recovery. The
+state changes explanation only: the selected task, action destination,
+operation, ranking, lifecycle, and run dispatch remain unchanged. Considered
+but not touched: worker prompt prose, task status storage, git-worktree
+inspection at read time, acceptance proof, and release membership. Required
+proof: project API, Work, Overview, Thread, and task detail agree on the same
+`Resume work` action with a concise saved-progress explanation; a clean paused
+task still has the ordinary resume explanation.
+
+#### Schema Migration Decision
+
+Persisted schema touched: optional derived saved-progress field in the current
+project summary/decision JSON. Scope: backward-compatible read-model
+extension. Existing summaries lack the field and read as no saved progress;
+the derived-summary version advances so the next installed startup refresh
+writes it from the already-persisted task runtime recovery counter. No
+migration is required before run, no task or
+evidence data is moved, and revert simply ignores the optional presentation
+field while retaining the source runtime record. Required fixtures: current
+paused work with and without a dirty-turn-limit recovery counter.
+
+- [x] Projection and API proof, 2026-08-30: a normalized task runtime with
+  `workerRecovery.dirtyTimeoutRetries: 1` derives
+  `progressState: partial_work_saved` only for its focused paused task. The
+  shared action model keeps `Resume work` as the command and explains that
+  progress is saved and Resume continues from the current workspace. Focused
+  summary, action-model, decision, task-detail API, and drawer regressions
+  pass; a project response and direct task response return the same action.
+- [x] Installed Looma + Knit proof, 2026-08-30: after `pnpm build`,
+  `pnpm dev:install`, `guildhall stop`, and `guildhall start`,
+  `/api/stale-server` reported `stale:false`. The startup summary refresh
+  automatically updated the paused focused task: project and direct task
+  responses return byte-identical `Resume work` actions, both with `Progress
+  is saved. Resume continues this task from its current workspace.` The
+  shared start-readiness and decision packet both report
+  `progressState: partial_work_saved`.
+
+### Finding: Every owner route must present the shared action explanation
+
+- [x] User job: after a bounded worker pass preserves scoped progress, an
+  owner sees the same concise explanation and executable next step whether
+  they arrive through Overview, Work, Thread, Release, or Inbox. No route may
+  turn saved progress into an unexplained generic continuation.
+- Finding, 2026-08-30: the live Looma + Knit project summary, Overview, and
+  Release correctly state `Progress is saved. Resume continues this task from
+  its current workspace.` Work and Thread expose only a bare `Resume work`
+  control, while Inbox says `Guildhall can continue from current work` with an
+  `Open current work` link. All four routes consume the same
+  `paused_live_work` action for `LOO-1CWL9M`; the omitted or rewritten detail
+  makes the owner reconstruct why the visible action matters.
+
+#### Contract Touch Decision
+
+Work id: `shared-owner-action-detail-2026-08-30`. Touched contract: the shared
+owner-action presentation packet. An action's typed `detail`, `buttonLabel`,
+and destination travel together through every owner surface; a route may omit
+the entire non-primary action, but may not substitute generic continuation
+copy or relabel the action locally. Considered but not touched: task status,
+start-readiness selection, action ranking, release state, inbox ranking,
+worker recovery persistence, and navigation routing. Required proof: the
+installed paused Looma + Knit state has one identical saved-progress
+explanation and `Resume work` action across Overview, Work, Thread, Release,
+and Inbox, with no page-level overflow. Apply/revert: presentation reuse only;
+the action-model remains the single authority.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This repairs consumption of the existing cached
+action-model field and leaves all task, decision, and runtime data unchanged.
+
+#### Validation
+
+- Focused rendered coverage: `pnpm exec vitest run
+  src/web/surfaces/project/__tests__/WorkTab.focused.svelte.test.ts
+  src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts --reporter=dot`
+  passed 148 tests. It covers the focused Work card, Thread decision card, and
+  Inbox empty state consuming the exact shared action detail and label.
+- Installed-app proof after `pnpm build`, `pnpm dev:install`, `guildhall stop`,
+  and `guildhall start`: `/api/stale-server` reports `stale:false`. Fresh
+  Looma + Knit visits to Overview, Work, Thread, Release, and Inbox all show
+  `Progress is saved. Resume continues this task from its current workspace.`
+  with a visible `Resume work` action. At 1280px, 1024px, and 390px every
+  route's page width equals its viewport width; the action remains visible
+  without scrolling through diagnostic content.
+
+### Finding: Repository follow-up must clear after an owner push
+
+- [x] User job: after the owner pushes a local commit, Overview stops claiming
+  repository follow-up within the normal refresh interval and instead exposes
+  the real next action. For t-minus-t, that is continuing the active release
+  intake rather than reviewing already-pushed work.
+- Finding, 2026-08-30: t-minus-t's `main` matched `origin/main` after its
+  migration commit was pushed, while the shared project action still said
+  `Release blocked by unpushed commits.` The release-readiness API correctly
+  reported zero Git-story blockers. The projection freshness watcher watched
+  metadata only, so neither a push nor a working-tree change invalidated the
+  cached action model.
+
+#### Contract Touch Decision
+
+Work id: `repository-freshness-after-push-2026-08-30`. Touched contracts: the
+project-projection freshness watcher gains a bounded repository observation
+token, and the shared summary/action projection is refreshed whenever that
+token changes. The token includes Git branch ahead/behind and porcelain
+working-tree state, so owner-visible repository follow-up cannot outlive its
+source facts. Considered but not touched: task lifecycle, release-scope
+calculation, Git-story policy, action ranking, persisted task data, and route
+copy. Required proof: an automated repository fixture changes its token after
+a push and after a dirty-tree edit; an installed t-minus-t project refreshes
+from false repository follow-up to its active intake action. Apply/revert:
+removing the watcher input restores metadata-only refresh behavior without
+changing stored project state.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This invalidates and rebuilds the existing cached
+projection from live repository facts; no project, task, release, or evidence
+record is migrated.
+
+#### Validation
+
+- Focused runtime coverage: `pnpm exec vitest run
+  src/runtime/__tests__/project-repository-signature.test.ts
+  src/runtime/__tests__/project-projection-freshness-watcher.test.ts
+  --reporter=dot` passed 8 tests. It proves branch ahead/behind changes after
+  push, porcelain changes after a dirty edit, and repository-backed projection
+  invalidation on both first observation and later changes.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`,
+  `/api/stale-server` returned `stale:false`. The project has `main` equal to
+  `origin/main`; its shared release-readiness reports `gitStory.state: clean`
+  with no blockers, and the shared action model no longer tells the owner to
+  perform repository follow-up.
+
+### Finding: Feature intake must be bounded and prose-independent
+
+- [x] User job: when an owner submits a concrete small feature request, the
+  intake either uses the supplied scope or asks one meaningful missing
+  question per topic. It never asks the same question again because a prior
+  answer happened to contain a pleasant adjective.
+- Finding, 2026-08-30: t-minus-t's concrete Open as TypeScript request was
+  asked to restate its goal, then its workflow answer triggered twenty
+  identical follow-up questions. `needsConcreteFollowUp` searched arbitrary
+  owner prose for words such as `clear`, `safe`, and `better`; each matching
+  answer re-entered the same `follow-up` state. This made human wording an
+  operational state-machine input and created an unbounded owner interview.
+
+#### Contract Touch Decision
+
+Work id: `bounded-prose-independent-feature-intake-2026-08-30`. Touched
+contracts: feature and release pressure-test intake state transitions, plus
+the compatibility reader for persisted `follow-up` intake records. A
+non-project topic now has one substantive owner answer and one explicit
+closeout; project check-ins retain their separate typed planner. Existing
+looping feature/release records read as their topic closeout so their evidence
+is preserved and the owner can continue without data surgery. Considered but
+not touched: model prompts, request routing, task materialization, project
+check-ins, task state, and release state. Required proof: arbitrary prose
+with formerly matched terms reaches closeout, and a persisted looping record
+repairs to that closeout. Apply/revert: the compatibility reader preserves
+all historical answers; no answer data is deleted.
+
+#### Schema Migration Decision
+
+Persisted schema touched: existing pressure-test intake records are read with
+a backward-compatible state normalization only. No file format changes and no
+mandatory migration are required before run. The compatibility reader converts
+the obsolete `follow-up` presentation into a closeout question on read; saving
+the next valid answer persists the normalized state. Rollback restores the
+old reader but leaves records and answers intact.
+
+#### Validation
+
+- Focused intake coverage: `pnpm exec vitest run
+  src/runtime/__tests__/pressure-test-intake.test.ts --reporter=dot` passed 21
+  tests. It includes the former prose-triggering answer, a persisted looping
+  feature intake, and the compatibility closeout repair.
+- Model-independence proof: `pnpm model:independence` passed 127 tests after
+  the prose matcher was removed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`,
+  `/api/stale-server` returned `stale:false`. The active Open as TypeScript
+  intake, which had recorded 20 repeated workflow answers, now returned one
+  `workflows-closeout` question. Completing the remaining bounded topics
+  materialized exactly one task: `task-003`.
+- Known unrelated suite blocker: `pnpm exec vitest run
+  src/runtime/__tests__/serve-intake.test.ts --reporter=dot` currently returns
+  `409` from the existing project migration gate for 19 API tests, including
+  the same release-intake test when run alone. The focused intake suite and
+  installed route above are green; this harness baseline needs a separate
+  migration-gate investigation.
+
+### Finding: New tasks must never inherit archived task identity
+
+- [x] User job: when a fresh t-minus-t request becomes a task, its identity
+  starts with no prior checkpoint, transcript, evidence, or worker history.
+- Finding, 2026-08-30: completing the Open as TypeScript intake allocated
+  `task-003` because the allocator looked only at the current queue. That id
+  was still reserved by an evacuated historical task, so the new task rendered
+  an unrelated May checkpoint and a converter implementation history.
+
+#### Contract Touch Decision
+
+Work id: `reserve-archived-task-identities-2026-08-30`. Touched contract: task
+id allocation reserves IDs from both current task definitions and archived
+project-state/evacuation records. Considered but not touched: task id format,
+current task mutation, historical evidence contents, archive retention, and
+pressure-test handoff semantics. Required proof: with `task-001` current and
+`task-002` archived, a new task receives `task-003`. Apply/revert: no stored
+records change; the allocator simply skips names that already belong to
+durable history.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This is allocation-time collision avoidance for
+existing historical files. The contaminated `task-003` materialization is
+kept as evidence and must be shelved rather than rewritten over its archived
+predecessor; fresh work receives a new identity.
+
+#### Validation
+
+- Focused runtime coverage: `pnpm exec vitest run
+  src/runtime/__tests__/intake.test.ts -t 'does not reuse a task id reserved
+  by archived project state|generates sequential ids when called multiple
+  times' --reporter=dot` passed 2 tests.
+- `pnpm typecheck` and `pnpm lint:contracts` passed.
+
+### Finding: A drafted brief must outrank background activity
+
+- [x] User job: after Guildhall drafts a task brief, an owner sees `Review
+  brief` as the one primary action on every owner-facing surface, even while a
+  background run remains live. The action opens that task's review directly;
+  an older pending question can never take over the current handoff.
+- Finding, 2026-08-30: while driving t-minus-t's Open as TypeScript release
+  slice, the authoritative runtime recorded a pending `brief_approval` for
+  `task-004`, and the release decision correctly said owner input was required.
+  The shared top action instead reported generic running work because the
+  runtime execution state outranked the approval. Thread also selected an old
+  pressure-test question as active, burying the new brief in historical turns.
+
+#### Contract Touch Decision
+
+Work id: `owner-handoff-outranks-runtime-liveness-2026-08-30`. Touched
+contracts: shared project decision execution overlay, its typed primary-action
+projection, and current Thread active-turn selection. A typed brief/spec owner
+handoff remains the decision authority while a supervisor is still live; run
+liveness remains available separately for run controls. Thread promotes a
+pending task review over leftover setup chrome only when no real owner question
+is active. Considered but not touched: task lifecycle, supervisor process
+state, release blocker derivation, route-local action ranking, and provider
+prose. Required proof: a concurrent running observation preserves the brief
+review action, and setup cannot hide a pending spec review. Apply/revert: this
+changes no project records and returns to the previous runtime overlay if
+reverted.
+
+#### Schema Migration Decision
+
+No Guildhall persisted-schema change. The t-minus-t duplicate pressure-test
+intake created during this audit was deliberately moved from the existing
+`active` state to the existing `paused` state as an owner action; its question
+and evidence remain intact for an explicit resume, and it is no longer shown
+as current work.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/project-decision-projection.test.ts
+  src/runtime/__tests__/project-action-model.test.ts --reporter=dot` passed
+  152 tests, including concurrent runner/brief-review and setup/spec-review
+  cases.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`, `/api/stale-server`
+  reported `stale:false`. The real project activity route reported one typed
+  `Review spec` action for `task-004`, and Thread reported only
+  `spec:task-004` as active; the paused duplicate intake no longer appeared.
+
+### Finding: A running task must own Thread, not setup
+
+- [x] User job: after the owner starts the one visible ready task, Overview,
+  Work, top controls, and Thread all identify that same task as in progress;
+  setup cannot look current while the project is executing a task.
+- Finding, 2026-08-30: t-minus-t accepted the owner-approved `task-004` start
+  and the shared action model converged on `Open supported documents as
+  TypeScript`, with a real Pause control. Thread still marked `setup:direction`
+  active while the shared decision recorded `task-004` as running. This is a
+  cross-surface state disagreement, not a Thread copy problem.
+
+#### Contract Touch Decision
+
+Work id: `thread-uses-typed-supervisor-focus-2026-08-30`. Touched contracts:
+the current-Thread refresh input and active-turn selection. The projection now
+receives the typed `activeTaskId` from the same supervisor run used by the
+shared decision packet and promotes only that matching in-flight turn. A real
+owner decision still takes precedence; setup chrome does not. Considered but
+not touched: task status mutation, event prose parsing, task ranking,
+supervisor lifecycle, and route-local Thread selection. Required proof: a
+real selected task start produces matching Work and Thread focus, then Pause
+returns one resume action. Apply/revert: no project records are rewritten.
+
+#### Schema Migration Decision
+
+No persisted-schema change. `activeTaskId` is a transient typed supervisor
+fact supplied only while building the current Thread projection.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/project-decision-projection.test.ts
+  src/runtime/__tests__/project-action-model.test.ts --reporter=dot` passed
+  153 tests, including exact supervisor-focus Thread selection.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed.
+- Installed t-minus-t proof, 2026-08-30: `task-004` was approved as the
+  delegated owner, then started via its task endpoint. The shared decision,
+  primary action, and Thread all focused `task-004` / `inflight:task-004`.
+  Pausing the project returned `Work paused` and one `Resume work` action.
+- Current unrelated-suite note: `pnpm exec vitest run
+  src/runtime/__tests__/current-thread-refresh.test.ts --reporter=verbose`
+  currently has three freshness/rich-detail failures. This change's direct
+  Thread projection coverage is green; the refresh-suite failures need a
+  separate investigation before claiming the broader suite green.
+
+### Finding: New work must start, not resume
+
+- [x] User job: a task that has never been paused is described as ready to
+  start, with a `Start` control; only interrupted work is described as ready
+  to resume.
+- Finding, 2026-08-30: after approving t-minus-t's first task, Guildhall
+  showed `Work ready to resume` and `Resume` before any run had occurred.
+  The action button said `Start work`, so the same state contradicted itself.
+
+#### Contract Touch Decision
+
+Work id: `distinguish-start-from-resume-2026-08-30`. Touched contract: shared
+project action-model presentation for `ready_work`. `ready_work` now produces
+`Ready to start` and `Start`; `paused_live_work` retains `Work paused` and
+`Resume`. Considered but not touched: run-state persistence, pause endpoint,
+task status, and route-level labels. Required proof: the shared action model
+renders each state distinctly. Apply/revert: presentation-only, with no
+stored data change.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+### Finding: Release verification must read and write one project-scoped design-system state
+
+- [x] User job: after Guildhall writes design-system guidance, release readiness
+  immediately evaluates that same revision and reports every current release
+  blocker. The writer and readiness reader must not silently use different
+  project-state roots, and a persisted projection must not hide a newly
+  computed blocker.
+- Verification finding, 2026-08-30: the release gate exposed two divergent
+  contracts. The design-system tool wrote through the canonical project system
+  state root while the runtime store joined paths directly under the supplied
+  memory directory; readiness also selected either projected or live blockers
+  instead of combining them. This made a successful write invisible to the
+  readiness reader and could undercount release blockers.
+
+#### Contract Touch Decision
+
+Work id: `pr20-release-readiness-reconciliation-2026-08-30`. Touched
+contracts: the project-scoped design-system persistence location and the
+release-readiness blocker aggregation rule. Both design-system readers and
+writers now resolve `.guildhall`, `memory`, and `project-state` inputs through
+one shared project-system-state helper; standalone compatibility directories
+retain their direct-path behavior. Readiness uses saved rows to bound included
+release membership, re-derives blocker existence from current tasks, overlays
+live detail by blocker id, and unions owner-blocking task identities. Considered
+but not touched: the persisted design-system JSON
+shape, release blocker schema, API response shape, task state schema, and
+projection versioning. Required proof: a successful design-system POST is
+immediately visible to readiness, projected and live blockers coexist, the
+release suite passes, and typecheck/build remain green. Apply/revert: the path
+helper and blocker merge are self-contained and can be reverted together with
+their regression expectations.
+
+#### Schema Migration Decision
+
+No persisted-schema change and no migration is required. Existing canonical
+project-system-state files keep the same location and shape. The fallback for
+standalone directories preserves tests and external callers that intentionally
+provide a non-project memory root; no stored record is rewritten.
+
+#### Validation
+
+- `pnpm test:release`: 14 files, 324 tests passed.
+- `pnpm typecheck` and `pnpm build` passed.
+
+### Finding: Landed work without proof must advance to verification, not retry implementation
+
+- [ ] User job: when an owner or delegated owner commits and pushes a task's
+  finished change directly, Guildhall detects that the task worktree HEAD is
+  already contained in the project branch. The owner then sees one truthful
+  next step: verify/review the landed change. Guildhall must never call the
+  clean, landed worktree "saved work" or offer to rerun implementation.
+- Live finding, 2026-08-30: t-minus-t `task-005` was committed as
+  `c42a34d` and pushed directly to `main`. Live Git Story returned `merged`,
+  `mergeRecordResult: reconciled`, and "No repository follow-up needed." The
+  shared project decision nevertheless returned `paused_live_work` with
+  `partial_work_saved`, because a stale worker-timeout marker outlived the
+  now-clean worktree. Overview, Work, and Thread therefore offered `Resume
+  work`, which would rerun a worker despite a finished, shipped documentation
+  change. The task's required command and review evidence had not yet been
+  recorded, so treating it as done would be equally wrong.
+
+#### Contract Touch Decision
+
+Work id: `landed-work-verification-handoff-2026-08-30`. Touched contracts:
+the reconciler from live Git containment to task lifecycle, worker-recovery
+projection, and shared owner action. Considered but not touched: task proof
+schema, Git Story snapshot shape, branch/PR policy, completion evidence,
+release persistence, and route-local action ranking. Required proof: a clean
+task worktree whose HEAD is an ancestor of its configured base branch advances
+from active implementation to `review`; every owner surface offers review or
+verification rather than `Resume work`; task completion still requires its
+typed command and review evidence. Apply/revert: reconciliation is monotonic
+from landed implementation to existing review state and does not fabricate
+proof or mutate Git history.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The existing task workspace, branch, lifecycle,
+Git inspection, and worker-recovery records contain the required facts.
+
+#### Validation
+
+- Focused orchestrator regression proves a clean task-worktree commit already
+  contained in `main` advances out of implementation with a `merged` record,
+  never dispatches the worker, and preserves verification before completion.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install`
+  passed. The installed t-minus-t task remains intentionally uncompleted until
+  review and command evidence are recorded; it has not been restarted merely
+  to spend another provider turn.
+
+### Finding: Thread puts the current owner handoff before historical turns
+
+- [x] User job: when a project summary directs the owner to one named task,
+  opening Thread immediately shows that task, its current phase, and the same
+  available action. Completed brief approvals and old requests remain history;
+  they cannot occupy the first screen before the active handoff.
+- Live finding, 2026-08-30: Narrative Harness's shared project decision,
+  action model, and task `task-091` agreed on `Resume review` for "Present
+  draft review evaluation and provenance." The persisted Thread projection
+  does contain the correct `inflight:task-091` turn with `status: active` and
+  `summary: Review is next.`, but it is the twelfth chronological item, after
+  July brief approvals and completed requests. The current endpoint does not
+  expose an `activeDockTurn`, so the UI must prove that it anchors this active
+  turn above collapsed history rather than making an owner scroll through old
+  activity to find the one live decision. Its older skipped Git landing record
+  contains a stale index-lock failure; that diagnostic must not displace the
+  current review decision.
+
+#### Contract Touch Decision
+
+Work id: `narrative-thread-current-owner-handoff-2026-08-30`. No code change
+in this unit. The data boundary selects `task-091` correctly; the remaining
+suspected boundary is Thread layout/docking versus historical turn ordering.
+Considered but not touched: task lifecycle, review/gate proof, Git Story
+persistence, release readiness, and route-local action ranking. Required
+proof for follow-up: at desktop and narrow desktop widths, Thread shows the
+active `task-091` handoff and its `Resume review` control in the first viewport
+while historical brief approvals remain collapsed behind an explicit history
+choice. Apply/revert: diagnostic finding only.
+
+#### Schema Migration Decision
+
+No persisted-schema change identified. The concern is a presentation ordering
+and docking failure, not missing task or evidence data.
+
+#### Validation
+
+- Read-only installed-app replay at
+  `/projects/narrative-harness/thread` showed `No response needed`, `Review
+  ready to continue`, task `task-091`, its Stage 2 progress, and the single
+  visible `Resume review` control in the first viewport. The chronological
+  Thread payload retains historical turns for its explicit history surface,
+  but the rendered owner route anchors the active handoff correctly.
+
+### Finding: Thread must focus the same paused task as the shared action model
+
+- [x] User job: after pausing focused work, Thread opens on that paused task
+  and its single `Resume work` decision. It must not select an unrelated setup
+  card while Overview and Work correctly identify the paused task.
+- Live finding, 2026-08-30: after pausing t-minus-t `task-005`, Overview and
+  Work exposed `Work paused` and `Resume work`, while `/api/project/thread`
+  returned `activeTurnId: setup:direction` even though
+  `inflight:task-005` was present. The saved decision encoded the pause as
+  `state: runnable, code: paused_live_work`; Thread only recognized a
+  nonexistent `state: paused`.
+
+#### Contract Touch Decision
+
+Work id: `paused-thread-focus-state-agreement-2026-08-30`. Touched contract:
+Thread's focused-task read of the saved shared decision. `paused_live_work` is
+the authoritative typed code for resumable paused work across owner surfaces.
+Considered but not touched: task state, pause persistence, action-model copy,
+Thread turn schema, and route-local selection. Required proof: a persisted
+resumable decision yields the paused task id and a live Thread projection
+selects its inflight turn. Apply/revert: projection interpretation only; no
+task state changes.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- `serve-supervisor` and `thread` regressions passed 92/92, plus
+  `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm build`.
+- Installed-app t-minus-t proof after restart: `/api/stale-server` reported
+  `stale:false`; Overview/Work's primary action and Thread's `activeTurnId`
+  all named `task-005`. Thread selected `inflight:task-005` with “Work is
+  paused. Resume work when you are ready.” rather than `setup:direction`.
+
+### Live follow-up: focused Work transition proof
+
+- [x] `focused-work-empty-browse-2026-08-30`: focused Work now hides `Browse
+  work` when there is no other current work, while the existing focused-plus-one
+  regression retains it for a real inventory choice. Installed t-minus-t proof
+  at 390px and 1440px showed one `Resume work` action and no clipped content.
+- [x] `focused-work-start-acknowledgement-2026-08-30`: the focused resume
+  action now immediately becomes `Starting work`, hides the stale resume
+  control, and changes to `Work is underway` only after a shared running
+  snapshot confirms it. The focused Work regression covers acknowledged,
+  confirmed-running, and later-stopped transitions. `pnpm typecheck`,
+  `pnpm lint:contracts`, and `pnpm model:independence` pass. Installed
+  t-minus-t proof showed `Starting work` in the same click turn, then
+  `Work is underway` after the shared run snapshot; the focused card had no
+  horizontal overflow at 1024px or 390px.
+
+### Finding: Pause must reach a terminal owner state when its worker is gone
+
+- [x] User job: when the owner presses `Pause`, Guildhall reaches either a
+  usable paused handoff or an explicit failure. It must not leave `Pausing…`
+  disabled indefinitely after its coordinator and queue processes have exited.
+- Live finding, 2026-08-30: t-minus-t accepted the visible Pause action and
+  projected `stopping`, but after more than ten seconds both recorded runtime
+  PIDs were absent while Overview still rendered disabled `Pausing…` and the
+  shared packet stayed `stopping`. The owner could neither resume nor learn
+  what recovery was required.
+
+#### Contract Touch Decision
+
+Work id: `pause-terminal-owner-state-2026-08-30`. Touched contract: the shared
+runtime supervisor's reconciliation of a stop request that has not settled.
+Considered but not touched: the header's optimistic pause marker, run action
+model, task lifecycle, and persisted project data. Required proof: an
+unresponsive stopped run settles to a resumable shared state without another
+owner action, while a normally stopping run remains `stopping` until it exits.
+Proof provided: the supervisor regression covers forced reconciliation and the
+installed t-minus-t replay reaches its paused handoff. Apply/revert: an
+in-memory reconciliation timer is scheduled only after a graceful stop exceeds
+its initial wait; removing it restores the previous indefinite stopping state.
+
+#### Schema Migration Decision
+
+No persisted-schema change is expected.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/serve-supervisor.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.focused.svelte.test.ts
+  --reporter=dot` passes 28 tests. The supervisor regression proves an
+  unresponsive paused run is reconciled after the grace window without another
+  owner action.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` returned
+  `stale:false` with zero startup errors. Resume rendered immediate `Starting
+  work`, confirmed `Work is underway`, and a later visible Pause returned to
+  `Work paused` with one `Resume work` action in two seconds.
+
+### Finding: Resume must visibly acknowledge a successful start immediately
+
+- [x] User job: after the owner clicks `Resume work`, the focused Work card
+  immediately acknowledges that Guildhall has accepted the command. It must not
+  continue to look paused until a later poll happens to arrive.
+- Live finding, 2026-08-30: t-minus-t's start endpoint switched its shared
+  packet to `running` within the first second, but the clicked Work view still
+  rendered the old paused card at 900ms. A fresh view caught up after the
+  scheduled refresh. The command worked, but the owner had no immediate visual
+  confirmation.
+
+#### Contract Touch Decision
+
+Work id: `focused-work-start-acknowledgement-2026-08-30`. Touched contract:
+the local focused-Work transition state after a successful typed start command.
+The shared run/decision projection remains the authority for durable running
+state; the local marker only communicates accepted command progress until that
+snapshot confirms or rejects it. Required proof: a successful start hides the
+stale paused action immediately, a later confirmed run keeps the working state,
+and a stopped snapshot observed after running clears the local marker. Apply/
+revert: client-only transient state.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- `InboxTab.svelte.test.ts` passes 11 tests. Its no-separate-decisions case
+  proves the panel says `No separate Inbox decisions are waiting`, names the
+  current project action, and preserves its direct route; the truly actionless
+  case retains `Nothing needs your decision`.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false` with zero errors. At 1114px, Needs you read `No separate Inbox
+  decisions are waiting` and then showed the actual `Worker needs a fresh
+  pass` / `Retry worker` action without horizontal overflow.
+
+### Finding: Automatic repair must not leave Thread stale
+
+- [x] User job: after Guildhall safely repairs a project during a normal read,
+  the owner sees one current Thread and one current action model, not a stale
+  transcript left behind by the repair.
+- Finding, 2026-08-30: the request-scoped automatic migration path advanced
+  the project revision but did not rebuild the current Thread projection. The
+  same request then rendered a stale row. A bounded Thread hydration also
+  omitted the typed structured spec needed to display a valid spec review.
+
+#### Contract Touch Decision
+
+Work id: `automatic-repair-keeps-thread-current-2026-08-30`. Touched
+contracts: automatic migration request handling, project-projection refresh
+ordering, and the bounded Thread task read shape. A repair refreshes an
+already-persisted Thread only after every project-state writer has settled;
+an ordinary read with no saved Thread remains missing and never manufactures a
+transcript. Thread carries the typed structured-spec and review-gate fields
+needed by the typed spec-review boundary. Considered but not touched: task
+status, migration semantics, route-local freshness rules, model prose, and
+full task-definition reads. Required proof: a safe repair makes an existing
+Thread current, a missing row remains missing, and a valid rich spec review
+appears from the bounded projection. Apply/revert: no migration data changes;
+revert restores the previous refresh timing and read shape.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repaired migration path already writes the
+authoritative state; this change only repopulates derived projections at the
+resulting revision.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/current-thread-refresh.test.ts
+  --reporter=dot` covers ordinary missing Thread, automatic-repair freshness,
+  typed rich spec review, and a non-queue repair revision.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed. `pnpm build` also passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false`; `/api/project/thread` reported `current` freshness.
+
+### Finding: Paused work must remain Thread's focus after restart
+
+- [x] User job: when work is paused, the same task named by `Resume work`
+  remains current in Thread after a server restart; setup cannot reclaim the
+  active position.
+- Finding, 2026-08-30: the installed t-minus-t service correctly named
+  `task-004` as paused work in the shared action model, but Thread fell back to
+  `setup:direction` because the transient supervisor identity disappeared.
+
+#### Contract Touch Decision
+
+Work id: `paused-work-thread-focus-after-restart-2026-08-30`. Touched
+contracts: the bounded current-Thread refresh input, Thread focus selection,
+and the projection scheduler's read of the shared decision packet. A paused
+execution's typed `focusTaskId` becomes the Thread focus only when the shared
+decision state is `paused`; Thread presents that turn as paused rather than
+live work. Considered but not touched: supervisor runtime state, task status,
+action ranking, release readiness, and setup wizard state. Required proof: a
+server restart leaves the same task active in the action model and Thread.
+Apply/revert: no persisted schema or task data changes; reversion restores the
+old setup fallback.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The persisted decision packet already owns the
+paused focus; this repair carries that existing typed fact into Thread.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/thread.test.ts
+  src/runtime/__tests__/current-thread-refresh.test.ts --reporter=dot` passed
+  85 tests, including the paused-after-restart Thread focus.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, the shared action model named
+  `task-004` / `Resume work`; Thread was `current` with active
+  `inflight:task-004` and `Work is paused. Resume work when you are ready.`
+
+### Finding: An owner pause must explain saved partial work
+
+- [ ] User job: when an owner pauses a real in-flight task after it has
+  changed its isolated worktree, every owner route says that partial work is
+  saved and that Resume continues the same workspace. A deliberate pause must
+  never discard that fact merely because the worker did not time out.
+- Finding, 2026-08-30: acting as the t-minus-t owner, `task-004` made a
+  partial extension implementation and test setup in its isolated worktree.
+  The owner paused the run after the worker repeatedly reset its own context.
+  Guildhall correctly preserved the task identity and offered `Resume work`,
+  but omitted the existing saved-progress explanation because it only derives
+  that state from `dirtyTimeoutRetries`. The same durable dirty worktree is
+  less visible after an owner-directed pause than after an automatic timeout.
+
+#### Contract Touch Decision
+
+Work id: `owner-pause-saved-work-progress-2026-08-30`. Touched contracts: the
+normalized task runtime recovery record, paused-work summary projection, and
+shared owner action model. A typed timestamp records that Guildhall verified
+saved work in the focused isolated worktree while honoring an owner pause.
+Paused-work presentation treats that record and dirty-timeout recovery as the
+same `partial_work_saved` fact. Considered but not touched: task status,
+worker prompt text, task definitions, task identity, release membership,
+worktree content, and action ranking. Required proof: a stopped t-minus-t
+run with saved work yields the same `Resume work` command and concise
+saved-progress explanation on project, task, Work, and Thread projections;
+an ordinary clean pause remains an ordinary resume. Apply/revert: the
+optional runtime fact is ignored on revert; no task worktree content is
+changed.
+
+#### Schema Migration Decision
+
+Persisted schema touched: optional `workerRecovery.ownerPauseWithSavedWorkAt`
+timestamp in the normalized task runtime overlay. Scope: backward-compatible
+runtime presentation fact. Existing overlays simply have no owner-pause saved
+work marker and retain their current behavior. No mandatory migration is
+required before run; the marker is written only after Guildhall verifies the
+focused isolated worktree is dirty during a pause. Compatibility reader:
+missing means false. Fixtures: a clean paused task, a dirty timeout recovery,
+and an owner-paused dirty worktree. Rollback ignores the optional marker and
+does not remove or alter task worktree changes.
+
+#### Validation
+
+- Focused runtime coverage: `pnpm exec vitest run
+  src/runtime/__tests__/owner-pause-saved-work.test.ts
+  src/runtime/__tests__/project-summary-projection.test.ts --reporter=dot`
+  passed 57 tests. A real temporary Git worktree with an uncommitted file
+  records `ownerPauseWithSavedWorkAt`; a clean paused worktree records
+  nothing; both saved-work sources produce the one shared `Resume work`
+  explanation.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed. The latter's temporary non-repository fixture emits known Git
+  stderr while all 127 assertions pass.
+- Installed t-minus-t follow-up remains intentionally pending: the worker
+  reset its own partial implementation before this repaired pause path could
+  observe it, so the current honest t-minus-t state is a clean paused task.
+  Do not manufacture a dirty project edit merely to satisfy this proof; repeat
+  this exact check on the next real saved-work pause.
+
+### Finding: A worker that loses its edits cannot look like ordinary progress
+
+- [x] User job: when an active task's isolated worktree goes from changed back
+  to clean without a review, proof, or completion transition, the owner sees
+  a truthful recovery state rather than a generic working or resume message.
+- Finding, 2026-08-30: during the real t-minus-t `task-004` run, the worker
+  made the command/docs/test changes, then reset its worktree and restarted
+  the same work. The eventual clean paused state is truthful, but it erases
+  the fact that Guildhall had observed unsuccessful implementation churn. The
+  worker's natural-language explanation is evidence only; the repair must use
+  typed worktree observations and task transitions, not model prose.
+- Repeat, 2026-08-30: after the owner explicitly chose the new `Retry worker`
+  action, the same t-minus-t worker again first changed tracked extension
+  command, package, and README files, then erased those edits. It left only an
+  untracked VS Code test suite whose command assertion no longer matched the
+  source, plus a deleted `pnpm-lock.yaml`. There was no review, proof, or
+  completion transition. The owner paused the run; the stop-time dirty check
+  then misleadingly reported `Progress is saved` because it cannot yet
+  distinguish invalid residue from a durable implementation. The owner cleared
+  those invalid leftovers rather than preserving a broken task workspace.
+- Next repair: persist a bounded typed worktree-observation sequence at worker
+  tool/turn boundaries, detect changed-to-clean loss without a terminal or
+  review transition, and route that fact through the existing shared recovery
+  action model. The owner should get one executable recovery action, not an
+  activity transcript or a new diagnostic surface.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-worker-edit-loss-recovery-2026-08-30`. Touched contracts:
+the normalized task runtime recovery record, worker stream-event handling,
+paused-work summary projection, and shared owner action model. The runtime
+records only the latest non-ignored worktree observation: `dirty` with a
+bounded file sample, or `lost` when a later worker tool boundary finds that
+same task worktree clean before review, proof, or completion. The action model
+maps `lost` to one focused `Retry worker` command. Considered but not touched:
+provider prose, task definitions, task status, checkpoints, release scope,
+worktree content, and page-local action ranking. Required proof: a worker
+stream that observes dirty then clean records `lost`; a paused focus surfaces
+one retry action; a stale saved-work marker cannot override it. Apply/revert:
+the observation is presentation/recovery state only and does not mutate the
+worktree or alter task lifecycle records.
+
+#### Schema Migration Decision
+
+Persisted schema touched: optional `workerRecovery.worktreeObservation` in the
+normalized task runtime overlay, with `state` (`dirty` or `lost`), timestamp,
+and at most twelve observed paths. Scope: backward-compatible runtime recovery
+state. Existing records lack the field and remain ordinary pauses. No mandatory
+migration is required before run; the compatibility reader treats absence as
+no observation. Fixtures cover a dirty-to-clean worker stream and a legacy
+runtime payload. Rollback ignores the optional fact; it neither restores nor
+removes any task-worktree content.
+
+#### Validation
+
+- Stream-boundary regression: a worker's typed `edit-file` completion observed
+  an isolated worktree with two changed files, then its next typed tool
+  completion observed it clean. The normalized runtime record retained only
+  `worktreeObservation: { state: lost, files: [...] }`; no provider text was
+  read to make that decision.
+- Projection/action/UI proof: 118 focused tests passed across the summary,
+  shared action model, and focused Work view. The recovery heading is
+  `Worker discarded its edits`, the only command is `Retry worker`, and a
+  stale owner-pause saved-work marker cannot override the loss state.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` passed. The model-independence fixtures emit their known
+  non-repository Git stderr while all 127 assertions pass.
+- Installed t-minus-t proof, 2026-08-30: `pnpm dev:install`, `guildhall stop`,
+  and `guildhall start` completed; `/api/stale-server` reported `stale:false`,
+  two projects refreshed, and zero startup errors. The real current task
+  remains on its already-persisted no-progress retry state. Guildhall did not
+  invent another destructive worker attempt merely to manufacture a lost-edit
+  display case.
+
+### Finding: Starting named work must not erase its identity
+
+- [x] User job: after the owner starts one visible task, every project surface
+  keeps that task's key and title visible with the one available running
+  control. The owner must never see anonymous project-level activity for work
+  they selected by name.
+- Live finding, 2026-08-30: acting as the owner, started Narrative Harness
+  `task-091` (`Present draft review evaluation and provenance`) as one-task
+  work. Thread identified `inflight:task-091`, but the compact project response
+  reduced the same run to `running` with no focused task and the generic
+  `Guildhall is running the selected work.` message. This is a shared runtime
+  projection disagreement, not a route-local presentation problem. The
+  reviewer-only first pass later failed honestly because its aggregate approval
+  omitted required structured target ids; that review-contract failure is
+  separate from the lost live identity.
+
+#### Contract Touch Decision
+
+Work id: `named-start-preserves-live-focus-2026-08-30`. Touched contracts: the
+supervisor start packet, its typed execution projection, and the shared project
+decision/action projection. A named start seeds the already-existing typed
+`activeTaskId` and `activeTaskTitle` before worker lifecycle events arrive;
+every response derives its running focus from that same execution fact.
+Considered but not touched: task status, review-contract validation, provider
+prose, route-local action ranking, release scope, and task definitions.
+Required proof: immediately after a named start, the compact project response,
+shared action model, activity, and Thread agree on the task id/title and offer
+only the running control; stopping or terminal lifecycle events clear that
+focus. Apply/revert: no task mutation occurs; reverting simply restores the
+old anonymous pre-lifecycle running window.
+
+#### Schema Migration Decision
+
+No persisted-schema change. `execution.activeTaskId` and
+`execution.activeTaskTitle` are existing optional fields in the derived summary
+projection. This repair supplies those fields earlier from the typed named-start
+input rather than adding a record shape or migration.
+
+#### Validation
+
+- `src/runtime/__tests__/serve-supervisor.test.ts` verifies a named start
+  persists its focus before the first worker lifecycle event and clears that
+  transient focus when the run stops. It passed 13 tests.
+- `src/runtime/__tests__/serve-task-endpoints.test.ts -t 'lets a specifically
+  requested shaping task start inside the selected scope'` verifies the named
+  task endpoint forwards the same typed id/title to the supervisor. It passed.
+  The full endpoint file has a pre-existing stale-decision fixture failure;
+  this focused regression and the supervisor suite are green.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm build`, and the focused shared
+  decision/action suites passed.
+- Installed Narrative Harness proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false` with zero startup errors. The owner started `task-091` and the
+  immediate compact project response, activity response, shared action model,
+  and Thread all named `task-091` / `Present draft review evaluation and
+  provenance`; the one running control was `Pause`. The owner then stopped the
+  probe. Its existing reviewer-contract failure remained truthful and the
+  Narrative Harness checkout stayed clean.
+
+### Finding: Activity must not rewrite the shared recovery command
+
+- [x] User job: when a project is in a typed recovery state, every owner
+  surface presents the same next command and reason. Activity may summarize
+  that command, but it cannot turn a retry into a generic navigation link.
+- Live finding, 2026-08-30: t-minus-t's canonical project response correctly
+  named `task-004` and offered `Retry worker` after two discarded worker passes.
+  Its Activity response pointed to the same task but independently rebuilt the
+  top action as `Open Work`. The task identity happened to agree, while the
+  executable owner instruction did not.
+
+#### Contract Touch Decision
+
+Work id: `activity-reuses-shared-primary-action-2026-08-30`. Touched contracts:
+the Activity response's top-action alias and the shared project action model.
+Activity exposes the shared primary action verbatim and uses no decision-to-UI
+adapter of its own. Considered but not touched: recovery state, decision
+ranking, task status, action copy, release readiness, and page components.
+Required proof: a worker-recovery response has identical Activity top action,
+summary action, and shared action-model primary action; ready, owner-review,
+and live-work actions retain their existing shared contract. Apply/revert: no
+persisted state changes; reverting restores the duplicate adapter.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This removes a duplicate presentation derivation.
+
+#### Validation
+
+- `src/runtime/__tests__/serve-task-endpoints.test.ts -t 'keeps a worker retry
+  verbatim across the Activity aliases'` passed. It proves Activity top action,
+  current action, and summary action label preserve `Retry worker` and
+  `start_focused` from the shared action model.
+- Focused project summary/action suites passed 106 tests. `pnpm typecheck`,
+  `pnpm lint:contracts`, and `pnpm build` passed. The larger endpoint file has
+  a pre-existing flaky stale-summary fixture that can refresh to `current`
+  before its stale assertion; the focused worker-recovery regression passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false` with zero startup errors. The real `task-004` recovery state
+  exposed identical `Retry worker` primary, Activity top/current, and summary
+  actions, all with the same task id and `start_focused` operation.
+
+### Finding: Overview must keep the owner command visible and its summary bounded
+
+- [x] User job: on the first Overview card, an owner can read the current
+  milestone, identify the task, and use its one executable command without
+  hunting through Work or losing the end of a long title. The card must stay
+  inside its frame at desktop, split-screen, and mobile widths.
+- Live finding, 2026-08-29: the installed project Overview showed `What needs
+  your attention` and a long review-task title running past the edge of its
+  card, with no visible command. The shared action record did contain a
+  review operation, so an owner-facing action disappeared between the summary
+  and its presentation. This is a release-blocking flow break: a prompt to act
+  without the action is not a usable handoff.
+
+#### Contract Touch Decision
+
+Work id: `overview-visible-bounded-owner-command-2026-08-30`. Candidate
+touched contract: Overview presentation of the existing shared primary-action
+model. The action's identity, ranking, wording, and operation remain owned by
+the shared runtime projection; this work may only guarantee that the existing
+command is rendered and that unbounded display prose cannot displace it.
+Considered but not touched: action-model ranking, migration behavior, task and
+release schemas, task titles, and route-local action derivation. Required
+proof: every non-shipped Overview state exposes the shared primary button, a
+long task title stays single-line ellipsized, detail stays deliberately bounded,
+and the action remains within the card at constrained widths. Apply/revert:
+presentation-only; reverting restores the overflow risk without modifying
+project data.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This is a bounded rendering repair over existing
+typed action-model fields.
+
+#### Validation
+
+- `ProjectOverviewTab.svelte.test.ts` passes 9 tests. It asserts that a long
+  review target retains its full hover title, uses the bounded task/detail
+  presentation, and still displays the shared `Review next spec` command.
+- The rendered browser regression passes at 1114px, 900px, and 390px. The
+  Overview keeps the only `Review project update` command visible inside the
+  decision card and reports no page-level horizontal overflow at any width.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`, `/api/stale-server`
+  reported `stale:false` with two refreshed projects and zero startup errors.
+  The real Overview rendered its shared `Retry worker` command inside the
+  decision card at 1114px, 900px, and 390px; the title computed to ellipsis,
+  detail to two lines, and no viewport had horizontal overflow.
+
+### Finding: Thread must not turn deferred work into current-scope progress
+
+- [ ] User job: when the owner follows the same current-work handoff through
+  Overview, Work, Thread, Release, or task detail, every route reports the
+  same current-scope denominator. Deferred work can be disclosed as later,
+  but it cannot silently inflate current progress.
+- Live finding, 2026-08-30: t-minus-t's Overview, Work, and Release correctly
+  reported `0 of 1 complete` for `TMI-004`, while Thread displayed `Current
+  task scope · 0 of 4 complete`. The extra three records were explicitly
+  deferred. Thread consumed the orientation spine's project-wide progress
+  total instead of the canonical release-readiness scope counts.
+
+#### Contract Touch Decision
+
+Work id: `thread-reuses-current-scope-counts-2026-08-30`. Touched contracts:
+Thread's presentation of the existing shared release-readiness count
+projection. Thread must prefer `releaseReadiness.releaseCounts` for its owner
+handoff progress and may fall back to orientation progress only when that
+projection is unavailable. Considered but not touched: task state, deferred
+membership, orientation-spine progress semantics, action ranking, release
+readiness construction, and persisted project data. Required proof: a scope
+with one included item and three deferred items displays `0 of 1 complete` in
+Thread, while legacy Thread data without release readiness retains its
+orientation fallback. Apply/revert: display reuse only; reverting restores the
+misleading Thread-only denominator.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This consumes an existing shared summary field.
+
+#### Validation
+
+- `ThreadTab.svelte.test.ts` passes 128 tests. The new deferred-scope case
+  supplies an orientation total of four beside shared release counts of one
+  and proves Thread renders only `Current task scope · 0 of 1 complete`.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false` with zero startup errors. Thread rendered the canonical
+  `0 of 1 complete` at 1114px, 900px, and 390px, with no page-level horizontal
+  overflow. It no longer presents the three later tasks as current work.
+
+### Finding: An Inbox import reminder must end in an executable decision
+
+- [ ] User job: when Inbox asks an owner to review or dismiss repository
+  intake, its destination either presents actual findings to decide or gives a
+  direct, visible way to clear the reminder. An empty scan cannot strand the
+  owner on a page that contradicts the Inbox.
+- Live finding, 2026-08-30: t-minus-t Inbox kept a months-old `Existing repo
+  detected` decision open. Its `Review import` route said `No importable
+  planning material was found yet` and exposed only `Re-read project notes`,
+  despite the Inbox promising the option to dismiss. The direct dismiss endpoint
+  existed but the empty-state UI failed to render it.
+
+#### Contract Touch Decision
+
+Work id: `empty-import-reminder-resolution-2026-08-30`. Touched contracts:
+the Workspace Import empty-state presentation and the Inbox's typed effective
+workspace-import task status. Inbox must prefer the persisted task authority
+over an older compact queue copy when deciding whether the reminder is open.
+Considered but not touched: importer detection, Inbox ranking, workspace-goals
+persistence, task import, and project task state. Required proof: an empty
+import result visibly offers both a dismissal and a deliberate re-read;
+dismissal calls the existing endpoint and the t-minus-t Inbox no longer retains
+the stale reminder. Apply/revert: no stored-data change; reverting restores an
+inaccessible operation and conflicting reminder state.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The existing dismissal marker and compatibility
+reader remain the authority.
+
+#### Validation
+
+- `WorkspaceImportTab.svelte.test.ts` and `inbox.test.ts` pass 56 focused
+  tests. The empty route exposes both `Dismiss reminder` and `Re-read project
+  notes`; Inbox now suppresses repository-anchor intake when the persisted
+  importer task is terminal, even if an older compact queue copy says
+  `exploring`.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: the owner used `Dismiss reminder` on
+  the empty import route. After reinstall and restart, `/api/stale-server`
+  reported `stale:false`; the former `workspace_import_pending` Inbox item no
+  longer appeared. A separate, explicitly dismissible project-discovery
+  advisory remains for independent review and is not presented as the current
+  work action.
+
+### Finding: System-default settings are not owner Inbox work
+
+- [x] User job: the Inbox contains only decisions that change or unblock the
+  current project. Passive configuration defaults stay discoverable in Settings
+  without competing with the project’s one actionable work handoff.
+- Live finding, 2026-08-30: after t-minus-t’s actual import housekeeping was
+  resolved, Inbox still said `Your decisions 1` for `20 levers at system
+  defaults`. Those defaults neither blocked `TMI-004` nor required a current
+  choice, while the page explicitly promised only decisions that needed the
+  owner.
+
+#### Contract Touch Decision
+
+Work id: `settings-defaults-out-of-owner-inbox-2026-08-30`. Touched contracts:
+the attention-owned Inbox kind filter. `lever_questions` remains a typed
+settings summary but is no longer treated as a project-owner interruption.
+Considered but not touched: lever persistence, settings navigation, default
+count calculation, Inbox ranking for real decisions, and task/action state.
+Required proof: a project with system-default levers receives no owner Inbox
+item while the settings surface retains the configuration. Apply/revert:
+presentation routing only; reverting restores non-blocking policy noise to
+owner attention.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Settings records are unchanged.
+
+#### Validation
+
+- `InboxTab.svelte.test.ts` passes 11 focused tests, including the
+  no-priority-action state. `pnpm typecheck`, `pnpm lint:contracts`,
+  `pnpm model:independence`, and `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: `/api/project/inbox?projectId=t-minus-t`
+  returned `[]`; the owner Inbox no longer presents default levers as a
+  decision. Settings remains the deliberate configuration path: its Developer
+  panel shows the inherited project behavior and default task behavior controls
+  without turning them into a project interruption.
+
+### Finding: An empty Inbox must not deny the visible current action
+
+- [x] User job: when no separate Inbox decisions remain but the project still
+  has a current owner action, the owner can distinguish those facts instantly.
+  The page must name the active action and expose it, not claim no decision is
+  needed while presenting a command.
+- Live finding, 2026-08-30: after t-minus-t Inbox was correctly cleared of
+  stale reminders, the empty panel said `Nothing needs your decision` while
+  displaying the current `Retry worker` action and its recovery explanation.
+  This made the page contradict itself at the exact point it was meant to be
+  most calming.
+
+#### Contract Touch Decision
+
+Work id: `inbox-empty-state-names-current-action-2026-08-30`. Touched
+contracts: Inbox empty-state presentation of the existing shared primary
+action. Considered but not touched: Inbox eligibility, action ranking, task
+state, start readiness, action operation, and persisted data. Required proof:
+no-inbox plus a primary action says there are no separate Inbox decisions, then
+names and links the current action; a genuinely actionless project still says
+nothing needs a decision. Apply/revert: presentation only; reverting restores
+the contradiction.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- `InboxTab.svelte.test.ts` passes 11 focused tests. It proves an empty Inbox
+  with a shared action says `No separate Inbox decisions are waiting`, names
+  the current action, and retains its command; a genuinely actionless state
+  still says nothing needs a decision.
+- Installed t-minus-t proof, 2026-08-30: the real Inbox returned no priority
+  decisions while still presenting the shared `Retry worker` recovery action.
+  At 1114px it had no page-level horizontal overflow and did not make the
+  owner infer whether the command contradicted the empty state.
+
+### Evidence: Primary owner-driver and secondary-proof baseline
+
+- [x] User job: an owner can enter a real project, identify its current
+  release scope and the single right action, take that action without hunting,
+  and see an honest state transition. A second, unrelated project must present
+  the same compact handoff without receiving a state mutation just to make the
+  demo work.
+- Live evidence, 2026-08-30: t-minus-t exposed one current release item,
+  `TMI-004`, as `Needs retry` after two recorded no-progress passes. The owner
+  selected its visible `Retry worker` command. The route immediately changed
+  to `Work is underway`; the isolated worktree then reported durable edits in
+  the expected extension files. No Inbox decision competed with the run.
+  Narrative Harness, used only as secondary proof, independently showed
+  `Stage 2: Local Desktop Harness MVP`, `5 of 9 complete`, `NAR-091`, and one
+  visible `Start work` command at the same desktop width, with no page-level
+  horizontal overflow.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-primary-owner-driver-baseline-2026-08-30`. No contract is
+changed by this evidence run. It exercises the shared current-scope count,
+primary-action, run-state, Inbox, and worktree-observation contracts together.
+Considered but not touched: task specification, release membership, worker
+recovery threshold, project configuration, and Narrative Harness state.
+Required proof: the action is visible and executable before the click; the
+post-action state represents actual execution rather than optimistic copy; a
+separate ready-work project uses the same compact handoff. Apply/revert: the
+only persisted result is the owner's legitimate retry operation in t-minus-t;
+this audit entry can be reverted without altering product state.
+
+#### Schema Migration Decision
+
+No schema change. This is a live owner-flow proof against existing project
+state.
+
+#### Validation
+
+- Browser proof, 2026-08-30: t-minus-t's real in-progress handoff and
+  Narrative Harness's ready-work handoff each kept their visible command at
+  900px narrow desktop and 390px mobile widths. All four views reported no
+  document-level horizontal overflow. Narrative Harness was inspected only;
+  no run was started and its project state was not changed.
+- Replay, 2026-08-30: t-minus-t's paused state agreed across Overview, Work,
+  Thread, Inbox, Release, and task detail on `TMI-004` / `Resume work`; after
+  the owner resumed it, the running state agreed on `Work is underway` / `Open
+  Work`. Narrative Harness independently kept `NAR-091` / `Resume review` on
+  Overview, Work, and Release, with no document-level overflow at 390px mobile
+  or 1024px desktop.
+
+### Finding: Focused Work must not stack three names for the same live state
+
+- [x] User job: when an owner opens the one current task, the route names the
+  scope once, gives its bounded progress once, and uses the decision card for
+  the actual execution state and task. A running task must not make the owner
+  read three stacked variants of “current work is underway” before seeing what
+  is running.
+- Live finding, 2026-08-30: t-minus-t's real Work route rendered `Current task
+  scope is underway`, `Current work`, and `Work is underway` above the same
+  `TMI-004` card. All were true, but together they spend the page's scarce
+  first-screen attention on redundant status rather than orientation.
+
+#### Contract Touch Decision
+
+Work id: `focused-work-single-state-handoff-2026-08-30`. Touched contract:
+Focused Work presentation of the existing orientation-spine scope label and
+shared primary-action/running state. The route may change which of those facts
+occupies its single page heading but must not derive new run, progress, task,
+or action facts locally. Considered but not touched: current-scope selection,
+release membership, action ranking, worker execution, task runtime, and
+orientation-spine construction. Required proof: a focused running task has one
+scope heading, one progress readout, and one card state; non-running focused
+states retain their action button. Apply/revert: presentation only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing shared fields remain the authority.
+
+#### Validation
+
+- `WorkTab.focused.svelte.test.ts` passes 13 focused tests. The focused route
+  has one `Work` page heading and no longer renders the orientation headline as
+  a second, competing state label.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass. Installed t-minus-t proof, 2026-08-30: at 1114px, 900px,
+  and 390px the Work route rendered one heading, one `0 of 1 complete` readout,
+  and one action/state card without document-level horizontal overflow.
+
+### Finding: Automated review must not masquerade as fresh implementation work
+
+- [x] User job: after implementation hands a task to an automated reviewer,
+  including after a local-service restart, the owner can see that the saved
+  change is awaiting review and resume that review without being told the task
+  is a new ready-to-start implementation item.
+- Live finding, 2026-08-30: t-minus-t's `TMI-004` had transitioned to
+  `review`, with the expected changed files preserved in its isolated worktree.
+  After the service restart, shared start readiness flattened it to
+  `ready_work`; Focused Work displayed `READY`, `Ready to continue`, and
+  `Start work`. The command would resume the reviewer, but every visible label
+  described a different operation.
+
+#### Contract Touch Decision
+
+Work id: `review-work-readiness-identity-2026-08-30`. Touched contracts: the
+derived start-readiness focus kind and the shared project action model's labels
+for executable automated review. A review task remains startable through the
+existing focused-run operation, but it gets a typed `review_work` identity so
+all owner-facing surfaces describe that operation as resuming review. Considered
+but not touched: task lifecycle statuses, reviewer assignment, run dispatch,
+owner spec-review authority, worktree recovery, and persisted task schema.
+Required proof: a stopped project with an in-scope `review` task presents
+`Resume review` consistently through start readiness, primary action, run
+control, and Focused Work; ordinary ready implementation work remains
+`Start work`. Apply/revert: derived projection/action behavior only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. `review_work` is an in-memory derived focus kind;
+older saved summaries retain the existing compatibility behavior until rebuilt.
+
+#### Validation
+
+- `project-scope-projection.test.ts`, `project-action-model.test.ts`, and
+  `WorkTab.focused.svelte.test.ts` pass 97 focused tests. They prove a stopped
+  review task retains its review identity through the shared projection, action
+  model, run control, and focused Work card, while normal ready work retains
+  its `Start work` label.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass. After `pnpm dev:install`, `guildhall stop`, and
+  `guildhall start`, `/api/stale-server` reported `stale:false` with zero
+  startup errors. The real t-minus-t route showed `Review ready to continue`,
+  `Review ready`, and one visible `Resume review` control with no overflow at
+  desktop, narrow desktop, or mobile. The owner selected it; the route then
+  changed to the honest running state with the visible `Pause` control.
+
+### Finding: Overview must wait for the shared action packet, not invent an empty state
+
+- [x] User job: opening a running project's Overview never flashes a false
+  “nothing needs your attention” decision before the shared action packet
+  arrives. Until the current packet is ready, the owner sees a neutral loading
+  state; once ready, Overview shows the same running handoff as Work and
+  Thread.
+- Live finding, 2026-08-30: t-minus-t was actively running `TMI-004`. For
+  roughly three seconds after opening Overview, the route rendered `What needs
+  your attention` plus `Nothing needs your attention` and `View work`. It then
+  replaced that with `Work is underway` and `Open Work` when the action model
+  arrived. The first screen was an invented decision, not a loading state.
+
+#### Contract Touch Decision
+
+Work id: `overview-waits-for-shared-action-packet-2026-08-30`. Touched
+contract: ProjectView's readiness boundary for rendering Overview from its
+single project-store request. While an Overview surface request is in flight,
+the route must wait for the typed action model rather than allowing
+ProjectOverviewTab to synthesize its no-action fallback. Considered but not
+touched: action ranking, run state, action-model construction, overview copy,
+project-store request ordering, and persisted data. Required proof: a loading
+Overview with orientation/task data but no `actionModel` renders a neutral
+loading state; once the packet arrives it renders the shared running action;
+an actionless settled project retains its calm no-action state. Apply/revert:
+presentation readiness only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This guards an existing asynchronous read boundary.
+
+#### Validation
+
+- `ProjectView.svelte.test.ts` and `project-action-model.test.ts` pass as part
+  of the 142-test focused flow suite. The Overview test holds orientation and
+  task data without an action model, proves the neutral loading handoff is
+  visible, then proves the shared action renders once its packet arrives.
+- Installed t-minus-t proof, 2026-08-30: immediately after navigating to
+  Overview the route said `Loading project...`; after its packet settled it
+  showed `Work paused`, the one in-scope task, the concrete pause consequence,
+  and the visible `Resume work` command. It never displayed a false empty
+  decision and had no document-level horizontal overflow at the default
+  desktop viewport.
+
+### Finding: Paused work needs the actual resume consequence, not generic navigation copy
+
+- [x] User job: after deliberately pausing real project work, the owner sees
+  that the task is paused, why the visible `Resume work` command is safe, and
+  what it will continue. The focused card must not replace that handoff with a
+  generic invitation to open the task.
+- Live finding, 2026-08-30: the owner paused t-minus-t's active `TMI-004` and
+  the screen correctly changed to `Work paused` with `Resume work`, but the
+  accompanying sentence was `Open this work to take the next step.` The shared
+  paused readiness already knew the concrete continuation semantics; Focused
+  Work did not receive them through the primary action.
+
+#### Contract Touch Decision
+
+Work id: `paused-work-resume-handoff-detail-2026-08-30`. Touched contract:
+the shared primary-action detail for `paused_live_work`. The existing typed
+start-readiness message becomes the owner-facing detail for paused work;
+Focused Work continues to render it without creating a local explanation.
+Considered but not touched: pause execution, task status, saved-work
+observation, action operation, routing, and persisted data. Required proof:
+a paused task's primary action says resume continues the pinned task and the
+Focused Work card renders that exact detail with `Resume work`. Apply/revert:
+shared presentation only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing paused-work facts are reused.
+
+#### Validation
+
+- `project-action-model.test.ts` asserts a paused live task keeps the shared
+  continuation message in its primary action; the combined focused suite
+  passes 142 tests. `pnpm typecheck`, `pnpm lint:contracts`,
+  `pnpm model:independence`, and `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: the paused Focused Work route showed
+  `Work paused`, `TMI-004`, and `Resume work` beside the honest explanation:
+  `"Open supported documents as TypeScript" is paused in live work. Resume
+  continues from that pinned task.` Narrative Harness independently retained
+  its equivalent saved-review handoff and one visible `Resume review` action.
+
+### Finding: Release must not bury its one owner action under duplicate scope exposition
+
+- [x] User job: when the owner opens Release while current work is paused or
+  underway, they can tell the current progress and act on the shared handoff
+  immediately. The route must not repeat the selected scope, its readiness,
+  its headline, and the project-purpose essay before the available action.
+- Live finding, 2026-08-30: t-minus-t Release displayed `CURRENT TASK SCOPE`,
+  `Scope readiness`, another `Current task scope`, its generic in-progress
+  sentence, and the entire product description before `WORK PAUSED` and the
+  only useful command, `Resume work`. Those details were produced by a second
+  orientation-spine request despite the shared action model already supplying
+  the active task and its continuation consequence.
+
+#### Contract Touch Decision
+
+Work id: `release-default-action-first-2026-08-30`. Touched contract: the
+Release route's presentation boundary for the existing shared action model and
+release progress summary. The default verdict view will show one compact
+release header and the shared owner action; it will not independently fetch or
+render orientation-spine narrative. Considered but not touched: release
+membership, scope computation, action ranking, readiness verdict construction,
+criteria detail, task execution, and persisted project schema. Required proof:
+a paused current task renders release progress, one concrete pause handoff,
+and `Resume work` without the purpose copy or duplicated scope card; a ready
+release still renders its terminal ship action. Apply/revert: route
+presentation and unnecessary supporting request only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The default route stops consuming redundant derived
+orientation detail; release and action facts remain the existing authorities.
+
+#### Validation
+
+- `ReleaseTab.svelte.test.ts` passes 32 focused tests. The default Release
+  route no longer requests `/api/project/spine`; a regression fixture proves
+  that a scope headline, project purpose, blocker narrative, and included/later
+  counts remain absent while the actual release verdict stays visible.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass. After `pnpm dev:install`, `guildhall stop`, and
+  `guildhall start`, `/api/stale-server` reported `stale:false` with zero
+  startup errors. Real t-minus-t Release rendered only `Release`, `0/1 done`,
+  the paused `TMI-004` handoff, its concrete continuation sentence, and
+  `Resume work`, with no horizontal overflow. Narrative Harness independently
+  rendered Stage 2 progress, its saved review handoff, and one `Resume review`
+  action without the removed orientation narrative.
+
+### Finding: Opening task details must preserve the action-first handoff
+
+- [x] User job: after choosing `View task details` for paused work, the owner
+  can still see and execute `Resume work` immediately. Details must provide
+  only the next checkpoint and its one decision by default; the full brief,
+  raw metadata, linked-task inventory, and secondary task operations stay out
+  of the first reading path.
+- Live finding, 2026-08-30: t-minus-t's compact `TMI-004` handoff correctly
+  showed `Resume work`. Clicking `View task details` replaced it with two
+  repeated `Overview` labels, `0/1 DELIVERY STEPS` twice, the full imported
+  task brief, five metadata lines, an empty links section, a duplicate
+  delivery-step list, and `Resume only this work item`. The actual primary
+  resume command vanished precisely when the owner requested more context.
+
+#### Contract Touch Decision
+
+Work id: `task-detail-preserves-shared-owner-action-2026-08-30`. Touched
+contracts: TaskDrawer's default task-detail composition and its use of the
+existing shared primary action. The focused overview will preserve the owner
+handoff and reduce default content to the saved checkpoint; full task material
+will remain an explicit deeper inspection surface. Considered but not touched:
+task lifecycle, task content, checkpoint persistence, action ranking, run
+dispatch, task routes, and persisted schema. Required proof: opening paused
+task details retains `Resume work`, contains no duplicated overview/progress
+labels, and does not render the full brief or operational metadata until the
+owner deliberately opens deeper details. Apply/revert: TaskDrawer presentation
+only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing task and primary-action data are
+recomposed at the detail boundary.
+
+#### Validation
+
+- `TaskDrawer.svelte.test.ts` passes 75 focused tests. The new checkpoint test
+  proves the shared `Resume work` action, saved checkpoint, and deliberately
+  deeper full-record affordance coexist without task links, delivery steps, or
+  task description on the checkpoint screen. The drawer's query parsing is
+  centralized so checkpoint, full-record, diagnostic, and tab routes share the
+  same URL interpretation.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass. After `pnpm dev:install`, `guildhall stop`, and
+  `guildhall start`, `/api/stale-server` reported `stale:false` with zero
+  startup errors. The real t-minus-t flow was replayed: the compact task
+  handoff had `Resume work` and `View checkpoint`; the checkpoint screen kept
+  `Resume work`, exposed the saved next step, and offered `Open full task
+  record`; the explicitly opened full record kept the shared `Resume work`
+  action rather than `Resume only this work item`. Narrative Harness's NAR-091
+  task independently rendered one saved-review handoff and `Resume review`.
+
+### Finding: Overview and Work must share the same live owner action
+
+- [x] User job: while one focused task is running, Overview and Work tell the
+  same owner story: work is underway, the same task is active, and the only
+  navigation action is `Open Work`. Overview must never regress to no action or
+  fresh-intake setup merely because it uses its compact surface packet.
+- Live finding, 2026-08-30: after the owner resumed t-minus-t `TMI-004`, the
+  authoritative Work packet had `startReadiness.code: running`, a `Work is
+  underway` / `Open Work` primary action, and ready setup. The concurrently
+  fetched Overview packet had the same running process but `primaryAction:
+  null` and `setup.freshIntakeNeeded:true`. It would therefore lie about the
+  only available action after its loading state settled.
+
+#### Contract Touch Decision
+
+Work id: `overview-work-live-action-agreement-2026-08-30`. Touched contracts:
+the runtime decision overlay and shared summary builder's selection of a live
+run and start readiness before building the action model. Overview and Work may
+differ in inventory density, but must consume the same active-run identity and
+owner-action authority. Considered but not touched: the Overview read boundary,
+run dispatch, task lifecycle, persisted compact projections, action ranking
+semantics, Overview presentation, and task data schema. Required proof: a
+running focused task produces matching action-model code, task id, owner
+heading, and setup state for both `surface=overview` and `surface=work`;
+rendered Overview and Work then agree on the visible handoff. Apply/revert:
+in-memory response composition only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repair reads the existing live-run authority
+consistently before deriving compact surface output.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/project-decision-projection.test.ts
+  src/runtime/__tests__/serve-read-boundary.test.ts --testNamePattern "keeps
+  the planned focus|canonicalizes ready-work identity" --reporter=dot` passed
+  (2 tests): a running supervisor without its persisted active-task fields now
+  retains the runnable decision focus and emits `Open Work` for that task.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm build` passed.
+- Installed local proof, 2026-08-30: after `pnpm dev:install` and
+  `guildhall start`, `/api/stale-server` returned `stale:false`. The real
+  t-minus-t `TMI-004` worker reached its safe review handoff. Compact Overview
+  and Work agreed on `ready_work`, `task-004`, `Review ready to continue`, and
+  the executable `Resume review` link. A Playwright owner pass at 1440px and
+  1024px found no horizontal overflow and one visible `Resume review` button.
+  After the owner took that action, the live compact Overview and Work reads
+  agreed on `running`, `task-004`, `Work is underway`, and the same executable
+  `Open Work` link. Neither surface claimed fresh intake or lost the owner
+  action.
+- Known unrelated baseline: the full
+  `src/runtime/__tests__/serve-read-boundary.test.ts` currently fails before
+  this decision path with fixture state mutated by its own background refresh
+  (including the isolated `compact project does not mutate durable project
+  state` case). This repair did not modify that write boundary; the targeted
+  owner-action regression and all type/build/model-independence gates pass.
+
+### Finding: Focused Work must not offer empty browsing
+
+- [x] User job: when Work is focused on the only current task and that task is
+  already running, the owner sees the current handoff and the global `Pause`
+  control. Guildhall does not add `Browse work` merely to reveal no additional
+  current work.
+- Live finding, 2026-08-30: t-minus-t's focused Work route showed one running
+  `TMI-004` card, `0 of 1 complete`, and a secondary `Browse work` button.
+  The other three records were shelved, so browsing did not support a current
+  decision and added an unexplained choice to the default surface.
+
+#### Contract Touch Decision
+
+Work id: `focused-work-empty-browse-2026-08-30`. Touched contract: focused
+Work's local presentation eligibility for the optional inventory escape hatch.
+The shared decision/action model, task eligibility, release scope, runtime
+state, and routing contract remain authoritative and unchanged. Required proof:
+the only-current-task focused route omits `Browse work`; a focused route with
+another eligible current task retains the explicit inventory escape hatch.
+Apply/revert: presentation-only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+### Finding: A missing typed proof contract must trigger autonomous shaping, never blind implementation retries
+
+- [x] User job: when a real task has implementation work but its automated
+  acceptance criteria cannot yet be settled from typed command or provider
+  evidence, Guildhall identifies the contract gap, repairs it through its
+  shaping path, and tells the owner what is happening. It must not repeatedly
+  send the same implementation back to a worker or offer an unexplained
+  `Resume work` loop.
+- Live finding, 2026-08-30: t-minus-t `TMI-004` repeatedly reached approving
+  review, then the gate checker returned it to `in_progress` with a generic
+  missing-proof note. The task had four `automated` acceptance criteria with
+  no typed command or provider proof, while its sole review proof covered only
+  `ac-5` through `ac-7`. Its worker's prose claimed local commands passed, but
+  no typed gate evidence existed. Re-running the worker could not create the
+  missing contract, and pausing the run replaced the reason with generic
+  `Progress is saved. Resume continues this task from its current workspace.`
+
+#### Contract Touch Decision
+
+Work id: `missing-proof-contract-routes-to-autonomous-shaping-2026-08-30`.
+Touched contracts: task proof-health classification, coordinator completion
+recovery routing, and the shared owner-action summary for a task awaiting
+system proof-contract repair. An automated criterion without a linked typed
+proof source is a structured task-contract gap, not a worker revision. The
+coordinator must route it to its existing shaping authority and show that
+concrete system activity rather than a resume loop. Considered but not touched:
+review-verdict schema, provider prose, task-status enum, owner-input lifecycle,
+command execution, release membership, and existing manual/review proof paths.
+Required proof: an approving task with an unlinked automated criterion does not
+increment worker revision count or dispatch a worker; it is routed to shaping;
+once typed proof is attached and recorded, normal completion settles; the
+installed t-minus-t owner surface explains the repair rather than offering
+blind resume. Apply/revert: runtime routing and shared action projection only.
+
+#### Schema Migration Decision
+
+No persisted-schema change is planned. Existing acceptance criteria already
+carry `verifiedBy` and optional command/provider ownership. Legacy and newly
+saved malformed contracts remain readable; runtime detects the missing typed
+relationship and repairs the task through normal shaping before execution.
+
+### Finding: Live work must never be hidden behind a phantom owner handoff
+
+- [x] User job: when Guildhall is actively shaping or executing a task, the
+  owner sees that work is underway and can open or pause it. A planning state
+  may replace that live state only when there is a real, visible owner question
+  or review with an executable action.
+- Live finding, 2026-08-30: after the TMI-004 proof-contract recovery began,
+  Work correctly showed `Work is underway`, while the shared project decision
+  and CLI simultaneously reported `blocked`, `owner_input_required`, and a
+  drafted brief to review. The task had no open question and no owner review.
+  That planning-only brief state could not be acted on, but it was allowed to
+  eclipse the live spec-agent run.
+
+#### Contract Touch Decision
+
+Work id: `live-work-requires-typed-owner-handoff-2026-08-30`. Touched
+contracts: runtime-to-decision overlay and the shared primary-action/readiness
+projection. A blocked plan state now takes precedence over a live supervisor
+only when the already-projected owner-input or owner-review contract says an
+actual handoff is required. Considered but not touched: brief schema,
+brief-approval policy, task status, worker scheduling, and route-local UI
+copy. Required proof: a live task with only a planning brief reports `running`
+and `Open Work`; a live task with a typed open owner request still reports the
+owner action. Apply/revert: one shared decision-overlay rule; all surfaces and
+CLI inherit the same result.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This uses the existing typed owner-input and
+owner-review projection as the authority for whether a handoff exists.
+
+#### Validation
+
+- Focused proof-contract regressions passed: the complete
+  `task-gates.test.ts` and `project-decision-projection.test.ts` files; the
+  missing-automated-command recovery case; and the worker review-promotion
+  case with explicit commands. `pnpm typecheck`, `pnpm lint:contracts`,
+  `pnpm model:independence`, and `pnpm build` passed.
+- Known baseline outside this repair: the full `orchestrator.test.ts` file
+  currently has 12 failures, dominated by fixture worktrees that the newer
+  ownership guard deliberately refuses to delete. It also includes the older
+  nested-path hard-gate fixture, which does not dispatch its gate checker even
+  after its automated criterion receives a valid `pnpm test` command. This
+  repair does not alter task-worktree deletion or hard-gate routing; leave
+  those failures for the broader orchestrator baseline recovery.
+- Installed local proof, 2026-08-30: after `pnpm dev:install`, `guildhall
+  stop`, and `guildhall start` in t-minus-t, `/api/stale-server` reported
+  `stale:false`. Resuming real `TMI-004` sent its malformed automated-proof
+  contract to spec shaping instead of another worker retry. Its actual spec
+  review was then the single Overview action, `Review spec`, and led directly
+  to visible `Approve spec` / `Request changes` controls. A delegated-owner
+  approval produced one `Start work` action; starting it produced `Work is
+  underway` and `Pause`. The API decision, action model, Work UI, and
+  `guildhall status` all agreed on `running`, `task-004`, and no blockers.
+
+### Finding: Shared source references must be unique before any owner surface consumes them
+
+- [x] User job: when the owner opens a release, task record, or deliberate
+  source/provenance detail, each source appears once. Repeated internal source
+  discovery must not inflate diagnostics, payloads, or future default views.
+- Live finding, 2026-08-30: t-minus-t's live release packet contained the
+  same project and managed-worktree source paths multiple times in the shared
+  `scopeRows[0].sourceRefs` list. The compact Release view hid that raw list,
+  but the duplicate state would reappear anywhere provenance is surfaced.
+
+#### Contract Touch Decision
+
+Work id: `deduplicate-project-scope-source-refs-2026-08-30`. Touched contract:
+the shared `ProjectScopeRow.sourceRefs` projection. References retain their
+first-seen ordering and fallback task reference, but repeated strings are
+removed before the row is serialized or consumed. Considered but not touched:
+task schema, source-claim persistence, source ingestion, release selection,
+and route-local provenance rendering. Required proof: repeated task,
+claim, and Markdown references produce one ordered copy of each source while
+an empty task still receives its task fallback. Apply/revert: projection-only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing duplicate source evidence remains readable
+in task data; the shared projection normalizes it at read time.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/project-scope-projection.test.ts
+  --reporter=dot` passed (36 tests), including repeated references from task
+  metadata, source claims, and Markdown text plus the no-source fallback.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm build` passed. Installed
+  t-minus-t replay, 2026-08-30: after the safe pause, rebuild/install/restart,
+  the shared Release scope row had 21 references and 21 distinct references;
+  the old repeated entries were gone without changing the default compact
+  Release view.
+
+### Finding: A paused saved-work handoff must name the work that resumes
+
+- [x] User job: after pausing active work, the owner sees the task that was
+  paused, knows its edits are safe, and can tell that `Resume work` continues
+  that same task. The explanation must not make them infer what “this task” or
+  “its current workspace” refers to.
+- Live finding, 2026-08-30: the owner paused real t-minus-t `TMI-004` after a
+  stalled provider request. Work showed a visible `Resume work` action, but
+  the shared decision/action detail fell back to `Progress is saved. Resume
+  continues this task from its current workspace.` The plan projection already
+  had the concrete task title, but the action model overwrote it with generic
+  wording.
+
+#### Contract Touch Decision
+
+Work id: `paused-saved-work-names-focus-2026-08-30`. Touched contracts: the
+shared project action detail and the action-applied decision execution message
+for paused live work with saved progress. The focused task identity remains the
+existing typed `focusTaskTitle`; no route reconstructs it. Considered but not
+touched: pause persistence, checkpoint schema, worker recovery policy,
+run-control behavior, and worktree ownership. Required proof: the action model
+and decision execution both name the paused task and retain the one `Resume
+work` operation. Apply/revert: shared action projection only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repair uses the existing focus identity and
+partial-work progress state.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts
+  --reporter=dot` passed (50 tests); `pnpm typecheck`, `pnpm lint:contracts`,
+  and `pnpm build` passed.
+- Installed local proof, 2026-08-30: after `pnpm dev:install`, `guildhall
+  stop`, and `guildhall start` in t-minus-t, `/api/stale-server` returned
+  `stale:false`. Real `TMI-004` paused safely. Work rendered its stable task
+  key, `Work paused`, the task-named saved-work explanation, and one visible
+  `Resume work` action. The shared API action, start readiness, and decision
+  execution used the same exact explanation. The delegated owner resumed it;
+  Work then returned to the same `TMI-004` running card with `Pause`, and
+  `guildhall status` again reported active work with no blockers.
+
+### Finding: An inferred task scope must not impersonate a named release
+
+- [x] User job: when a project has current work but no named release, the
+  Release route identifies it as current work, shows the task's real progress,
+  and keeps the shared executable owner action visible. The route must reserve
+  release wording for an actual selected release.
+- Live finding, 2026-08-30: t-minus-t has `release: null` and one active
+  inferred `current-work` scope. Its live Release route rendered only the
+  heading `Release`, `0/1 done`, and the active task. The owner could take the
+  correct `Open Work` action, but could not tell whether this was a real
+  release or a temporary work scope.
+
+#### Contract Touch Decision
+
+Work id: `unreleased-scope-is-current-work-2026-08-30`. Touched contract: the
+Release route's shared scope presentation. The existing release-readiness
+projection remains authoritative for whether the selected scope is a named
+release; route copy must present that typed distinction without deriving a
+release locally. Considered but not touched: release persistence, scope
+selection, action ranking, release lifecycle, task state, and schema. Required
+proof: a no-release packet renders `Current work`, while a named release still
+renders `Release readiness`; both retain the shared owner action. Apply/revert:
+presentation of an existing typed boundary only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The route reads the existing nullable release
+identity and inferred scope contract.
+
+#### Validation
+
+- `pnpm vitest run src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts
+  --reporter=dot` passed (32 tests); `pnpm typecheck`, `pnpm lint:contracts`,
+  and `pnpm model:independence` passed.
+- Installed local proof, 2026-08-30: after `pnpm build`, `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start` in t-minus-t,
+  `/api/stale-server` returned `stale:false`. The real unreleased scope route
+  rendered `Current work`, `0/1 done`, the named TMI-004 task, and one visible
+  action without horizontal overflow at 1280px. A named-release fixture still
+  renders `Release readiness`.
+
+### Finding: A visible resume command must resume, not merely navigate
+
+- [x] User job: when a current-work or Release route presents `Resume work`,
+  the owner can resume the focused task with that one action. It must not open
+  Work and require the owner to find and click the same command again.
+- Live finding, 2026-08-30: after the installed-app restart safely paused
+  t-minus-t `TMI-004`, the Release route showed the named task and `Resume
+  work`. Clicking it navigated to Work, which remained paused and showed a
+  second `Resume work` button. The action model already carried the typed
+  `start_focused` operation and Project Overview ran it directly, but
+  ReleaseTab special-cased only `repair_spec` and discarded the other direct
+  operation.
+
+#### Contract Touch Decision
+
+Work id: `release-resume-runs-shared-focused-operation-2026-08-30`. Touched
+contracts: Release's consumption of the shared `ProjectAction.operation` and
+its existing focused-task dispatch callback. Any supported typed operation
+with a focused task executes directly; navigation remains only for actions
+without an operation. Considered but not touched: action-model ranking,
+operation enum, start endpoint, pause persistence, task state, release
+lifecycle, and schema. Required proof: `start_focused` invokes the supplied
+task runner from Release; `repair_spec` retains its direct path; a navigation
+only action still routes to its target. Apply/revert: one shared-action
+consumer rule.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repair consumes the existing persisted/read
+model operation enum and task ID.
+
+#### Validation
+
+- `pnpm vitest run src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts
+  --reporter=dot` passed (33 tests), including direct `start_focused` and
+  `repair_spec` actions; `pnpm typecheck`, `pnpm lint:contracts`, and
+  `pnpm model:independence` passed.
+- Installed local proof, 2026-08-30: after the same fresh build/install and
+  `stale:false` check, t-minus-t's paused Release route rendered `Current
+  work`, `TMI-004`, and `Resume work`. One click remained on the Release route
+  and changed the shared state to `Work is underway`, the same named task, and
+  `Open Work`; horizontal layout remained within the 1280px viewport.
+
+### Finding: Review cannot begin from a claimed diff that no longer exists
+
+- [x] User job: when Guildhall says work is ready for review, there is a
+  durable implementation surface for reviewers to inspect. If a saved
+  checkpoint names changed files but the task worktree and task branch contain
+  no corresponding change, Guildhall repairs the stale handoff itself instead
+  of offering the owner another `Resume review` loop.
+- Live finding, 2026-08-30: t-minus-t `TMI-004` entered `review` from a
+  review-handoff checkpoint that named `packages/extension/tsconfig.json` and
+  `packages/extension/README.md`, even though its managed task worktree was
+  clean and its task branch pointed at the same commit as `origin/main`. The
+  generated review packet truthfully said `No changed files recorded`, then
+  reviewer fan-out repeatedly failed its structured contract for review-owned
+  targets. The owner surface still offered `Resume review`, although neither a
+  fresh owner decision nor reviewable work existed.
+
+#### Contract Touch Decision
+
+Work id: `durable-review-surface-before-owner-review-2026-08-30`. Touched
+contracts: worker-to-review recovery eligibility, checkpoint-backed
+self-critique synthesis, reviewer-fanout recovery routing, and the shared
+owner action that follows an invalid review handoff. A checkpoint's claimed
+file list is descriptive evidence only; automatic review promotion requires a
+current task-worktree diff or a task-branch commit beyond its declared base.
+When that surface is absent, Guildhall must return the task to autonomous
+implementation recovery with a typed stale-handoff reason, rather than asking
+the owner to retry a reviewer action. Considered but not touched: task status
+enum, provider prose, reviewer criteria ownership, checkpoint storage shape,
+git history, release membership, and owner-input lifecycle. Required proof:
+a clean worktree plus checkpoint claims never enters review; a real dirty or
+task-branch-committed change still does; an existing stale review task is
+recovered before a reviewer retry and yields a truthful system-progress state
+instead of `Resume review`. Apply/revert: runtime transition and shared
+decision authority only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Historical checkpoints and review packets remain
+readable, but recovery rechecks their implementation surface against the
+current managed worktree and task branch before making a lifecycle decision.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts
+  --testNamePattern "committed passing review-handoff checkpoint|claimed-only
+  review checkpoint|stale review handoff with no implementation surface"
+  --reporter=dot` passed (3 tests). It preserves valid committed recovery,
+  rejects claimed-only checkpoint promotion, and returns a stale review packet
+  to the worker before reviewer fan-out.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`,
+  `pnpm dev:install`, `guildhall stop`, and `guildhall start`,
+  `/api/stale-server` returned `stale:false`. The live `task-004` state was
+  `review` with a clean managed worktree and a task branch equal to its base.
+  One owner `Resume review` start request moved it to `in_progress` with no
+  blockers and a shared `running` action saying Guildhall was working on the
+  named task. The live worker then began task-scoped edits in the managed
+  worktree. No reviewer fan-out was retried and no owner action was required
+  to diagnose or repair the stale handoff.
+- Follow-up owner replay, 2026-08-30: once the recovered worker produced a
+  real managed-worktree diff, Overview, Work, Thread, and Release all exposed
+  the same named `Resume review` action. The installed Release route fit at
+  1280px without horizontal overflow; one click executed `start_focused` in
+  place and changed the card to `Work is underway`, with the global `Pause`
+  control and one `Open Work` escape hatch. This distinguishes a real review
+  handoff from the earlier stale checkpoint instead of disabling review
+  recovery wholesale.
+
+### Regression: Rendered flow proof must assert the owner action the state actually permits
+
+- [x] User job: across desktop, split-screen, and mobile widths, a focused
+  Work card shows the one executable action that follows its current shared
+  state. A paused task must offer `Resume work`, not a generic action copied
+  from a different task state.
+- Observed test drift, 2026-08-30: the Narrative Harness rendered-flow audit
+  fixture intentionally starts with a paused live task and correctly showed
+  `Resume work`, while the test still required the obsolete generic `Open
+  task` label. That left the mobile proof blind to the actual owner action.
+
+#### Contract Touch Decision
+
+Work id: `rendered-owner-action-state-proof-2026-08-30`. Touched contract:
+the rendered flow-audit expectation for a paused focused task. The shared
+action model and product behavior are unchanged; the regression now validates
+the state-specific action already required by that authority. Considered but
+not touched: action ranking, task lifecycle, API shape, route implementation,
+and schema. Required proof: the one focused action is visible at 1114px,
+900px, and 390px while deliberate Work browsing remains readable. Apply/revert:
+test evidence only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts --grep
+  "browsing work is deliberate|flow audit protocol"` passed (2 tests). It
+  checks deliberate browse behavior at split-screen widths and the current
+  focused owner action plus no clipped content at 1114px, 900px, and 390px.
+
+### Finding: Reviewer infrastructure failure must not reissue the same owner review action
+
+- [x] User job: after the owner starts a valid review handoff, Guildhall either
+  advances review or tells the owner that the review system is automatically
+  recovering. A malformed reviewer result is not product feedback and must not
+  put the unchanged `Resume review` action back on screen.
+- Live finding, 2026-08-30: t-minus-t `TMI-004` had a real dirty task-worktree
+  diff and all owner surfaces agreed on one `Resume review` action. After that
+  action, reviewer fan-out failed its typed contract for review-owned `ac-4`
+  and `ac-8` even though provider health was healthy. Guildhall returned the
+  task to `review` and offered the exact same owner action again, with no
+  explanation of the automated reviewer failure or bounded recovery.
+
+#### Contract Touch Decision
+
+Work id: `reviewer-contract-failure-autonomous-recovery-2026-08-30`. Touched
+contracts: reviewer-fanout failure classification, retry/recovery ownership,
+and the shared project action/readiness projection after a reviewer-contract
+failure. Considered but not touched: review target schema, reviewer authority,
+provider prose, task lifecycle enum, worker revisions, release membership,
+and owner-input schema. Required proof: an invalid reviewer contract cannot
+surface `Resume review` unchanged; Guildhall performs a bounded automatic
+recovery with a visible working state, preserves a real reviewable diff, and
+escalates only a genuine unavailable capability with an explanation that an
+owner can act on. Apply/revert: shared runtime/recovery authority and action
+projection only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The retry is bounded to one fresh fan-out attempt
+inside the active review run. If it still fails, the existing typed
+`ReviewVerdict.failureCode` is projected as `review_retry`; it does not change
+task status, reviewer authority, or stored task-runtime schema.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/project-decision-projection.test.ts
+  src/runtime/__tests__/reviewer-fanout-wiring.test.ts
+  src/runtime/__tests__/project-scope-projection.test.ts
+  src/runtime/__tests__/project-action-model.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.focused.svelte.test.ts` passed
+  (159 tests). The reviewer wiring test proves that an all-invalid first
+  fan-out is retried once and then advances without owner input when the
+  replacement contract is valid. Scope, decision, action, and Work tests prove
+  an exhausted invalid contract stays runnable through the shared authority and
+  executes `Retry review` in place rather than reopening the task or repeating
+  `Resume review`.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed. The recovery is selected only from typed failure codes, never from
+  reviewer prose.
+- Installed t-minus-t replay, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`, `/api/stale-server`
+  returned `stale:false`. The live task projected `review_retry` as a runnable
+  shared decision and showed one `Retry review` button on Work. Clicking it
+  stayed on the focused Work route, changed the global control to `Pause`, and
+  changed the card to `Work is underway` for `TMI-004`; the live API confirmed
+  `execution.status: running` and `task-004.status: gate_check`. The owner did
+  not have to rediscover the task or interpret reviewer plumbing.
+
+### Finding: Release follow-up must execute a repository action, not reopen Release
+
+- [x] User job: when completed scope is blocked only because its branch is
+  local, the owner sees one concrete next action and can complete it in place.
+  A Release card must never point back to the same Release route or require a
+  trip through a buried task tab to push a branch.
+- Live finding, 2026-08-30: t-minus-t `TMI-004` was complete, but its task
+  branch had no upstream. Overview and Release both said repository follow-up
+  was needed, while the sole `Open release` action navigated to the already
+  visible Release route. The task drawer's distant provenance tab offered only
+  `Open pull request`, even though the branch had not been pushed and the
+  underlying push driver did not establish tracking.
+
+#### Contract Touch Decision
+
+Work id: `repository-followup-executable-owner-action-2026-08-30`. Touched
+contracts: typed repository follow-up readiness, shared owner-action operation,
+project/task-detail action reconciliation, release/overview action dispatch,
+and first-push Git tracking behavior. A
+repository blocker with a focused task may emit only a typed executable action
+when the current Git state supports it: local/no-upstream branches push first;
+pushed branches open a pull request next. Considered but not touched: release
+membership, completion counts, task status, pull-request provider behavior,
+Git-story persistence, and local-only/deferred policy. Required proof: a
+no-upstream completed task renders `Push branch`, explicit owner invocation
+uses the existing policy-confirmed endpoint, the push establishes an upstream,
+and the next shared action is the PR handoff rather than the old self-link on
+every owner route, including the task drawer. Apply/revert: shared
+readiness/action operation, task-detail response reconciliation, and Git-driver
+push behavior.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repository operation is derived from the
+current typed Git-story snapshot and is not stored as task or release state.
+
+#### Validation
+
+- `pnpm exec vitest run src/runtime/__tests__/project-action-model.test.ts
+  src/runtime/__tests__/node-git-driver.integration.test.ts
+  src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+  src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts` passed (116
+  tests). It covers the typed `push_branch` owner action, direct Overview and
+  Release dispatch, and a real local Git remote whose first publish establishes
+  `origin/<branch>` tracking.
+- `pnpm typecheck` passed.
+- Installed t-minus-t replay, 2026-08-30: after fresh build/install, server
+  restart, and `stale:false`, the completed `TMI-004` Release card showed one
+  `Push branch` action. One click kept the route in place, published
+  `guildhall/task-task-004`, and set its upstream to
+  `origin/guildhall/task-task-004`. The same card then advanced to exactly one
+  `Open pull request` action; it did not reopen Release or expose raw Git
+  diagnostics. The focused action fit without horizontal overflow at the
+  default desktop width, 900px narrow desktop, and 390px mobile
+  (`scrollWidth === clientWidth` at both constrained widths).
+- Cross-route follow-up, 2026-08-30: the task drawer had bypassed the response
+  reconciler and regressed to saved `Release is ready` copy after a branch was
+  pushed. It now consumes the same reconciled packet as Work, Overview, Thread,
+  Inbox, and Release. On the installed t-minus-t app, both Work and
+  `/api/project/task/task-004` return `Pull request is ready to open` with one
+  `Open pull request` action for `task-004` at the same current revision.
+- Browser owner pass, 2026-08-30: t-minus-t Overview, focused Work, Thread,
+  and Release all showed the same completed `TMI-004` handoff and exactly one
+  visible `Open pull request` action. The focused Work route had no horizontal
+  overflow at 900px narrow desktop or 390px mobile, and the action remained
+  visible in the mobile viewport. The only unreached step is creating the
+  external GitHub pull request, which requires the owner's action-time consent.
+- Installed Narrative Harness secondary proof, 2026-08-30: the independent
+  `NAR-091` review-retry action stayed on focused Work and immediately became
+  `Work is underway` with the named task and the global `Pause` control. Its
+  review run later returned to the same typed `review_retry` state after its
+  bounded recovery was exhausted; the saved change remained in review and was
+  not falsely marked done. Its broader Stage 2 proof blockers remain visible
+  as release state, not as a false completed-release claim.
+
+### Finding: A focused recovery must suppress generic project controls
+
+- [x] User job: when Guildhall identifies one saved change whose automated
+  review should be retried, the owner sees that one retry action and no generic
+  project command that starts a different workflow.
+- Live finding, 2026-08-30: Narrative Harness Work correctly named
+  `NAR-091` and rendered `Retry review`, while project chrome also offered a
+  generic `Resume`. The two commands had different semantics, so the header
+  made the next step ambiguous instead of reinforcing the focused decision.
+
+#### Contract Touch Decision
+
+Work id: `focused-review-retry-one-owner-command-2026-08-30`. Touched
+contracts: the project-shell visibility rule that consumes the shared
+owner-action model. The underlying decision, task status, recovery operation,
+and run-control contract are unchanged. Considered but not touched: action
+ranking, review-retry recovery logic, run execution, and task persistence.
+Required proof: a focused `review_retry` action has one visible owner command
+and the project shell does not render a competing generic `Resume` or
+`Retry review` control. Apply/revert: extend the existing focused-action
+visibility rule.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This is a presentation constraint over the existing
+shared owner-action model.
+
+#### Validation
+
+- `pnpm exec vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts`
+  passed (80 tests). The new regression verifies the header stays clear while
+  the content-area `Retry review` action remains available. The shell tests now
+  also assert the current concise Release orientation (`Current work`) rather
+  than the removed `Scope readiness` wall of status copy.
+- Installed Narrative Harness replay, 2026-08-30: after fresh build/install,
+  restart, and `stale:false`, the focused Work route showed project progress,
+  `NAR-091`, the saved-change explanation, and one visible `Retry review`
+  button. The top bar contained only project navigation and `New thread`; it
+  did not render `Resume` or a duplicate retry action, and the viewport had no
+  horizontal overflow.
+
+### Finding: Inbox must execute the current repository handoff
+
+- [x] User job: when Inbox is empty except for the project-level release
+  handoff, it presents the one real action. The owner must not be sent to
+  Release merely to find and repeat the same command.
+- Live finding, 2026-08-30: t-minus-t Inbox said that its pull request was
+  ready and displayed `Open pull request` as a link to Release. Unlike
+  Overview and Release, it discarded the shared `open_pull_request` operation,
+  so its apparent call to action was another self-defeating navigation step.
+
+#### Contract Touch Decision
+
+Work id: `inbox-executes-repository-handoff-2026-08-30`. Touched contracts:
+Inbox's consumption of the existing typed `ProjectAction.operation` and the
+project-shell repository-action callback. A repository handoff with a task id
+now renders an executable button; non-repository actions retain their existing
+navigation link behavior. Considered but not touched: action ranking,
+repository state, push/PR endpoints, release readiness, Inbox item schema, and
+task persistence. Required proof: Inbox invokes the shared callback with the
+action's task id and operation instead of rendering a Release link. Apply/revert:
+Inbox presentation dispatch only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The typed operation already exists in the shared
+action model.
+
+#### Validation
+
+- `pnpm exec vitest run src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts
+  src/web/surfaces/__tests__/ProjectView.svelte.test.ts` passed (92 tests).
+  The Inbox regression proves `Open pull request` is a button that calls the
+  shared repository-action callback for `task-004`, not a link to Release.
+- Installed t-minus-t Inbox replay, 2026-08-30: after fresh build/install,
+  restart, and `stale:false`, Inbox at 900px showed one visible `Open pull
+  request` button and no horizontal overflow. The button was not clicked:
+  opening a GitHub pull request is an external owner action that requires
+  confirmation at the moment of execution.
+
+### Finding: A direct repository handoff must own the shell action
+
+- [x] User job: when the owner can open a pull request now, the project shell
+  shows that one command. It does not also show a disabled `Repo follow-up`
+  control that describes the same state without performing anything.
+- Live finding, 2026-08-30: at desktop width, t-minus-t rendered an inert
+  `Repo follow-up` control beside its direct `Open pull request` command. The
+  duplicate made the real handoff look optional and repeated the status-shaped
+  action pattern the flow audit is meant to remove.
+
+#### Contract Touch Decision
+
+Work id: `repository-handoff-owns-shell-action-2026-08-30`. Touched contract:
+the project shell's existing decision about when a content-level primary action
+owns the run-control slot. Repository handoffs with a task-bound direct action
+now use that same rule. Considered but not touched: action ranking, repository
+operation endpoints, task state, release readiness, and persisted contracts.
+Required proof: a repository PR action renders once and the top shell does not
+render its disabled generic control. Apply/revert: shared presentation decision
+only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- Focused `ProjectView` unit coverage passed. Installed t-minus-t replay at
+  900px after build/install, restart, and `stale:false` showed one `Open pull
+  request` action, no duplicate `Repo follow-up`, and no page-level overflow.
+- Installed cross-route replay, 2026-08-30: t-minus-t Overview, Work, Inbox,
+  Thread, and Release each showed the same single `Open pull request` action
+  at desktop and 390px widths, with no `Repo follow-up` duplicate or
+  page-level overflow. The release has one included completed task and three
+  explicitly later tasks. The action was intentionally not invoked because it
+  creates an external GitHub pull request and requires owner confirmation at
+  execution time.
+
+### Finding: Every owner surface must execute the typed focused action
+
+- [x] User job: after Guildhall identifies a retryable review, the owner can
+  retry it from Inbox, Work, or Thread. None of those screens may turn the
+  action into a second navigation step or a dense activity transcript.
+- Live finding, 2026-08-30: Narrative Harness Inbox exposed `Retry review` as
+  a link to Work, while Thread showed an old activity list with `Resume review`
+  instead of the shared retry decision. The shared action model already named
+  the task and `start_focused` operation; the two surfaces ignored it.
+
+#### Contract Touch Decision
+
+Work id: `focused-action-executes-across-owner-surfaces-2026-08-30`. Touched
+contracts: the existing typed `ProjectAction.operation` consumer callbacks in
+Inbox and Thread. `start_focused` and `repair_spec` now use the same direct
+task-run behavior already used on Overview and Release; Thread also delegates
+repository operations to the project-shell callback rather than inventing an
+endpoint. Considered but not touched: action ranking, task persistence, run
+endpoints, repository endpoints, task state, and release readiness. Required
+proof: a focused review produces one direct button in each route and starts
+the specified task without navigation. Apply/revert: presentation dispatch
+only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- Focused `ProjectView`, Inbox, and Thread unit coverage passed. Installed
+  t-minus-t showed its one direct repository handoff. Installed Narrative
+  Harness showed one focused review action in Overview and Inbox without a
+  second navigation step or page-level overflow at desktop and 390px widths.
+
+### Finding: An internal landing failure must not strand review work
+
+- [x] User job: when Guildhall has the saved implementation but still needs a
+  review decision, it shows one executable review retry. It never labels the
+  task "Needs recovery" without a recovery action.
+- Live finding, 2026-08-30: after the owner retried Narrative Harness
+  `NAR-091`, the task stopped as blocked with no recovery code or action. Its
+  Git Story separately reported that the task commit was already on `main`.
+  The prior landing had failed on a stale Git `index.lock`. Historical review
+  records remained visible, but the authoritative completion lifecycle was
+  explicitly `reopened`, so those old approvals could not complete the
+  current task. The old runtime left those truths as a contradictory display
+  state instead of returning the task to its review lane.
+
+#### Contract Touch Decision
+
+Work id: `stale-landing-review-recovery-2026-08-30`. Touched contracts: the
+Git driver's stale-index-lock retry behavior and the orchestrator's typed
+blocked-to-review recovery for an otherwise-landed task whose current review
+or completion lifecycle remains unresolved. Considered but not touched:
+task/routing presentation, release ranking, acceptance-criterion schema, Git
+history, and owner action copy. Required proof: a stale lock is pruned and
+the Git command retried; a blocked skipped-landing task with missing approval
+or reopened completion becomes `review` with reviewer ownership. Apply/revert:
+this restores the existing review state-machine path; it never marks stale or
+reopened proof as complete.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing `mergeRecord`, review evidence, and task
+lifecycle fields are reconciled through their current contracts.
+
+#### Validation
+
+- Focused stale-blocker, orchestrator, and Git-driver regression coverage
+  passed. Installed Narrative Harness replay after build/install, restart,
+  and `stale:false` changed `task-091` from `blocked` to `review` with
+  `reviewer-agent` ownership and zero blocked tasks. Overview and Inbox showed
+  one `Resume review` action, no `Needs recovery` label, and no page-level
+  overflow at desktop and 390px widths.
+
+### Finding: Completed direct work must not invent a release action
+
+- [x] User job: after a project task is reconciled into the project branch,
+  the owner can tell the work is complete in under a minute. Overview, Inbox,
+  Release, Work, Thread, and direct task detail must show either completion or
+  a real next-release command. They must never offer `Open Release` when no
+  selected release exists and the destination has no executable action.
+- Live finding, 2026-08-30: t-minus-t task `TMI-004` was fast-forwarded into
+  `main` and pushed. Its Git Story correctly returned `merged` with `reconciled`
+  evidence, while the shared release decision still returned `review_release`
+  with no release id. Every owner route therefore led to a self-linking,
+  actionless Release screen.
+- Follow-up live finding, 2026-08-30: after the shared action settled, Thread
+  still selected an obsolete setup turn and direct task detail led with the
+  historical stale-lock landing error and then dumped its entire record. Neither
+  is an owner decision after the reconciled completion state; diagnostics must
+  require an explicit owner choice.
+
+#### Contract Touch Decision
+
+Work id: `direct-push-completion-settlement-2026-08-30`. Touched contracts:
+the shared project decision and action-model projection for completed scope.
+`review_release` is valid only for a real selected release record; unscoped
+terminal work settles to no owner action. Considered but not touched: Git
+Story persistence, task completion, release persistence, route-local action
+ranking, and task schema. Required proof: a terminal project without a
+selected release exposes no `review_release` decision or `Open Release`
+self-link; an active selected release still retains its release review action.
+Apply/revert: projection-only behavior; it does not mutate a project or close
+a release.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
+#### Validation
+
+- Targeted shared decision, action-model, and summary-projection regressions
+  passed; 205 TaskDrawer and ThreadTab tests passed; `pnpm typecheck` and
+  `pnpm lint:contracts` passed.
+- After `pnpm build`, `pnpm dev:install`, and a t-minus-t service restart,
+  `/api/stale-server` reported `stale:false`. Live desktop and 390px checks
+  found no horizontal overflow across Overview, Inbox, Release, Work, Thread,
+  or direct task detail. Overview and Inbox now report no pending owner action,
+  Release has no self-linking `Open Release`, Thread reports no current work,
+  and the completed task leads with a compact handoff; its record is available
+  only after the owner selects `View task details`.
+
+### Finding: A bounded new request must not become a mandatory questionnaire
+
+- [ ] User job: an owner submits a clear, bounded request with its constraints
+  and proof commands. Guildhall creates one task brief directly so the owner
+  can review and approve it. Discovery remains available only when the owner
+  asks for help shaping an unclear request; it must not block a ready request
+  with generic questions, closeout questions, or an "anything else?" loop.
+- Live finding, 2026-08-30: the t-minus-t 0.0.1 documentation request named
+  the exact behavior, non-goal, and `pnpm build`, `pnpm test`, and `pnpm lint`
+  proof. `New thread` nevertheless routed it through pressure-test intake,
+  then asked the owner to restate the goal, answer whether there was anything
+  else, and explain the workflow. Each question blocked the next step despite
+  the answer already being present in the submitted request.
+
+#### Contract Touch Decision
+
+Work id: `direct-new-request-owner-path-2026-08-30`. Touched contracts: the
+typed request-start mode at the New thread/API boundary and direct task
+materialization for owner-authored bounded requests. Considered but not
+touched: task schema, release persistence, pressure-test question schema,
+task approval, worker execution, and route-local next-action ranking. Required
+proof: default New thread creates an exploring task with no owner question;
+the owner can deliberately select guided shaping; a clear request then reaches
+the normal spec-review flow. Apply/revert: direct start creates an ordinary
+existing task-spec request and retains guided intake as an explicit mode.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The start mode is request-local API input; created
+work uses the existing task request fields.
+
+### Finding: A direct owner choice must have one shared actionable state
+
+- [ ] User job: after choosing `Create task` or `Use request as task brief`,
+  the owner sees one clear state across Overview, Work, Thread, and the task:
+  Guildhall is shaping the task, the task is ready for spec review, or the
+  owner has one visible decision to make. A running worker with no primary
+  action, a release blocker without owner input, or guided-pressure language
+  after direct start is a failed state agreement.
+- Live finding, 2026-08-30: after using the t-minus-t request as its task
+  brief, the initial shared response briefly reported a running execution with
+  no primary action while scope/release state described a blocked task. The
+  settled task correctly reached `spec_review`, but its persisted intake still
+  described a guided pressure test with `needs-owner-judgment` checks even
+  though the owner had explicitly bypassed discovery.
+
+#### Contract Touch Decision
+
+Work id: `direct-owner-state-agreement-2026-08-30`. Touched contracts: the
+typed request-intake record created by direct start and direct pressure-test
+materialization. An explicit direct owner choice means automatic system-owned
+checks, no missing-information entries, and implementation-spec progression.
+Considered but not touched: task status schema, owner-input persistence,
+release schema, coordinator scheduling, route-local status ranking, and model
+prose. Required proof: both direct-entry paths store the same automatic
+request-intake contract, then shared decision/action APIs name `review_spec`
+when the task reaches review. Apply/revert: this changes only new direct task
+records; guided requests retain their existing contract.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing task request-intake fields encode the
+owner's direct choice; earlier records remain readable and receive no automatic
+rewrite.
+
+#### Validation
+
+- Focused direct-request and guided-intake API coverage passed 30/30;
+  `IntakeModal` passed 5/5; `ThreadTab` passed 130/130; `pnpm typecheck` and
+  `pnpm lint:contracts` passed.
+- Live t-minus-t proof: the owner used a prior guided request as the task brief,
+  started one bounded worker pass, and the authoritative API settled on one
+  executable next action: `Review a spec` for `task-005`. The installed app
+  was rebuilt, reinstalled, restarted, and reported `stale:false`.
+
+### Finding: A project route must finish hydrating before it can be actionable
+
+- [ ] User job: opening the task that Guildhall just directed the owner to
+  reaches its visible task/review action promptly. It must not remain on
+  `Loading project...` while the corresponding project API has already
+  returned a current, actionable payload.
+- Live finding, 2026-08-30: a fresh installed-app tab at
+  `/projects/t-minus-t/task/task-005` remained on `Loading project...` after
+  six seconds. In the same interval `/api/project?projectId=t-minus-t` returned
+  HTTP 200 with the current project, task inventory, and `Review a spec`
+  primary action. The existing Looma + Knit tab remained rendered normally.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-fresh-route-hydration-2026-08-30`. No code change in this
+unit. The suspected boundary is project-scoped client refresh/hydration versus
+the bounded `/api/project` projection. Considered but not touched: task route
+parsing, API payload schema, task review state, and server startup. Required
+proof for follow-up: reproduce in a fresh tab, identify the pending client
+boundary, and show the task CTA after the same API response. Apply/revert:
+diagnostic finding only.
+
+#### Schema Migration Decision
+
+No persisted-schema change.

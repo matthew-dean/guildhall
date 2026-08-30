@@ -2,7 +2,7 @@ import { explicitTaskStructuralIdentity, type ProjectRelease, type Task, type Ta
 import { taskDisplayLabel } from '@guildhall/shared'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import { META_INTAKE_TASK_ID, WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
-import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { specReviewIsReadyForOwnerApproval, specReviewNeedsRepair } from './spec-review-ownership.js'
 import { effectiveTaskStatus } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
@@ -20,6 +20,7 @@ export type ProjectScopeHandoffState =
   | 'ready'
   | 'paused'
   | 'review'
+  | 'review_retry'
   | 'deferred'
   | 'done'
   | 'blocked'
@@ -71,6 +72,8 @@ export interface ProjectScopeRow {
   blocksRelease: boolean
   humanBlocking: boolean
   proofBlocked: boolean
+  dependencyBlocked?: boolean
+  dependencyTaskIds?: string[]
   blockerSummary?: string
   sourceRefs: string[]
 }
@@ -103,10 +106,12 @@ export function normalizeProjectScopeRowReadModel(row: ProjectScopeRow): Project
   const humanBlocking = projectScopeRowIsGuildhallShaping(row)
     ? false
     : row.humanBlocking
-  const canStartShaping = row.scope === 'included' && row.status === 'exploring' &&
+  const dependencyBlocked = row.dependencyBlocked === true
+  const canStartShaping = row.scope === 'included' && !dependencyBlocked && row.status === 'exploring' &&
     (row.handoffState === 'not_shaped' || row.handoffState === 'spec_shaping')
   const blocksStart = row.scope === 'included' && (
     row.proofBlocked ||
+    dependencyBlocked ||
     row.handoffState === 'blocked' ||
     row.handoffState === 'brief_cleanup' ||
     (row.handoffState === 'spec_review' && humanBlocking) ||
@@ -119,7 +124,7 @@ export function normalizeProjectScopeRowReadModel(row: ProjectScopeRow): Project
     row.handoffState === 'not_shaped' ||
     (row.handoffState === 'spec_review' && humanBlocking)
   )
-  return { ...row, humanBlocking, blocksStart, blocksRelease }
+  return { ...row, dependencyBlocked, humanBlocking, blocksStart, blocksRelease }
 }
 
 export interface ProjectScopeProjection {
@@ -139,13 +144,15 @@ export interface ProjectScopeProjection {
   start: {
     canStart: boolean
     code?: string
-    label: 'Start' | 'Resume' | 'Review' | 'Configure' | 'Answer in Thread'
+    label: 'Start' | 'Resume' | 'Review' | 'Retry review' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
     focusTaskTitle?: string
-    focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
+    focusKind?: 'paused_work' | 'ready_work' | 'review_work' | 'review_retry' | 'spec_repair' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
     /** Exact selected-scope records behind an owner-review action. */
     reviewTaskIds?: string[]
     count?: number
+    /** A bounded worker pass saved scoped work that the next resume will continue. */
+    progressState?: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss'
     message: string
     actionHref: string
     executionScope?: {
@@ -510,7 +517,7 @@ export function buildProjectScopeProjection(
       includedDependencyIds: options.includedDependencyIds,
     }))
     .filter((row): row is ProjectScopeRow => Boolean(row))
-  const counts = summarizeRows(rows)
+  const counts = summarizeExecutionScopeRows(rows)
   const setupTask = currentTasks.find(task =>
     isProjectSetupTask(task.id) &&
     !['done', 'pending_pr', 'archived', 'cancelled'].includes(String(task.status ?? '')),
@@ -700,6 +707,11 @@ function buildScopeRow(
     input.selectedScope,
   )
   const humanBlocking = proofBlocked ? false : humanBlockingFor(task, handoffState, scope)
+  const dependencyTaskIds = (task.dependsOn ?? []).filter(dependencyId => {
+    const dependency = input.tasksById.get(dependencyId)
+    return !dependency || (effectiveTaskStatus(dependency) ?? dependency.status) !== 'done'
+  })
+  const dependencyBlocked = scope === 'included' && dependencyTaskIds.length > 0
   return normalizeProjectScopeRowReadModel({
     taskId: task.id,
     title: taskDisplayLabel(task, task.id),
@@ -714,6 +726,8 @@ function buildScopeRow(
     blocksRelease: scope === 'included' && (humanBlocking || handoffState === 'blocked' || proofBlocked),
     humanBlocking,
     proofBlocked,
+    dependencyBlocked,
+    ...(dependencyTaskIds.length > 0 ? { dependencyTaskIds } : {}),
     ...(handoffState === 'blocked'
       ? { blockerSummary: proofBlocked ? 'Completion proof is missing or stale.' : blockerSummaryForTask(task) }
       : {}),
@@ -761,8 +775,18 @@ function handoffStateForTask(
   if (status === 'blocked') return 'blocked'
   if (status === 'done' || status === 'pending_pr') return 'done'
   if (status === 'in_progress') return 'paused'
-  if (status === 'review' || status === 'gate_check') return 'review'
-  if (status === 'spec_review') return 'spec_review'
+  if (status === 'review') {
+    return (task.reviewVerdicts ?? []).at(-1)?.failureCode === 'invalid_review_contract'
+      ? 'review_retry'
+      : 'review'
+  }
+  if (status === 'gate_check') return 'review'
+  if (status === 'spec_review') {
+    return specReviewNeedsRepair(task) ? 'spec_shaping' : 'spec_review'
+  }
+  if (status === 'exploring' && productBriefRequiresOwnerApproval(task) && !hasSpecDraft(task)) {
+    return 'brief_cleanup'
+  }
   if (status === 'exploring' && hasApprovedCompleteBrief(task) && !hasSpecDraft(task)) return 'spec_shaping'
   if (status === 'ready') {
     if (isReadyForWorkerHandoff(task) || hasInScopeMaterializedChildWork(task, input)) return 'ready'
@@ -875,7 +899,7 @@ function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, sc
   if (handoffState === 'not_shaped' && (task.status === 'exploring' || task.status === 'import_draft')) return false
   if (handoffState === 'not_shaped') return true
   if (handoffState === 'brief_cleanup' || handoffState === 'blocked') return true
-  return handoffState === 'spec_review' && specReviewRequiresOwnerApproval(task)
+  return handoffState === 'spec_review' && specReviewIsReadyForOwnerApproval(task)
 }
 
 function blockerSummaryForTask(task: Task): string {
@@ -903,6 +927,12 @@ function hasSpecDraft(task: Task): boolean {
 function hasApprovedCompleteBrief(task: Task): boolean {
   const brief = task.productBrief
   if (!brief?.approvedAt) return false
+  return hasCompleteBrief(task)
+}
+
+function hasCompleteBrief(task: Task): boolean {
+  const brief = task.productBrief
+  if (!brief) return false
   return Boolean(
     brief.userJob?.trim() &&
     brief.whyItMattersNow?.trim() &&
@@ -911,16 +941,26 @@ function hasApprovedCompleteBrief(task: Task): boolean {
   )
 }
 
+function productBriefRequiresOwnerApproval(task: Task): boolean {
+  return hasCompleteBrief(task) &&
+    !task.productBrief?.approvedAt &&
+    task.productBrief?.authoredBy !== 'coordinator-recovery' &&
+    task.taskReadiness?.recommendation !== 'needs_research_spike'
+}
+
 function sourceRefsForTask(task: Task): string[] {
   const refs = [
     ...(task.references ?? []),
     ...((task.sourceClaims ?? []).flatMap(claim => claim.references ?? [])),
     ...explicitMarkdownSourceRefsFromTask(task),
-  ].filter(ref => ref.trim().length > 0)
-  return refs.length > 0 ? refs : [`task:${task.id}`]
+  ]
+    .map(ref => ref.trim())
+    .filter(ref => ref.length > 0)
+  const uniqueRefs = [...new Set(refs)]
+  return uniqueRefs.length > 0 ? uniqueRefs : [`task:${task.id}`]
 }
 
-function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['counts'] {
+export function summarizeExecutionScopeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['counts'] {
   const counted = executionRows(rows)
   const included = counted.filter(row => row.scope === 'included')
   return {
@@ -993,8 +1033,10 @@ export function summarizeProjectScopeStart(
   // An exploring task is already in Guildhall's shaping lane. Let Start run
   // that agent work before unrelated ready work. It is the live continuation
   // of the selected scope, not merely another candidate in a task ranking.
-  const shapingWork = included.find(row => row.status === 'exploring' &&
-    (row.handoffState === 'spec_shaping' || row.handoffState === 'not_shaped'))
+  const shapingWork = included.find(row => !row.dependencyBlocked && (
+    row.handoffState === 'spec_shaping' ||
+    (row.status === 'exploring' && row.handoffState === 'not_shaped')
+  ))
   if (shapingWork) {
     return {
       canStart: true,
@@ -1002,14 +1044,34 @@ export function summarizeProjectScopeStart(
       label: 'Start',
       focusTaskId: shapingWork.taskId,
       focusTaskTitle: shapingWork.title,
-      focusKind: 'ready_work',
-      message: shapingWork.handoffState === 'spec_shaping'
-        ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
+      focusKind: shapingWork.status === 'spec_review' ? 'spec_repair' : 'ready_work',
+      message: shapingWork.status === 'spec_review'
+        ? `Guildhall will repair the spec for "${shapingWork.title}" before asking for your review.`
+        : shapingWork.handoffState === 'spec_shaping'
+          ? `Guildhall is shaping a source-backed spec for "${shapingWork.title}".`
         : `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
       actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
     }
   }
-  const ready = included.find(row => row.handoffState === 'ready')
+  const briefReview = included.find(row =>
+    !row.dependencyBlocked &&
+    row.status === 'exploring' &&
+    row.handoffState === 'brief_cleanup' &&
+    row.humanBlocking,
+  )
+  if (briefReview) {
+    return {
+      canStart: false,
+      code: 'owner_input_required',
+      label: 'Review',
+      focusTaskId: briefReview.taskId,
+      focusTaskTitle: briefReview.title,
+      focusKind: 'brief_cleanup',
+      message: `"${briefReview.title}" has a drafted brief ready for review. Approve it or request changes before Guildhall continues shaping.`,
+      actionHref: `/thread?thread=${encodeURIComponent(`task:${briefReview.taskId}`)}`,
+    }
+  }
+  const ready = included.find(row => !row.dependencyBlocked && row.handoffState === 'ready')
   if (ready) {
     return {
       canStart: true,
@@ -1022,7 +1084,7 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(ready.taskId)}`,
     }
   }
-  const specWork = included.find(row => row.handoffState === 'spec_review' && !row.humanBlocking)
+  const specWork = included.find(row => !row.dependencyBlocked && row.handoffState === 'spec_review' && !row.humanBlocking)
   if (specWork) {
     return {
       canStart: true,
@@ -1035,10 +1097,60 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
     }
   }
-  const blocked = included.find(row => row.handoffState === 'blocked')
+  // An exhausted automatic review retry is not ordinary review work. The
+  // owner can explicitly retry the preserved automated check, but must never
+  // be told that restarting it is simply "resuming" product work.
+  const reviewRetry = included.find(row => !row.dependencyBlocked && row.handoffState === 'review_retry')
+  if (reviewRetry) {
+    return {
+      canStart: true,
+      code: 'review_retry',
+      label: 'Retry review',
+      focusTaskId: reviewRetry.taskId,
+      focusTaskTitle: reviewRetry.title,
+      focusKind: 'review_retry',
+      message: `Guildhall could not complete the automated review for "${reviewRetry.title}". It preserved the saved change; retry review when the review service is ready.`,
+      actionHref: `/work?task=${encodeURIComponent(reviewRetry.taskId)}`,
+    }
+  }
+  // Review work is already executable. Do not send the owner to a later task
+  // which is only waiting on that review.
+  const reviewWork = included.find(row => !row.dependencyBlocked && row.handoffState === 'review')
+  if (reviewWork) {
+    return {
+      canStart: true,
+      code: 'ready_work',
+      label: 'Resume',
+      focusTaskId: reviewWork.taskId,
+      focusTaskTitle: reviewWork.title,
+      focusKind: 'review_work',
+      message: `"${reviewWork.title}" has saved changes ready for automated review.`,
+      actionHref: `/work?task=${encodeURIComponent(reviewWork.taskId)}`,
+    }
+  }
+  const blocked = included.find(row => row.handoffState === 'blocked' || row.dependencyBlocked)
   if (blocked) {
-    const count = included.filter(row => row.handoffState === 'blocked').length
-    const reason = blocked.blockerSummary?.trim()
+    const dependencyReview = blocked.dependencyTaskIds
+      ?.map(taskId => included.find(row => row.taskId === taskId))
+      .find(row => row && !row.dependencyBlocked && row.handoffState === 'spec_review' && row.humanBlocking)
+    if (dependencyReview) {
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        label: 'Review',
+        focusTaskId: dependencyReview.taskId,
+        focusTaskTitle: dependencyReview.title,
+        focusKind: 'spec_review',
+        count: 1,
+        message: `"${dependencyReview.title}" is waiting for review before work can start.`,
+        actionHref: `/thread?thread=${encodeURIComponent(`task:${dependencyReview.taskId}`)}`,
+      }
+    }
+    const count = included.filter(row => row.handoffState === 'blocked' || row.dependencyBlocked).length
+    const dependencyTitle = blocked.dependencyTaskIds?.[0]
+      ? included.find(row => row.taskId === blocked.dependencyTaskIds?.[0])?.title ?? blocked.dependencyTaskIds[0]
+      : null
+    const reason = blocked.blockerSummary?.trim() || (dependencyTitle ? `waiting for "${dependencyTitle}"` : '')
     return {
       canStart: false,
       code: 'no_unattended_progress',
@@ -1087,9 +1199,9 @@ export function summarizeProjectScopeStart(
       actionHref: `/work?task=${encodeURIComponent(briefCleanup.taskId)}`,
     }
   }
-  const specReview = included.find(row => row.handoffState === 'spec_review' && row.humanBlocking)
+  const specReview = included.find(row => !row.dependencyBlocked && row.handoffState === 'spec_review' && row.humanBlocking)
   if (specReview) {
-    const count = included.filter(row => row.handoffState === 'spec_review' && row.humanBlocking).length
+    const count = included.filter(row => !row.dependencyBlocked && row.handoffState === 'spec_review' && row.humanBlocking).length
     return {
       canStart: false,
       code: 'no_unattended_progress',
@@ -1160,6 +1272,11 @@ export function summarizeProjectScopeRelease(rows: readonly ProjectScopeRow[]): 
       label: blockerLabelFor(row),
       code: blockerCodeFor(row),
     }))
+  // Release state answers whether this release can make progress now. Keep
+  // background blockers for readiness and diagnostics, but do not label the
+  // whole release blocked while an included task is actively resumable.
+  const hasActiveHandoff = included.some(row => row.handoffState === 'paused')
+  if (hasActiveHandoff) return { state: 'active', blockers }
   if (blockers.length > 0) {
     const shapingOnly = blockers.every(blocker => {
       const row = included.find(candidate => candidate.taskId === blocker.owningTaskId)

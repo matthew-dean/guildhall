@@ -9,6 +9,7 @@ import {
   classifyRouteProbe,
   routeApiChecks,
 } from '../../scripts/browser-route-proof.mjs'
+import { applyRequiredProjectUpdates } from './flow-audit-assertions'
 
 const replayProjectIds = ['jess', 'commerce-project', 'looma-knit', 'narrative-harness', 'font-something']
 const fixtureRoot = join(process.cwd(), '.playwright-fixtures')
@@ -201,7 +202,127 @@ test.afterAll(async () => {
     const originalTasks = originalTaskFiles.get(projectId)
     if (originalTasks === null) {
       await rm(projectPath, { recursive: true, force: true })
+      continue
     }
+    if (originalTasks === undefined) continue
+    const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+    await mkdir(join(projectPath, 'memory'), { recursive: true })
+    await mkdir(projectSystemStateDir(projectPath), { recursive: true })
+    await writeFile(tasksPath, originalTasks, 'utf8')
+    await writeFile(join(projectSystemStateDir(projectPath), 'TASKS.json'), originalTasks, 'utf8')
+  }
+})
+
+test('spec review starts at one decision without a tab hunt', async ({ page }) => {
+  test.setTimeout(90_000)
+  await page.goto('/projects/narrative-harness/work')
+  await applyRequiredProjectUpdates(page, { terminalTimeoutMs: 45_000 })
+  await page.route('**/api/project?*', async route => {
+    if (!route.request().url().includes('projectId=narrative-harness')) {
+      await route.continue()
+      return
+    }
+    const response = await route.fetch()
+    const body = await response.json()
+    await route.fulfill({
+      response,
+      json: {
+        ...body,
+        startReadiness: {
+          ...body.startReadiness,
+          canStart: true,
+          code: 'ready_work',
+          reviewTaskIds: ['coherence-reviewer-mvp'],
+        },
+      },
+    })
+  })
+  await page.goto('/projects/narrative-harness/task/coherence-reviewer-mvp', { waitUntil: 'domcontentloaded' })
+
+  await expect(page.getByRole('heading', { name: 'Approve this spec?' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Approve spec' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Request changes' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Read full task record' })).toBeVisible()
+  await expect(page.getByRole('tab')).toHaveCount(0)
+  await expect(page.getByText('Latest handoff packet')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Approve spec' }).click()
+  await expect(page.getByRole('dialog', { name: 'Approve spec' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Approve spec' }).getByRole('button', { name: 'Approve' })).toBeVisible()
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+})
+
+test('owner input is a response surface, not a Thread dashboard', async ({ page }) => {
+  await page.goto('/projects/jess/work')
+  await applyRequiredProjectUpdates(page)
+  const presentOwnerQuestion = async (route: any) => {
+    const url = route.request().url()
+    if (
+      !url.includes('projectId=jess') ||
+      (!url.includes('/api/project?') && !url.includes('/api/project/thread?'))
+    ) {
+      await route.continue()
+      return
+    }
+    const response = await route.fetch()
+    const body = await response.json()
+    const actionModel = body?.actionModel ?? {}
+    const ownerQuestion = {
+      kind: 'bounded_chat',
+      id: 'bounded-chat:bc-owner-question:release-scope',
+      at: fixtureNow,
+      persona: 'intake',
+      status: 'active',
+      phase: 'intake',
+      sessionId: 'bc-owner-question',
+      subObjectiveId: 'release-scope',
+      targetTitle: 'Jess',
+      domainTitle: 'Release scope',
+      question: {
+        id: 'release-scope',
+        prompt: 'Which outcome should this release optimize for?',
+        why: 'This decides the next work slice.',
+        choices: ['Faster review', 'Broader coverage'],
+        evidence: [],
+      },
+      answerEndpoint: '/api/project/bounded-chat/bc-owner-question/answer',
+    }
+    await route.fulfill({
+      response,
+      json: {
+        ...body,
+        actionModel: {
+          ...actionModel,
+          primaryAction: {
+            ...(actionModel.primaryAction ?? {}),
+            label: 'Answer a project question',
+            buttonLabel: 'Answer question',
+            href: '/thread?thread=bc-owner-question',
+            tone: 'warn',
+            code: 'owner_input_required',
+            taskId: null,
+            taskLabel: 'Jess',
+            detail: 'Which outcome should this release optimize for?',
+          },
+        },
+        ...(url.includes('/api/project/thread?')
+          ? { turns: [ownerQuestion], activeTurnId: 'bounded-chat:bc-owner-question' }
+          : {}),
+      },
+    })
+  }
+  await page.route('**/api/project**', presentOwnerQuestion)
+
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await page.goto('/projects/jess/thread?thread=bc-owner-question')
+
+    await expect(page.getByLabel('Owner response')).toBeVisible()
+    await expect(page.getByRole('complementary', { name: 'Thread list' })).toHaveCount(0)
+    await expect(page.locator('.thread-detail-owner-input-focus .thread-list')).toHaveCount(0)
+    await expect(page.getByText('Which outcome should this release optimize for?').first()).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Faster review' })).toBeVisible()
+    await expect(page.locator('html')).toHaveJSProperty('scrollWidth', viewport.width)
   }
 })
 
@@ -212,24 +333,6 @@ async function apiResultsForTarget(request: any, target: typeof auditReplayTarge
     results.push({ label: check.label, path: check.path, ok: response.ok(), status: response.status() })
   }
   return results
-}
-
-async function applyRequiredMigrations(page: any) {
-  for (let index = 0; index < 6; index += 1) {
-    if (await page.getByText('Needs migration').count() === 0) return
-    const visibleMigrateButton = page.locator('button').filter({ hasText: 'Migrate' }).first()
-    const hasVisibleMigrate = await visibleMigrateButton.count() > 0
-    const migrateButton = hasVisibleMigrate
-      ? visibleMigrateButton
-      : page.getByRole('button', { name: 'Migrate project' }).first()
-    if (!hasVisibleMigrate && !(await migrateButton.isEnabled())) return
-    await expect(migrateButton).toBeEnabled()
-    await migrateButton.click()
-    await expect(page.getByRole('dialog', { name: 'Migrate project' })).toBeVisible()
-    await page.getByRole('button', { name: 'Apply required migration' }).click()
-    await expect(page.getByText('Migration applied.')).toBeVisible()
-    await page.getByRole('dialog', { name: 'Migrate project' }).getByRole('button', { name: 'Close' }).last().click()
-  }
 }
 
 async function hasVisibleRouteProof(page: any, label: string) {
@@ -243,7 +346,6 @@ for (const target of auditReplayTargets) {
   test(`${target.name} replay target stays browser-capable`, async ({ page, request, baseURL }) => {
     const url = new URL(target.path, baseURL).toString()
     await page.goto(target.path, { waitUntil: 'domcontentloaded' })
-    await applyRequiredMigrations(page)
     const navigation = await page.goto(target.path, { waitUntil: 'domcontentloaded' })
       .then(() => ({ ok: true }))
       .catch(error => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))

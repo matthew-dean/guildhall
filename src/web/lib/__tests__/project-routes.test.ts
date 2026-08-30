@@ -78,6 +78,14 @@ describe('project-routes', () => {
     expect(currentProjectHref('/settings/ready', 'font-something')).toBe('/projects/font-something/settings/ready')
   })
 
+  it('returns a required repair to the work item that triggered it', async () => {
+    const { projectTaskRepairHref } = await import('../project-routes.js')
+
+    expect(projectTaskRepairHref('looma-knit', 'task-import-1rpbo8n')).toBe(
+      '/projects/looma-knit/work?view=queue&task=task-import-1rpbo8n&repair=migration',
+    )
+  })
+
   it('falls back to Projects Home when no URL or explicit project id is available', async () => {
     Object.defineProperty(globalThis, 'window', {
       value: {
@@ -110,6 +118,7 @@ describe('project-routes', () => {
     expect(projectActionHref('/workspace-import')).toBe('/projects/looma-knit/workspace-import')
     expect(projectActionHref('/settings/advanced')).toBe('/projects/looma-knit/settings/advanced')
     expect(projectActionHref('/task/task-003')).toBe('/projects/looma-knit/task/task-003')
+    expect(projectActionHref('/migrations')).toBe('/projects/looma-knit/overview?repair=migration')
     expect(projectActionHref('/providers')).toBe('/providers')
     expect(projectActionHref('/projects/fair-labor-license/thread')).toBe('/projects/fair-labor-license/thread')
   })

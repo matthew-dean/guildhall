@@ -5,7 +5,9 @@ import os from 'node:os'
 import {
   createExploringTask,
   approveSpec,
+  extractOwnerRequiredAcceptanceCommands,
   reframeTask,
+  readCurrentTaskEvidenceForSpecApproval,
   resumeExploring,
   createBugReportTask,
   parseStackTraceTopFile,
@@ -16,6 +18,7 @@ import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
 import {
   getProjectStateDir,
+  getProjectLocalHistoryDir,
   getProjectSystemStatePathFromMemoryDir,
   getProjectTranscriptPath,
   readTaskRuntimeStore,
@@ -94,6 +97,7 @@ async function writeQueue(queue: TaskQueue): Promise<void> {
   writeProjectTaskQueue(tasksPath, queue, {
     projectRoot: tmpDir,
     expectedQueueRevision: current.expectedQueueRevision,
+    expectedProjectRevision: current.expectedProjectRevision,
   })
 }
 
@@ -273,6 +277,33 @@ describe('createExploringTask', () => {
     expect(b.taskId).toBe('task-002')
   })
 
+  it('does not reuse a task id reserved by archived project state', async () => {
+    await createExploringTask({
+      memoryDir,
+      ask: 'first',
+      domain: 'looma',
+      projectPath: '/x',
+    })
+    const archive = path.join(
+      getProjectLocalHistoryDir(tmpDir),
+      'project-state-evacuation',
+      'tasks',
+      'archive',
+      'task-002.json',
+    )
+    await fs.mkdir(path.dirname(archive), { recursive: true })
+    await fs.writeFile(archive, '{"id":"task-002"}\n', 'utf-8')
+
+    const next = await createExploringTask({
+      memoryDir,
+      ask: 'new work',
+      domain: 'looma',
+      projectPath: '/x',
+    })
+
+    expect(next.taskId).toBe('task-003')
+  })
+
   it('respects an explicit task id override', async () => {
     const result = await createExploringTask({
       memoryDir,
@@ -418,6 +449,13 @@ describe('reframeTask', () => {
       mutate: task => ({
         ...task,
         taskKind: 'research',
+        status: 'spec_review',
+        specReviewGate: {
+          authority: 'coordinator',
+          requestedAt: new Date().toISOString(),
+          requestedBy: 'coordinator-recovery',
+          reason: 'recovery',
+        },
       }),
     })
     expect(mutation).not.toBeNull()
@@ -434,6 +472,7 @@ describe('reframeTask', () => {
     const reframedTask = updated.tasks.find(candidate => candidate.id === result.taskId)!
     expect(reframedTask.status).toBe('exploring')
     expect(reframedTask.taskKind).toBeUndefined()
+    expect(reframedTask.specReviewGate).toBeUndefined()
     expect(reframedTask.notes).toEqual(expect.arrayContaining([
       expect.objectContaining({
         agentId: 'codex_delegated_owner',
@@ -558,6 +597,53 @@ describe('approveSpec', () => {
     expect(queue.tasks[0]!.status).toBe('ready')
   })
 
+  it('approves an imported spec using the same typed owner command context as spec authoring', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.references = ['docs/source-plan.md']
+    task.structuredSpec = {
+      ...boundedStructuredSpec(),
+      acceptanceCriteria: [{
+        scenario: 'Run the focused desktop sidecar contract suite',
+        expectation: 'The typed sidecar contract passes',
+        verificationMode: 'automated',
+        command: 'pnpm test:desktop-sidecar',
+        expectedExit: 'zero',
+      }],
+      verification: ['Run pnpm test:desktop-sidecar'],
+    }
+    task.acceptanceCriteria = []
+    await writeQueue(queue)
+    await appendTaskEvidence(tmpDir, task.id, {
+      id: 'owner-command-revision',
+      kind: 'note',
+      recordedAt: '2026-07-14T00:01:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Add and run `pnpm test:desktop-sidecar` as the exact acceptance command.',
+        structured: {
+          event: 'document_revision_requested',
+          target: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+        },
+      },
+    })
+
+    const result = await approveSpec({ memoryDir, taskId: task.id })
+
+    expect(result).toEqual({ success: true, newStatus: 'ready' })
+  })
+
+  it('tolerates only the missing current-evidence revision race during spec approval', () => {
+    expect(readCurrentTaskEvidenceForSpecApproval(tmpDir, 'task-001', () => {
+      throw new Error('Normalized current task evidence is unavailable for promoted project')
+    })).toBeNull()
+    expect(() => readCurrentTaskEvidenceForSpecApproval(tmpDir, 'task-001', () => {
+      throw new Error('Current evidence is corrupt')
+    })).toThrow('Current evidence is corrupt')
+  })
+
   it('preserves a fresh lifecycle fence while approving its new spec', async () => {
     const reopenedAt = '2026-07-23T04:27:00.000Z'
     await upsertTaskRuntimeState(tmpDir, 'task-001', {
@@ -672,6 +758,8 @@ describe('approveSpec', () => {
       userJob: 'A developer can run the fixture loop and inspect a saved run record.',
       successMetric: 'The fixture loop exits 0 and saves reviewer and writer output.',
       authoredBy: 'system:completion-boundary',
+      approvedBy: 'human',
+      approvedAt: expect.any(String),
     })
   })
 
@@ -1518,6 +1606,31 @@ describe('approveSpec', () => {
       createdAt: '2026-05-28T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
+    task.gateResults = [{
+      gateId: 'old-proof',
+      type: 'hard',
+      passed: true,
+      checkedAt: '2026-08-08T00:00:01.000Z',
+    }]
+    task.reviewVerdicts = [{
+      verdict: 'approve',
+      reviewerPath: 'llm',
+      reason: 'The retired draft passed its old review.',
+      failingSignals: [],
+      recordedAt: '2026-08-08T00:00:02.000Z',
+    }]
+    task.adjudications = [{
+      round: 1,
+      trigger: 'explicit_request',
+      dissenters: [],
+      winningConcerns: [],
+      supersededConcerns: [],
+      summary: 'The old review was accepted.',
+      rationale: 'This belongs to the retired plan history.',
+      scopeInstructions: [],
+      decidedBy: 'human',
+      decidedAt: '2026-08-08T00:00:03.000Z',
+    }]
     await writeQueue(queue)
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
@@ -1844,6 +1957,17 @@ describe('createBugReportTask', () => {
 })
 
 describe('resumeExploring', () => {
+  it('preserves unquoted package commands as typed owner requirements', () => {
+    expect(extractOwnerRequiredAcceptanceCommands(
+      'Add pnpm test:desktop-shell, retain pnpm typecheck and npm run package:desktop-spike, then require cargo test --manifest-path src-tauri/Cargo.toml fixture_input.',
+    )).toEqual([
+      'pnpm test:desktop-shell',
+      'pnpm typecheck',
+      'npm run package:desktop-spike',
+      'cargo test --manifest-path src-tauri/Cargo.toml fixture_input',
+    ])
+  })
+
   beforeEach(async () => {
     await createExploringTask({
       memoryDir,
@@ -1882,6 +2006,129 @@ describe('resumeExploring', () => {
 
     queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('exploring')
+  })
+
+  it('invalidates a rejected brief through a typed revision request', async () => {
+    let queue = await readQueue()
+    queue.tasks[0]!.productBrief = {
+      userJob: 'Build the desktop spike with Vue.',
+      whyItMattersNow: 'Prove packaging first.',
+      successMetric: 'A packaged app launches.',
+      nonGoals: [],
+      antiPatterns: [],
+      authoredBy: 'spec-agent',
+      authoredAt: '2026-08-08T00:00:00.000Z',
+    }
+    await writeQueue(queue)
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: 'task-001',
+      message: 'Keep the spike framework-neutral.',
+      revisionTarget: 'brief',
+    })
+    expect(result.success).toBe(true)
+
+    queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('exploring')
+    expect(queue.tasks[0]!.productBrief).toBeUndefined()
+    expect(queue.tasks[0]!.notes.at(-1)).toMatchObject({
+      content: 'Keep the spike framework-neutral.',
+      structured: { event: 'document_revision_requested', target: 'brief' },
+    })
+  })
+
+  it('retires a rejected spec and its derived plan while preserving the current brief', async () => {
+    let queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.status = 'spec_review'
+    task.productBrief = {
+      userJob: 'Prove a framework-neutral desktop sidecar.',
+      whyItMattersNow: 'The architecture must be proven before UI work.',
+      successMetric: 'A packaged app runs one offline fixture.',
+      nonGoals: ['Do not build the full UI.'],
+      antiPatterns: [],
+      authoredBy: 'spec-agent',
+      authoredAt: '2026-08-08T00:00:00.000Z',
+    }
+    task.spec = '## What this is\nAn incomplete spike.\n\n## Completion Boundary\n- Product outcome: prove packaging.'
+    task.acceptanceCriteria = [{
+      id: 'ac-old',
+      description: 'Old proof',
+      verifiedBy: 'review',
+      met: false,
+    }]
+    task.sizePlan = {
+      taskId: task.id,
+      score: 1,
+      band: 'tiny',
+      action: 'proceed',
+      factors: [],
+      recommendedChildren: [],
+      reviewBudgetHint: 'lean',
+      reasons: [],
+      createdAt: '2026-08-08T00:00:00.000Z',
+      createdBy: 'task-sizing',
+    }
+    await writeQueue(queue)
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: task.id,
+      message: 'Add exact `pnpm test:desktop-sidecar` and `pnpm package:desktop-spike` proof before approval.',
+      revisionTarget: 'spec',
+    })
+    expect(result.success).toBe(true)
+
+    queue = await readQueue()
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'exploring',
+      productBrief: { userJob: 'Prove a framework-neutral desktop sidecar.' },
+      acceptanceCriteria: [],
+      // The old records remain in historical evidence, but the effective
+      // current task excludes them behind the new plan revision boundary.
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+    })
+    expect(queue.tasks[0]!.spec).toBeUndefined()
+    expect(queue.tasks[0]!.sizePlan).toBeUndefined()
+    expect(queue.tasks[0]!.notes.at(-1)).toMatchObject({
+      content: 'Add exact `pnpm test:desktop-sidecar` and `pnpm package:desktop-spike` proof before approval.',
+      structured: {
+        event: 'document_revision_requested',
+        target: 'spec',
+        requiredAcceptanceCommands: ['pnpm test:desktop-sidecar', 'pnpm package:desktop-spike'],
+      },
+    })
+  })
+
+  it('retires the requested document while preserving task status', async () => {
+    let queue = await readQueue()
+    queue.tasks[0]!.status = 'spec_review'
+    queue.tasks[0]!.spec = buildableSpec()
+    queue.tasks[0]!.structuredSpec = boundedStructuredSpec()
+    queue.tasks[0]!.acceptanceCriteria = [{
+      id: 'old-ac',
+      description: 'The old plan passes.',
+      verifiedBy: 'review',
+      met: false,
+    }]
+    await writeQueue(queue)
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: 'task-001',
+      message: 'Retire this plan without changing the current lifecycle status.',
+      preserveStatus: true,
+      revisionTarget: 'spec',
+    })
+
+    expect(result.success).toBe(true)
+    queue = await readQueue()
+    expect(queue.tasks[0]).toMatchObject({ status: 'spec_review', acceptanceCriteria: [] })
+    expect(queue.tasks[0]!.spec).toBeUndefined()
+    expect(queue.tasks[0]!.structuredSpec).toBeUndefined()
   })
 
   it('can add a human steering note without reopening spec intake', async () => {

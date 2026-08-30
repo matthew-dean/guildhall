@@ -57,7 +57,10 @@ export function createProjectProjectionFreshnessWatcher(
       if (input.readRepositorySignature) {
         try {
           const signature = input.readRepositorySignature(projectRoot)
-          repositoryChanged = observedRepositories.has(projectRoot) &&
+          // Repository facts live outside the project database. Refresh once
+          // at startup, then only when Git state changes, so an old cached
+          // follow-up cannot survive a service restart.
+          repositoryChanged = !observedRepositories.has(projectRoot) ||
             observedRepositories.get(projectRoot) !== signature
           observedRepositories.set(projectRoot, signature)
         } catch {

@@ -116,6 +116,31 @@ afterEach(async () => {
 })
 
 describe('raiseEscalation', () => {
+  it('keeps nested-repository escalation state with the workspace task handle', async () => {
+    const nestedProjectPath = path.join(tmpDir, 'looma')
+    await fs.mkdir(nestedProjectPath, { recursive: true })
+    await fs.writeFile(
+      path.join(path.dirname(path.dirname(tasksPath)), 'allocation-manifest.json'),
+      JSON.stringify({ workspaceRoot: tmpDir }),
+      'utf8',
+    )
+    await writeSeed([seedTask({ projectPath: nestedProjectPath })])
+
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'Need a workspace-level owner decision',
+    })
+
+    expect(result.success).toBe(true)
+    expect(await readTaskEvidence(tmpDir, 'task-001', { kind: 'escalation' })).toHaveLength(1)
+    expect(await readTaskEvidence(nestedProjectPath, 'task-001', { kind: 'escalation' })).toEqual([])
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-001']?.openEscalationIds).toEqual(['esc-task-001-1'])
+    expect((await readTaskRuntimeStore(nestedProjectPath)).tasks['task-001']).toBeUndefined()
+  })
+
   it('appends an escalation with a stable id', async () => {
     const result = await raiseEscalation({
       tasksPath,
@@ -353,12 +378,28 @@ describe('raiseEscalation', () => {
       tasksPath,
       taskId: 'task-001',
       agentId: 'worker-agent',
-      reason: 'gate_hard_failure',
+      reason: 'decision_required',
       summary: 'typecheck keeps failing',
       details: 'Tried 3 times. Stack: tsc -b --verbose ...',
     })
     const task = await readEffectiveTask()
     expect(task.escalations[0]?.details).toContain('Stack: tsc')
+  })
+
+  it('rejects a hard-gate escalation that has no durable failed gate result', async () => {
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'gate_hard_failure',
+      summary: 'The build is allegedly broken outside this task.',
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringMatching(/recorded failed hard gate/i),
+    })
+    expect((await readEffectiveTask()).status).toBe('in_progress')
   })
 
   it('returns error for unknown task id', async () => {
@@ -408,6 +449,42 @@ describe('resolveEscalation', () => {
     expect(effective.escalations[0]?.resolvedBy).toBe('human')
   })
 
+  it('resolves matching duplicate recoveries together without clearing a distinct escalation', async () => {
+    const matching = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'decision_required',
+      summary: 'The same decision was recorded again.',
+    })
+    const distinct = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'reviewer-agent',
+      reason: 'spec_ambiguous',
+      summary: 'A distinct spec recovery remains open.',
+    })
+
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Proceed with the selected library.',
+      nextStatus: 'in_progress',
+      resolveEquivalent: true,
+    })
+
+    expect(result).toMatchObject({
+      success: true,
+      resolvedEscalationIds: ['esc-task-001-1', matching.escalationId],
+    })
+    const task = await readEffectiveTask()
+    expect(task.status).toBe('blocked')
+    expect(task.escalations.find(escalation => escalation.id === 'esc-task-001-1')?.resolvedAt).toBeTruthy()
+    expect(task.escalations.find(escalation => escalation.id === matching.escalationId)?.resolvedAt).toBeTruthy()
+    expect(task.escalations.find(escalation => escalation.id === distinct.escalationId)?.resolvedAt).toBeUndefined()
+  })
+
   it('persists a gate exception only from an explicit typed owner field', async () => {
     const proseOnly = await resolveEscalation({
       tasksPath,
@@ -418,6 +495,21 @@ describe('resolveEscalation', () => {
     })
     expect(proseOnly.success).toBe(true)
     expect((await readEffectiveTask()).gateScopeExceptions).toEqual([])
+
+    const checkedAt = new Date().toISOString()
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: `task-001-gate-typecheck-${checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+      taskId: 'task-001',
+      kind: 'gate_result',
+      recordedAt: checkedAt,
+      payload: {
+        gateId: 'typecheck',
+        command: 'pnpm typecheck',
+        type: 'hard',
+        passed: false,
+        checkedAt,
+      },
+    })
 
     const raised = await raiseEscalation({
       tasksPath,

@@ -1,13 +1,10 @@
-import {
-  readFileTool,
-  listFilesTool,
-  readTasksTool,
-} from '@guildhall/tools'
 import type { GuildDefinition } from '@guildhall/guilds'
 import type { SoftGateRubricItem } from '@guildhall/core'
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
 import type { AnyTool, Compactor, HookExecutor } from '@guildhall/engine'
+
+export const PERSONA_REVIEWER_MAX_TURNS = 12
 
 /**
  * Build the system prompt for a single persona reviewer. This is the
@@ -36,6 +33,8 @@ export function personaReviewerSystemPrompt(guild: GuildDefinition): string {
     '## How to review',
     '',
     'Read the task\'s spec, acceptance criteria, self-critique, changed files, and stated non-goals. Evaluate ONLY what falls in your lane and ONLY what the task or diff makes relevant — ignore concerns other experts are responsible for (they review independently).',
+    '',
+    'Start with the supplied review packet. It is the bounded handoff, not merely an index. Do not read every changed file in sequence. Use a read-only tool only when one exact review target cannot be decided from the packet, inspect the smallest relevant file set, then return the typed verdict.',
     '',
     'Treat yourself as a task-bounded adjudicator, not a free-floating architect. A blocking revision request must be anchored in at least one of:',
     '- a stated acceptance criterion that is unmet,',
@@ -74,10 +73,10 @@ export function personaReviewerSystemPrompt(guild: GuildDefinition): string {
 }
 
 /**
- * Create a one-shot reviewer scoped to a single persona. Tools are
- * read-only: the persona can read files and the task but cannot mutate
- * state. Session persistence is disabled — each fan-out call is a fresh
- * turn so personas don't contaminate each other across reviews.
+ * Create a one-shot reviewer scoped to a single persona. The bounded review
+ * packet is the default evidence surface; callers may add narrowly scoped
+ * read-only tools for explicit integrations. Session persistence is disabled
+ * so personas do not contaminate each other across reviews.
  */
 export function createPersonaReviewerAgent(
   guild: GuildDefinition,
@@ -94,18 +93,13 @@ export function createPersonaReviewerAgent(
     llm,
     systemPrompt: personaReviewerSystemPrompt(guild),
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
-    tools: [
-      readFileTool,
-      listFilesTool,
-      readTasksTool,
-      ...(opts.extraTools ?? []),
-    ],
+    tools: [...(opts.extraTools ?? [])],
     ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),
     ...(opts.compactor ? { compactor: opts.compactor } : {}),
     // engineeringDefaults and skills intentionally omitted — the persona's
     // own principles ARE its prompt floor. Layering defaults on top dilutes
     // the persona's voice.
     engineeringDefaults: [],
-    maxTurns: 3,
+    maxTurns: PERSONA_REVIEWER_MAX_TURNS,
   })
 }

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { BUILTIN_GUILDS } from '@guildhall/guilds'
-import { personaReviewerSystemPrompt } from '../persona-reviewer.js'
+import { PERSONA_REVIEWER_MAX_TURNS, personaReviewerSystemPrompt } from '../persona-reviewer.js'
 
 describe('personaReviewerSystemPrompt', () => {
+  it('leaves enough bounded turns to inspect referenced review evidence', () => {
+    expect(PERSONA_REVIEWER_MAX_TURNS).toBe(12)
+  })
+
   it('tells reviewers to block only on task-local regressions or unmet work', () => {
     const guild = BUILTIN_GUILDS.find((candidate) => candidate.slug === 'api-designer')
     expect(guild).toBeTruthy()

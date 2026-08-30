@@ -125,6 +125,7 @@ function packageScriptReferenceForCommand(
   projectPath: string,
 ): { script: string; parsed: NonNullable<ReturnType<typeof readPackageScripts>> } | null {
   const normalized = normalizeCommand(command)
+  if (!/^pnpm\s+/i.test(normalized)) return null
   const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
   const targetPath = dirMatch ? path.resolve(projectPath, dirMatch[1]!) : projectPath
   const scriptCommand = dirMatch?.[2] ?? normalized.replace(/^pnpm\s+/i, '')
@@ -142,10 +143,31 @@ export type InvalidAutomatedAcceptanceCommand = {
   reason: string
 }
 
+export type MissingAutomatedAcceptanceCommand = {
+  criterionId: string
+  description: string
+}
+
+/**
+ * `automated` is a typed shell-command verifier. Do not let a task enter an
+ * execution lane when it has promised automated proof but omitted the command
+ * that could produce it.
+ */
+export function findAutomatedAcceptanceCriteriaMissingCommands(
+  task: Pick<Task, 'acceptanceCriteria'>,
+): readonly MissingAutomatedAcceptanceCommand[] {
+  return (task.acceptanceCriteria ?? []).flatMap((criterion) => {
+    if (criterion.verifiedBy !== 'automated') return []
+    if (typeof criterion.command === 'string' && criterion.command.trim().length > 0) return []
+    return [{ criterionId: criterion.id, description: criterion.description }]
+  })
+}
+
 /** Keep acceptance gates on the project side of the Guildhall boundary. */
 export function findInvalidAutomatedAcceptanceCommands(input: {
   task: Pick<Task, 'acceptanceCriteria'>
   projectPath: string
+  allowMissingPackageScripts?: boolean
 }): readonly InvalidAutomatedAcceptanceCommand[] {
   const invalid: InvalidAutomatedAcceptanceCommand[] = []
   for (const criterion of input.task.acceptanceCriteria ?? []) {
@@ -161,7 +183,11 @@ export function findInvalidAutomatedAcceptanceCommands(input: {
       continue
     }
     const scriptReference = packageScriptReferenceForCommand(command, input.projectPath)
-    if (scriptReference && !scriptReference.parsed.scripts.has(scriptReference.script)) {
+    if (
+      scriptReference &&
+      !scriptReference.parsed.scripts.has(scriptReference.script) &&
+      input.allowMissingPackageScripts !== true
+    ) {
       invalid.push({
         criterionId: criterion.id,
         command,

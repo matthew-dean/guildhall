@@ -149,12 +149,11 @@ describe('buildInbox', () => {
       'proof_reconciliation',
       'import_draft_queue',
       'contract_result_review',
-      'lever_questions',
       'spec_fill_pending',
     ])
 
     expect(isAttentionOwnedInboxItem({ kind: 'workspace_import_pending' } as InboxItem)).toBe(true)
-    expect(isAttentionOwnedInboxItem({ kind: 'lever_questions' } as InboxItem)).toBe(true)
+    expect(isAttentionOwnedInboxItem({ kind: 'lever_questions' } as InboxItem)).toBe(false)
   })
 
   it('empty state: complete bootstrap, no tasks, no workspace signals, no default levers → no items', async () => {
@@ -411,6 +410,29 @@ describe('buildInbox', () => {
     expect(hit.detail).not.toMatch(/\d+ signals?/i)
   })
 
+  it('uses the persisted workspace-import status to retire an import reminder after dismissal', async () => {
+    await writeCompleteBootstrap()
+    await writeFile('README.md', '# hello')
+    await writeFile('package.json', '{}')
+
+    const items = buildInbox({
+      projectPath: tmpDir,
+      projectStateDir,
+      taskStateOverride: {
+        version: 1,
+        lastUpdated: '2026-08-30T00:00:00.000Z',
+        tasks: [{ id: 'task-workspace-import', status: 'exploring' }],
+      },
+      workspaceImportTaskStatus: 'done',
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+
+    expect(items.find(item => item.kind === 'workspace_import_pending')).toBeUndefined()
+  })
+
   it('proof_reconciliation: emitted when completed work still has unmet acceptance criteria', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
@@ -438,7 +460,7 @@ describe('buildInbox', () => {
       severity: 'medium',
       taskId: 'task-stale-proof',
       title: 'Review stale proof records',
-      actionHref: '/task/task-stale-proof?tab=spec',
+      actionHref: '/work?task=task-stale-proof',
       count: 1,
     })
     expect(hit.detail).toContain('Draft chapter in author voice')

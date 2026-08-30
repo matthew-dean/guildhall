@@ -24,7 +24,7 @@
 
   let { subView = null, onMigrate }: Props = $props()
 
-  type SettingSection = 'ready' | 'delivery' | 'providers' | 'coordinators' | 'identity' | 'profile' | 'developer'
+  type SettingSection = 'home' | 'ready' | 'delivery' | 'providers' | 'coordinators' | 'identity' | 'profile' | 'developer'
 
   const store = createSettingsStore(projectFetch)
   const settingsSections: Array<{ id: SettingSection; label: string }> = [
@@ -42,7 +42,7 @@
     if (value === 'routing') return 'coordinators'
     if (value === 'advanced') return 'developer'
     if (settingsSections.some(item => item.id === value)) return value as SettingSection
-    return 'ready'
+    return 'home'
   }
 
   const section = $derived(normalizeSection(subView))
@@ -52,7 +52,7 @@
   const intelligenceMoved = $derived(subView === 'learning' || subView === 'reintake' || subView === 'facts')
 
   function settingsSectionHref(id: SettingSection): string {
-    return projectActionHref(id === 'ready' ? '/settings/ready' : `/settings/${id}`)
+    return projectActionHref(id === 'home' ? '/settings' : `/settings/${id}`)
   }
 
   $effect(() => {
@@ -107,6 +107,9 @@
 {:else}
   <div class="settings-shell">
   <Stack gap="4">
+    <header class="settings-heading">
+      <h2>Settings</h2>
+    </header>
     <div class="settings-section-picker">
       <label class="settings-section-picker-label" for="settings-section-select">Section</label>
       <Select
@@ -135,25 +138,24 @@
       </nav>
     </Card>
 
-    {#if structureMoved}
-      <NoticeBand tone="neutral" role="note" label="Project structure" title="Graph review moved out of Settings" density="compact">
+    {#if section !== 'home' || structureMoved || intelligenceMoved}
+      {#if structureMoved}
+        <NoticeBand tone="neutral" role="note" label="Project map" title="Map review moved out of Settings" density="compact">
         {#snippet actions()}
-          <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/structure'))}>Open Structure</Button>
+          <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/map'))}>Open Map</Button>
         {/snippet}
-        <p>Project graph assignment and structural-map review now live in the focused Structure surface.</p>
-      </NoticeBand>
-    {:else if intelligenceMoved}
-      <NoticeBand tone="neutral" role="note" label="Project intelligence" title="Specialist review moved out of Settings" density="compact">
+        <p>Project context is available from the compact Map when you need it.</p>
+        </NoticeBand>
+      {:else if intelligenceMoved}
+        <NoticeBand tone="neutral" role="note" label="Project map" title="Project context moved out of Settings" density="compact">
         {#snippet actions()}
-          <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref(subView === 'facts' ? '/facts' : '/thread'))}>
-            {subView === 'facts' ? 'Open Facts' : 'Open Threads'}
-          </Button>
+          <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/map'))}>Open Map</Button>
         {/snippet}
-        <p>Facts, memory, and re-intake review no longer live inside Settings.</p>
-      </NoticeBand>
-    {:else if section === 'providers'}
-      <ProjectProvidersSection />
-    {:else if section === 'delivery'}
+        <p>Project context is available from the compact Map when you need it.</p>
+        </NoticeBand>
+      {:else if section === 'providers'}
+        <ProjectProvidersSection />
+      {:else if section === 'delivery'}
       <Card title="Delivery model" titleTag="h2">
         <Stack gap="4">
           {#if deliverySpineError}
@@ -198,16 +200,17 @@
           {/if}
         </Stack>
       </Card>
-    {:else if section === 'coordinators'}
-      <SettingsCoordinatorsPanel />
-    {:else if section === 'identity'}
-      <SettingsIdentityPanel {store} />
-    {:else if section === 'profile'}
-      <OperatingProfilePanel {store} />
-    {:else if section === 'developer'}
-      <DeveloperToolsPanel {store} {onMigrate} />
-    {:else}
-      <SettingsReadyPanel {store} {onMigrate} />
+      {:else if section === 'coordinators'}
+        <SettingsCoordinatorsPanel />
+      {:else if section === 'identity'}
+        <SettingsIdentityPanel {store} />
+      {:else if section === 'profile'}
+        <OperatingProfilePanel {store} />
+      {:else if section === 'developer'}
+        <DeveloperToolsPanel {store} {onMigrate} />
+      {:else}
+        <SettingsReadyPanel {store} {onMigrate} />
+      {/if}
     {/if}
   </Stack>
   </div>
@@ -217,6 +220,12 @@
   .settings-shell {
     container-type: inline-size;
     max-inline-size: 72rem;
+  }
+  .settings-heading h2 {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--gh-type-size-section-title);
+    line-height: var(--gh-type-line-height-tight);
   }
   .settings-section-picker {
     display: none;

@@ -431,6 +431,7 @@ export interface ProjectReleaseReadiness {
   verdict?: {
     state?: 'empty' | 'work_remaining' | 'blocked' | 'ready' | string
     label?: string
+    title?: string
     tone?: 'ok' | 'warn' | 'neutral' | string
     detail?: string
   }
@@ -977,6 +978,7 @@ export interface ProjectOrientationSpine {
     taskId?: string
     nodeId?: string
     title?: string
+    parentTaskId?: string
     scope?: 'included' | 'deferred' | string
     eligibilityReason?: string
     hierarchyRole?: string
@@ -1087,6 +1089,8 @@ export interface ContextDebugRecord {
 
 export interface DrawerPayload {
   task: Task
+  /** Current shared action packet from the same summary revision as `decision`. */
+  actionModel?: ProjectActionModel | null
   relatedTasks?: Task[]
   workProgress?: ServiceProjectSummary['workProgress']
   runStatus?: string
@@ -1439,6 +1443,7 @@ export interface StartReadiness {
   focusTaskId?: string
   focusTaskTitle?: string
   focusKind?: string
+  repositoryOperation?: 'push_branch' | 'open_pull_request'
   proofTaskIds?: string[]
   reviewTaskIds?: string[]
   count?: number
@@ -1461,10 +1466,21 @@ export interface ProjectAvailability {
 
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
+export type ProjectActionOperation = 'start_focused' | 'repair_spec' | 'push_branch' | 'open_pull_request'
+export type ProjectActionOwnerHeading =
+  | 'What needs your attention'
+  | 'Project update required'
+  | 'Spec repair needed'
+  | 'Work paused'
+  | 'Work is underway'
+  | 'Ready to continue'
+  | 'Release is ready'
 
 export interface ProjectAction {
   source?: ProjectActionSource | string
   label?: string
+  ownerHeading?: ProjectActionOwnerHeading | string
+  taskLabel?: string
   detail?: string
   content?: string
   buttonLabel?: string
@@ -1473,6 +1489,7 @@ export interface ProjectAction {
   code?: string
   taskId?: string
   inboxKind?: string
+  operation?: ProjectActionOperation
 }
 
 export interface ProjectActionModel {
@@ -1496,6 +1513,20 @@ export interface ProjectActionModel {
     freshIntakeNeeded?: boolean
     href?: string
     detail?: string
+  }
+  workSummary?: {
+    total: number
+    agentActive: number
+    paused: number
+    waiting: number
+    reviewWaiting: number
+    gatesWaiting: number
+    shaping: number
+    specRevisionQueued: number
+    readyForWorker: number
+    needsSpecCleanup: number
+    awaitingApproval: number
+    done: number
   }
 }
 
@@ -1664,6 +1695,7 @@ export interface ProjectDetail {
     execution?: {
       focusTaskId?: string
       focusTaskTitle?: string
+      count?: number
     }
     release?: {
       lifecycleState?: string
@@ -1796,6 +1828,10 @@ export interface ServiceDetail {
   partial?: boolean
   defaultProviderStatus?: ProviderStatus | null
   projects?: ServiceProjectSummary[]
+  fleetAttention?: {
+    projectCount: number
+    totalItems: number
+  }
 }
 
 export interface EventInner {

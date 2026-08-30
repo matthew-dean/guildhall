@@ -12,6 +12,7 @@ import {
   writeProjectTaskQueueWithSummary,
 } from '@guildhall/runtime/project-state-boundary'
 import { validateProductBriefGrounding } from '@guildhall/runtime/spec-quality'
+import { inferProjectRootFromSystemStatePath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product
@@ -73,6 +74,41 @@ const updateProductBriefInputSchema = z.object({
     .optional()
     .describe('Optional nested/serialized structured brief payload.'),
 })
+
+const updateProductBriefJsonSchema = {
+  type: 'object',
+  properties: {
+    userJob: { type: 'string', description: 'Who the task serves and what job it does for them.' },
+    whyItMattersNow: { type: 'string', description: 'Why this task matters now.' },
+    successMetric: { type: 'string', description: 'Observable outcome that proves the task succeeded.' },
+    nonGoals: {
+      oneOf: [
+        { type: 'array', items: { type: 'string' } },
+        { type: 'string' },
+      ],
+      description: 'Explicit scope boundary for this task.',
+    },
+    audience: { type: 'string' },
+    usageContext: { type: 'string' },
+    antiPatterns: {
+      oneOf: [
+        { type: 'array', items: { type: 'string' } },
+        { type: 'string' },
+      ],
+      description: 'Legacy alias for nonGoals.',
+    },
+    rolloutPlan: { type: 'string' },
+    brandInteractionNotes: { type: 'string' },
+    sourceCapabilityIds: { type: 'array', items: { type: 'string' } },
+    productBrief: {
+      oneOf: [
+        { type: 'string', description: 'Serialized structured brief payload.' },
+        { type: 'object', description: 'Structured brief payload using the fields above.' },
+      ],
+    },
+  },
+  additionalProperties: false,
+} as const
 
 export type UpdateProductBriefInput = z.input<typeof updateProductBriefInputSchema>
 export interface UpdateProductBriefResult {
@@ -345,7 +381,7 @@ export async function updateProductBrief(
     queue.lastUpdated = now
 
     if (readProjectStateAuthorityAtBoundary(input.tasksPath).authority === 'database') {
-      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : path.dirname(input.tasksPath)
+      const projectRoot = inferProjectRootFromSystemStatePath(input.tasksPath, task.projectPath)
       const pointMutation = writePromotedTaskDetailMutation(input.tasksPath, task.id, {
         projectId: path.basename(projectRoot),
         projectRoot,
@@ -376,7 +412,7 @@ export const updateProductBriefTool = defineTool({
   description:
     "Author or revise a task's product brief — the who / why now / success signal / non-goals layer that sits alongside the technical spec. Call this during exploring once you understand who the task serves, why the work matters now, how we'll know it worked, and what boundary it should keep. Re-authoring an approved brief drops the approval unless the core intent fields are unchanged.",
   inputSchema: updateProductBriefInputSchema,
-  jsonSchema: { type: 'object' },
+  jsonSchema: updateProductBriefJsonSchema,
   isReadOnly: () => false,
   execute: async (input, ctx) => {
     const target = resolveBriefTarget(input, ctx.metadata)

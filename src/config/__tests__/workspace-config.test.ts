@@ -13,6 +13,7 @@ import {
   writeAgentSettings,
   updateAgentSettings,
 } from '../workspace-config.js'
+import { resolveModelsForProvider, writeModelsForProvider } from '../schemas.js'
 
 const TMP = join(tmpdir(), `forge-ws-test-${process.pid}`)
 
@@ -119,6 +120,41 @@ describe('workspace-config', () => {
       expect(parsed.maxRevisions).toBe(5)
       expect(parsed.coordinators[0]?.domain).toBe('looma')
       expect(parsed.tags).toContain('ui')
+    })
+
+    it('preserves an explicit provider-scoped role override through a model update', () => {
+      const wsDir = join(TMP, 'provider-model-round-trip')
+      mkdirSync(wsDir)
+      writeFileSync(join(wsDir, FORGE_YAML_FILENAME), [
+        'name: Provider Model Round Trip',
+        'models:',
+        '  openai-api:',
+        '    spec: author-voice-spec-model',
+        '',
+      ].join('\n'))
+
+      const current = readWorkspaceConfig(wsDir)
+      const assignment = {
+        ...resolveModelsForProvider(current.models),
+        reviewer: 'adversarial-review-model',
+      }
+      writeWorkspaceConfig(wsDir, {
+        ...current,
+        models: writeModelsForProvider(current.models, undefined, assignment),
+      })
+
+      const updated = readWorkspaceConfig(wsDir)
+      expect(updated.models).toEqual({
+        'openai-api': {
+          spec: 'author-voice-spec-model',
+          reviewer: 'adversarial-review-model',
+        },
+      })
+      expect(readFileSync(join(wsDir, FORGE_YAML_FILENAME), 'utf8')).toContain([
+        'models:',
+        '  openai-api:',
+        '    spec: author-voice-spec-model',
+      ].join('\n'))
     })
 
     it('throws when guildhall.yaml is missing', () => {

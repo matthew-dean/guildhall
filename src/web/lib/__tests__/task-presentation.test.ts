@@ -35,7 +35,7 @@ describe('taskStagePresentation', () => {
     expect(stage.key).toBe('queued')
   })
 
-  it('recognizes spec_review component turns as queued spec work', () => {
+  it('presents spec_review component turns as owner review', () => {
     const stage = taskStagePresentation({
       kind: 'inflight',
       taskId: 'task-import-combobox',
@@ -47,11 +47,11 @@ describe('taskStagePresentation', () => {
       checklist: undefined,
     }, { runStatus: 'running' })
 
-    expect(stage.label).toBe('Queued')
-    expect(stage.key).toBe('queued')
+    expect(stage.label).toBe('Review spec')
+    expect(stage.key).toBe('spec_review')
   })
 
-  it('recognizes raw spec_review component tasks as queued spec work', () => {
+  it('presents raw spec_review tasks as owner review', () => {
     const stage = taskStagePresentation({
       id: 'task-import-combobox',
       title: 'Combobox',
@@ -61,8 +61,39 @@ describe('taskStagePresentation', () => {
       openQuestions: [],
     }, { runStatus: 'stopped' })
 
-    expect(stage.label).toBe('Paused')
-    expect(stage.key).toBe('paused')
+    expect(stage.label).toBe('Review spec')
+    expect(stage.key).toBe('spec_review')
+  })
+
+  it('presents coordinator-owned spec review as queued work instead of an owner action', () => {
+    const stage = taskStagePresentation({
+      id: 'task-coordinator-review',
+      title: 'Coordinator review',
+      status: 'spec_review',
+      specReviewGate: { authority: 'coordinator' },
+    }, { runStatus: 'stopped' })
+
+    expect(stage).toEqual({
+      label: 'Queued',
+      tone: 'neutral',
+      key: 'queued',
+    })
+  })
+
+  it('presents an unlisted spec review as queued when shared owner readiness names no review', () => {
+    const stage = taskStagePresentation({
+      id: 'task-unlisted-review',
+      title: 'Unlisted review',
+      status: 'spec_review',
+    }, {
+      ownerReviewTaskIds: [],
+    })
+
+    expect(stage).toEqual({
+      label: 'Queued',
+      tone: 'neutral',
+      key: 'queued',
+    })
   })
 
   it('presents Guildhall-owned queued work with the agent/running tone', () => {
@@ -103,6 +134,25 @@ describe('taskStagePresentation', () => {
     })
   })
 
+  it('keeps a paused focused task paused when its old worker assignment remains saved', () => {
+    const stage = taskStagePresentation({
+      id: 'task-paused',
+      title: 'Resume this exact work',
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+    }, {
+      runStatus: 'stopped',
+      focusTaskId: 'task-paused',
+      focusKind: 'paused_work',
+    })
+
+    expect(stage).toEqual({
+      label: 'Paused',
+      tone: 'neutral',
+      key: 'paused',
+    })
+  })
+
   it('presents ready work with unmet dependencies as waiting instead of hard blocked', () => {
     const stage = taskStagePresentation({
       id: 'task-storybook-proof',
@@ -123,7 +173,7 @@ describe('taskStagePresentation', () => {
     })
   })
 
-  it('keeps planning tasks in their planning state when prerequisites are still being shaped', () => {
+  it('presents planning tasks as waiting while prerequisites are still being shaped', () => {
     const stage = taskStagePresentation({
       id: 'task-runner',
       title: 'Implement a no-UI runner that builds a packet from fixture records.',
@@ -140,9 +190,28 @@ describe('taskStagePresentation', () => {
     })
 
     expect(stage).toEqual({
-      label: 'Paused',
-      tone: 'neutral',
-      key: 'paused',
+      label: 'Waiting',
+      tone: 'warn',
+      key: 'waiting_dependency',
+    })
+  })
+
+  it('presents the shared focused brief review as owner work while the coordinator is stopped', () => {
+    const stage = taskStagePresentation({
+      id: 'task-086',
+      status: 'exploring',
+      spec: '## Product brief\n\nProve the packaged sidecar.',
+      openQuestions: [],
+    }, {
+      runStatus: 'stopped',
+      focusTaskId: 'task-086',
+      focusKind: 'brief_cleanup',
+    })
+
+    expect(stage).toEqual({
+      label: 'Review brief',
+      tone: 'warn',
+      key: 'brief_review',
     })
   })
 

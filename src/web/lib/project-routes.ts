@@ -41,6 +41,23 @@ export function projectTaskHref(projectId: string, taskId: string): string {
   return `/projects/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}`
 }
 
+/**
+ * A required project repair must return an owner to the work item that
+ * triggered it. Repair is an interruption, not a second navigation task.
+ */
+export function projectTaskRepairHref(projectId: string, taskId: string): string {
+  const params = new URLSearchParams({ view: 'queue', task: taskId, repair: 'migration' })
+  return `${projectHref(projectId, '/work')}?${params}`
+}
+
+/**
+ * A project update is a recoverable routing condition, not approval feedback.
+ * Keep its recognition shared so every approval surface reaches the same repair.
+ */
+export function isRequiredProjectMigrationError(message?: string | null): boolean {
+  return /^Run required Guildhall migration\b/i.test(message?.trim() ?? '')
+}
+
 export function currentProjectHref(suffix = '/thread', explicitProjectId?: string | null): string {
   const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
   if (!projectId) return '/projects'
@@ -68,6 +85,11 @@ export function projectActionHref(href: string, explicitProjectId?: string | nul
   if (url.pathname === '/task' || url.pathname.startsWith('/task/')) {
     const taskId = url.pathname.slice('/task/'.length)
     return taskId ? `${projectTaskHref(projectId, decodeURIComponent(taskId))}${url.search}${url.hash}` : href
+  }
+  if (url.pathname === '/migrations' || url.pathname.startsWith('/migrations/')) {
+    const repair = new URLSearchParams(url.search)
+    repair.set('repair', 'migration')
+    return `${projectHref(projectId, '/overview')}?${repair.toString()}${url.hash}`
   }
   const projectSurface =
     url.pathname === '/overview' ||

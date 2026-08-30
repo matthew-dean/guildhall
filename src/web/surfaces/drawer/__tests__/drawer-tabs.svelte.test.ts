@@ -518,6 +518,27 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Task: 400 chars')).toBeInTheDocument()
   })
 
+  it('puts an unshared task branch decision before provenance details', async () => {
+    const onOpenPullRequest = vi.fn()
+    render(ProvenanceTab, {
+      task: task({
+        gitStory: {
+          state: 'no_upstream',
+          repoRoot: '/tmp/guildhall/task-link-editor',
+          inspectedPath: '/tmp/guildhall/task-link-editor',
+          reason: 'guildhall/task-link-editor has no upstream branch.',
+          nextAction: 'Set an upstream branch or open a PR for this branch.',
+          inspectedAt: now,
+        },
+      }),
+      onOpenPullRequest,
+    })
+
+    expect(screen.getByText('Branch needs a decision')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Open pull request' }))
+    expect(onOpenPullRequest).toHaveBeenCalledOnce()
+  })
+
   it('renders revision history, gate failures, and open versus resolved escalations', () => {
     render(HistoryTab, { task: task() })
 
@@ -761,5 +782,35 @@ describe('shared detail primitives', () => {
     expect(onYes).toHaveBeenCalledOnce()
     expect(onDifferent).toHaveBeenCalledWith('Keep drag handles separate.')
     expect(onNo).toHaveBeenCalledOnce()
+  })
+
+  it('puts a pending spec approval before the long-form spec material', async () => {
+    const onApproveSpec = vi.fn()
+    const rendered = render(SpecTab, {
+      task: task({
+        status: 'spec_review',
+        spec: '## Summary\nBuild the requested editor control.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'The control is usable.', met: false }],
+        productBrief: { userJob: 'Use the editor control.', successMetric: 'The control works.', antiPatterns: [], authoredAt: now },
+      }),
+      busy: false,
+      onApproveBrief: vi.fn(),
+      onApproveSpec,
+      onPause: vi.fn(),
+      onShelve: vi.fn(),
+      onUnshelve: vi.fn(),
+      onResolveEscalation: vi.fn(),
+      onRunEscalationAction: vi.fn(),
+      onSendFollowUp: vi.fn(),
+      onAddAcceptance: vi.fn(),
+      onSetAcceptanceCommand: vi.fn(),
+    })
+
+    const approval = screen.getByRole('button', { name: 'Approve spec' })
+    const spec = screen.getByRole('heading', { name: 'Spec' })
+    expect(approval.compareDocumentPosition(spec) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await userEvent.click(approval)
+    expect(onApproveSpec).toHaveBeenCalledOnce()
+    rendered.unmount()
   })
 })

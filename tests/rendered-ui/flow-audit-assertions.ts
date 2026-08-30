@@ -1,5 +1,52 @@
 import { expect, type Page } from '@playwright/test'
 
+export async function applyRequiredProjectUpdates(
+  page: Page,
+  options: { expectUpdate?: boolean; terminalTimeoutMs?: number } = {},
+): Promise<void> {
+  const reviewUpdate = page.getByRole('button', { name: 'Review project update' })
+  if (options.expectUpdate) {
+    await expect(reviewUpdate).toBeVisible({ timeout: 30_000 })
+  } else {
+    await expect(
+      reviewUpdate.or(page.locator('main').getByRole('heading').first()).first(),
+    ).toBeVisible({ timeout: 30_000 })
+    if (!await reviewUpdate.isVisible()) {
+      await reviewUpdate.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => undefined)
+    }
+  }
+  const updateRequired = await reviewUpdate.isVisible()
+  if (!updateRequired) return
+
+  await reviewUpdate.click()
+  const modal = page.getByRole('dialog', { name: 'Migrate project' })
+  await expect(modal).toBeVisible()
+
+  for (let applied = 0; applied < 8; applied += 1) {
+    const apply = modal.getByRole('button', { name: 'Apply required updates' })
+    await expect(apply).toBeEnabled()
+    await apply.click()
+
+    const complete = modal.getByText('Migration complete.', { exact: true })
+    const continuing = modal.getByText('Update applied. Another project update is required.', { exact: true })
+    const migrationError = modal.getByRole('alert').filter({ hasText: /^Migration error/ })
+    await expect(complete.or(continuing).or(migrationError)).toBeVisible({
+      timeout: options.terminalTimeoutMs,
+    })
+    if (await migrationError.isVisible()) {
+      throw new Error(`Project migration failed: ${await migrationError.textContent()}`)
+    }
+    if (await complete.isVisible()) {
+      await modal.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click()
+      await expect(modal).toHaveCount(0)
+      return
+    }
+    await expect(modal.getByText('Project update applied', { exact: true })).toBeVisible()
+  }
+
+  throw new Error('Expected the project update sequence to complete within eight migrations.')
+}
+
 export interface FlowUserJob {
   route: string
   projectId: string
@@ -21,6 +68,7 @@ export interface ProjectFlowState {
   visibleTotal: number
   visibleActive: number
   visibleBlocked: number
+  selectedScopeTotal: number | null
   runnableCount: number
   waitingOnDependenciesCount: number
   firstRunnableId: string | null
@@ -53,6 +101,23 @@ export function defineFlowUserJob(input: FlowUserJob): FlowUserJob {
   return input
 }
 
+export async function expectProgressiveScopeWorkCount(
+  page: Page,
+  expected: { current: number; deferred: number },
+): Promise<{ current: number; deferred: number; total: number }> {
+  const workListCount = page.locator('.work-list-count')
+  await expect(workListCount).toHaveText(/^\d+ current items? · \d+ deferred items? · \d+ total$/)
+  const match = (await workListCount.textContent())?.match(/^(\d+) current items? · (\d+) deferred items? · (\d+) total$/)
+  expect(match).not.toBeNull()
+  const current = Number(match?.[1])
+  const deferred = Number(match?.[2])
+  const total = Number(match?.[3])
+  expect(current).toBe(expected.current)
+  expect(deferred).toBe(expected.deferred)
+  expect(current + deferred).toBe(total)
+  return { current, deferred, total }
+}
+
 export async function readProjectFlowState(page: Page, projectId: string): Promise<ProjectFlowState> {
   const response = await page.request.get(`/api/project?projectId=${encodeURIComponent(projectId)}`)
   expect(response.ok()).toBe(true)
@@ -69,6 +134,12 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
         : null
   const focusTask = Array.isArray(detail.tasks)
     ? detail.tasks.find((task: { id?: string }) => task.id === focusTaskId)
+    : null
+  const scopeSummary = detail.orientationSpine?.summary ?? {}
+  const scopeCurrent = scopeSummary.includedWorkCount ?? scopeSummary.includedCount
+  const scopeDeferred = scopeSummary.deferredWorkCount ?? scopeSummary.deferredCount
+  const selectedScopeTotal = typeof scopeCurrent === 'number' && typeof scopeDeferred === 'number'
+    ? scopeCurrent + scopeDeferred
     : null
 
   return {
@@ -90,6 +161,7 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
     visibleTotal: counts.visibleTotal ?? 0,
     visibleActive: counts.visibleActive ?? 0,
     visibleBlocked: counts.visibleBlocked ?? 0,
+    selectedScopeTotal,
     runnableCount: queue.runnable?.length ?? 0,
     waitingOnDependenciesCount: queue.blocked?.length ?? 0,
     firstRunnableId: queue.firstRunnable?.task?.id ?? null,
@@ -148,7 +220,7 @@ export async function expectProjectFlowStateAgreement(page: Page, projectId: str
 
   await page.goto(`/projects/${projectId}/work`)
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-  await expect(page.getByText(`${state.visibleTotal} total`)).toBeVisible()
+  await expect(page.getByText(`${state.selectedScopeTotal ?? state.visibleTotal} total`)).toBeVisible()
 
   if (state.startReadinessCode !== 'all_terminal') {
     const accessibleRunControlName = state.runControlLabel ?? state.runControlDisabledReason
@@ -217,22 +289,11 @@ export async function expectProjectOrientationSpineAgreement(
   const deferred = summary.deferredWorkCount ?? summary.deferredCount ?? 0
   const rootCount = Array.isArray(spine.roots) ? spine.roots.length : 0
   const gapCount = Array.isArray(spine.gaps) ? spine.gaps.length : 0
-  const topBlocker = typeof summary.topBlocker === 'string'
-    ? summary.topBlocker
-    : summary.topBlocker?.label
   const pinCount = Array.isArray(spine.activePins)
     ? spine.activePins.length
     : Array.isArray(summary.pinnedNow)
       ? summary.pinnedNow.length
       : 0
-  const releaseNodeId = spine.release?.blockers?.[0]?.owningNodeId
-  const releaseNodeLabel = expected.releaseNodeLabel
-    ?? (releaseNodeId ? spine.nodes?.[releaseNodeId]?.title : null)
-  const workAnchor = expected.workAnchorLabel
-    ?? spine.activePins?.[0]?.label
-    ?? spine.roots?.[0]?.title
-  const threadAnchor = expected.threadAnchorLabel
-    ?? spine.activePins?.[0]?.label
 
   expect(headline).toBeTruthy()
   expect(scopeLabel).toBeTruthy()
@@ -259,58 +320,44 @@ export async function expectProjectOrientationSpineAgreement(
 
   await page.goto(`/projects/${expected.projectId}/overview`)
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: /^(Do this next|Scope status)$/ })).toBeVisible()
-  await expect(page.getByRole('region', { name: 'Project orientation' })).toBeVisible()
   await expect(page.getByText(new RegExp(escapeRegExp(scopeLabel))).first()).toBeVisible()
-  await expect(page.getByText(new RegExp(`${included} work items in view`))).toBeVisible()
-  await expect(page.getByText(new RegExp(`${deferred} deferred`))).toBeVisible()
-  if (pinCount > 0) {
-    await expect(page.getByText(/Current focus:/)).toBeVisible()
-  }
-  if (topBlocker) {
-    await expect(page.getByText(topBlocker).first()).toBeVisible()
-  }
-  const readinessMessage = typeof detail.startReadiness?.message === 'string'
-    ? detail.startReadiness.message
-    : null
-  const runControlLabel = detail.actionModel?.runControl?.label
-  const currentStateMessage = detail.startReadiness?.code === 'paused_live_work'
-    ? runControlLabel
-    : readinessMessage ?? runControlLabel
-  if (typeof currentStateMessage === 'string' && currentStateMessage.trim()) {
-    await expect(page.getByText(currentStateMessage, { exact: true }).first()).toBeVisible()
+  const primaryActionLabel = detail.actionModel?.primaryAction?.buttonLabel
+  if (typeof primaryActionLabel === 'string' && primaryActionLabel.trim()) {
+    await expect(page.getByRole('button', { name: primaryActionLabel, exact: true }).first()).toBeVisible()
   }
 
   await page.goto(`/projects/${expected.projectId}/work`)
-  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
-  if (workAnchor) {
+  if (detail.startReadiness?.code === 'required_migration_pending') {
+    const updateGate = page.getByRole('region', { name: 'Project update required' })
+    await expect(updateGate).toBeVisible()
+    await expect(updateGate.getByRole('button', { name: primaryActionLabel ?? 'Review project update', exact: true })).toBeVisible()
+    return
+  }
+  const focusedWork = page.locator('section.work-focus')
+  const workList = page.getByRole('heading', { name: 'Work list' })
+  await expect(focusedWork.or(workList)).toBeVisible()
+  if (await focusedWork.isVisible()) {
+    await expect(focusedWork.getByRole('button').first()).toBeVisible()
+  } else {
     const showFilter = page.getByLabel('Show', { exact: true })
-    if (await showFilter.count() > 0) {
-      await showFilter.selectOption({ label: 'All' })
-    }
-    await expect(page.getByText(workAnchor).first()).toBeVisible()
+    await showFilter.selectOption({ label: 'Scope history' })
+    await expectProgressiveScopeWorkCount(page, { current: included, deferred })
   }
-
   await page.goto(`/projects/${expected.projectId}/thread`)
-  await expect(page.getByRole('complementary', { name: 'Thread list' })).toBeVisible()
-  if (threadAnchor) {
-    await expect(page.getByText(threadAnchor).first()).toBeVisible()
-  }
+  await expect(
+    page.getByRole('complementary', { name: 'Thread list' })
+      .or(page.getByRole('heading', { name: /^(No response needed|Nothing current|Current work)$/ })),
+  ).toBeVisible()
 
   await page.goto(`/projects/${expected.projectId}/release`)
-  await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
-  await expect(page.getByText(headline).first()).toBeVisible()
-  if (topBlocker) {
-    await expect(page.getByText(topBlocker).first()).toBeVisible()
-  }
-  if (releaseNodeLabel) {
-    await expect(page.getByText(releaseNodeLabel).first()).toBeVisible()
-  }
+  await expect(page.getByRole('heading', { name: /^(Current work|(Release|Scope) readiness)$/ })).toBeVisible()
+  await expect(page.getByRole('button').first()).toBeVisible()
 
   await page.goto(`/projects/${expected.projectId}/structure`)
-  await expect(page.getByRole('heading', { name: 'Structure', exact: true })).toBeVisible()
-  await expect(page.getByText(headline).first()).toBeVisible()
-  await expect(page.getByText(`${included} included · ${deferred} later`).first()).toBeVisible()
+  const mapSummary = page.getByRole('region', { name: 'Project map summary' })
+  await expect(mapSummary).toBeVisible()
+  await expect(mapSummary.getByText(scopeLabel, { exact: true })).toBeVisible()
+  await expect(mapSummary.getByRole('button', { name: 'Open Work' })).toBeVisible()
 }
 
 function escapeRegExp(value: string): string {

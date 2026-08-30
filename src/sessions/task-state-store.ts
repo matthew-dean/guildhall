@@ -10,30 +10,40 @@ import {
   extractStructuredSelfCritique,
   type TaskEvidenceKind,
   TaskRuntimeStateStore,
+  TaskWorkspaceState,
   TaskWorkspaceStateStore,
-  type TaskRuntimeState,
-  type TaskWorkspaceState,
+  TaskRuntimeState,
 } from '@guildhall/core'
 import { atomicWriteBytes, atomicWriteText } from './atomic.js'
 import {
   getProjectLocalHistoryDir,
+  getProjectSystemStatePath,
   getProjectTaskLocalHistoryDir,
 } from './local-history.js'
 import {
   upsertProjectStateDatabaseTaskProof,
+  upsertProjectStateDatabaseTaskEvidenceCurrent,
+  acknowledgeProjectStateDatabaseTaskEvidenceOutbox,
   upsertProjectStateDatabaseTaskProofs,
   replaceProjectStateDatabaseTaskRuntimes,
   replaceProjectStateDatabaseTaskWorkspaces,
+  patchProjectStateDatabaseTaskRuntime,
+  patchProjectStateDatabaseTaskWorkspace,
+  clearProjectStateDatabaseTaskRuntime,
+  clearProjectStateDatabaseTaskWorkspace,
   reconcileProjectStateDatabaseTaskOverlays,
   readProjectStateDatabaseTaskOverlayStores,
   appendProjectStateDatabaseTaskEvidence,
   compactProjectStateDatabaseTaskEvidenceHistory,
   importProjectStateDatabaseTaskEvidence,
   readProjectStateDatabaseCurrentAuthority,
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   readProjectStateDatabaseTaskEvidenceBoundary,
   readProjectStateDatabaseTaskEvidenceAuthority,
+  readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath,
   readProjectStateDatabaseTaskEvidenceHistory,
   readProjectStateDatabaseTaskEvidenceHistoryAll,
+  readProjectStateDatabaseTaskEvidenceOutbox,
   projectStateDatabasePath,
   setProjectStateDatabaseTaskEvidenceAuthority,
 } from './project-state-database.js'
@@ -105,8 +115,8 @@ function boundedEvidenceLines(lines: readonly string[], kind: TaskEvidenceKind):
   return retained
 }
 
-async function withTaskEvidenceLock<T>(projectRoot: string, work: () => Promise<T>): Promise<T> {
-  const lockPath = path.join(getProjectLocalHistoryDir(projectRoot), TASK_EVIDENCE_LOCK_DIR, TASK_EVIDENCE_LOCK_FILE)
+async function withTaskEvidenceLockAtHistoryRoot<T>(historyRoot: string, work: () => Promise<T>): Promise<T> {
+  const lockPath = path.join(historyRoot, TASK_EVIDENCE_LOCK_DIR, TASK_EVIDENCE_LOCK_FILE)
   await fs.mkdir(path.dirname(lockPath), { recursive: true })
   const deadline = Date.now() + TASK_EVIDENCE_LOCK_MAX_AGE_MS
   let handle: import('node:fs/promises').FileHandle | null = null
@@ -138,6 +148,10 @@ async function withTaskEvidenceLock<T>(projectRoot: string, work: () => Promise<
     await handle.close().catch(() => undefined)
     await fs.rm(lockPath, { force: true }).catch(() => undefined)
   }
+}
+
+async function withTaskEvidenceLock<T>(projectRoot: string, work: () => Promise<T>): Promise<T> {
+  return withTaskEvidenceLockAtHistoryRoot(getProjectLocalHistoryDir(projectRoot), work)
 }
 
 async function appendBoundedEvidenceLine(
@@ -229,22 +243,30 @@ async function appendCompressedTaskEvidence(
   projectRoot: string,
   event: TaskEvidenceEvent,
 ): Promise<void> {
-  const file = compressedTaskEvidencePath(projectRoot, event.taskId, event.kind)
+  await appendCompressedTaskEvidenceAtPath(compressedTaskEvidencePath(projectRoot, event.taskId, event.kind), event)
+}
+
+async function appendCompressedTaskEvidenceAtPath(
+  file: string,
+  event: TaskEvidenceEvent,
+): Promise<void> {
   let raw = ''
   try {
     raw = gunzipSync(await fs.readFile(file)).toString('utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
-  const existingLines = raw.split('\n').filter(line => line.trim())
-  if (existingLines.some(line => {
-    try {
-      return TaskEvidenceEvent.parse(JSON.parse(line)).id === event.id
-    } catch {
-      return false
-    }
-  })) return
-  const lines = boundedEvidenceLines([...existingLines, JSON.stringify(event)], event.kind)
+  const existing = raw.split('\n').flatMap(line => {
+    if (!line.trim()) return []
+    const parsed = TaskEvidenceEvent.safeParse(JSON.parse(line))
+    return parsed.success ? [parsed.data] : []
+  })
+  const existingIndex = existing.findIndex(candidate => candidate.id === event.id)
+  if (existingIndex >= 0 && JSON.stringify(existing[existingIndex]) === JSON.stringify(event)) return
+  const next = existingIndex >= 0
+    ? existing.map((candidate, index) => index === existingIndex ? event : candidate)
+    : [...existing, event]
+  const lines = boundedEvidenceLines(next.map(candidate => JSON.stringify(candidate)), event.kind)
   await fs.mkdir(path.dirname(file), { recursive: true })
   atomicWriteBytes(file, gzipSync(Buffer.from(`${lines.join('\n')}\n`, 'utf8'), { level: 9 }))
 }
@@ -300,8 +322,13 @@ export async function upsertTaskRuntimeState(
   taskId: string,
   patch: Partial<Omit<TaskRuntimeState, 'taskId'>> & { updatedAt?: string },
 ): Promise<TaskRuntimeState> {
-  const store = await readTaskRuntimeStore(projectRoot)
   const updatedAt = patch.updatedAt ?? nowIso()
+  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+    return TaskRuntimeState.parse(
+      patchProjectStateDatabaseTaskRuntime(projectRoot, taskId, patch, updatedAt),
+    )
+  }
+  const store = await readTaskRuntimeStore(projectRoot)
   const next = {
     ...(store.tasks[taskId] ?? { taskId, updatedAt }),
     ...patch,
@@ -315,6 +342,10 @@ export async function upsertTaskRuntimeState(
 }
 
 export async function clearTaskRuntimeState(projectRoot: string, taskId: string): Promise<void> {
+  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+    clearProjectStateDatabaseTaskRuntime(projectRoot, taskId)
+    return
+  }
   const store = await readTaskRuntimeStore(projectRoot)
   if (!store.tasks[taskId]) return
   delete store.tasks[taskId]
@@ -373,8 +404,13 @@ export async function upsertTaskWorkspaceState(
   taskId: string,
   patch: Partial<Omit<TaskWorkspaceState, 'taskId'>> & { updatedAt?: string },
 ): Promise<TaskWorkspaceState> {
-  const store = await readTaskWorkspaceStore(projectRoot)
   const updatedAt = patch.updatedAt ?? nowIso()
+  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+    return TaskWorkspaceState.parse(
+      patchProjectStateDatabaseTaskWorkspace(projectRoot, taskId, patch, updatedAt),
+    )
+  }
+  const store = await readTaskWorkspaceStore(projectRoot)
   const next = {
     ...(store.workspaces[taskId] ?? { taskId, updatedAt }),
     ...patch,
@@ -388,6 +424,10 @@ export async function upsertTaskWorkspaceState(
 }
 
 export async function clearTaskWorkspaceState(projectRoot: string, taskId: string): Promise<void> {
+  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+    clearProjectStateDatabaseTaskWorkspace(projectRoot, taskId)
+    return
+  }
   const store = await readTaskWorkspaceStore(projectRoot)
   if (!store.workspaces[taskId]) return
   delete store.workspaces[taskId]
@@ -422,7 +462,12 @@ export async function appendTaskEvidence(
           // (review summaries, checkpoints, etc.). The database writer keeps
           // that bounded projection in sync without advancing project state;
           // compressed history remains the compatibility read owner here.
-          appendProjectStateDatabaseTaskEvidence(projectRoot, durable, TASK_EVIDENCE_RETENTION.note)
+          upsertProjectStateDatabaseTaskEvidenceCurrent(projectRoot, {
+            taskId,
+            kind: durable.kind,
+            recordedAt: durable.recordedAt,
+            payload: durable.payload,
+          })
           return parsed
         }
         appendProjectStateDatabaseTaskEvidence(projectRoot, durable, TASK_EVIDENCE_RETENTION.note)
@@ -459,6 +504,33 @@ export async function appendTaskEvidence(
     markProjectSummaryStale(projectRoot)
     return parsed
   })
+}
+
+/** Flush the transactional SQLite outbox into compressed history, then acknowledge it. */
+export async function flushTaskEvidenceOutboxForTasksPath(
+  tasksPath: string,
+  taskId?: string,
+): Promise<number> {
+  const authority = readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath(tasksPath)
+  if (authority === 'database' || authority === 'legacy') return 0
+  if (authority !== 'compressed') {
+    throw new Error('Task evidence migration required before task-handle history writes')
+  }
+  const stateDir = path.dirname(path.resolve(tasksPath))
+  if (path.basename(stateDir) !== 'project-state') {
+    throw new Error('Compressed task evidence requires a system project-state task handle')
+  }
+  const historyRoot = path.dirname(stateDir)
+  let pending: TaskEvidenceEvent[] = []
+  await withTaskEvidenceLockAtHistoryRoot(historyRoot, async () => {
+    pending = readProjectStateDatabaseTaskEvidenceOutbox(tasksPath, taskId)
+    for (const event of pending) {
+      const file = path.join(historyRoot, COMPRESSED_TASK_EVIDENCE_DIR, event.taskId, `${event.kind}.jsonl.gz`)
+      await appendCompressedTaskEvidenceAtPath(file, compactTaskEvidenceEvent(event))
+    }
+    acknowledgeProjectStateDatabaseTaskEvidenceOutbox(tasksPath, pending)
+  })
+  return pending.length
 }
 
 export interface TaskEvidenceCompactionResult {
@@ -812,8 +884,17 @@ export async function readTaskEvidence(
     return history
   }
   if (currentAuthority === 'database' && evidenceAuthority === 'compressed') {
-    return (await readCompressedTaskEvidence(projectRoot, taskId, kinds))
-      .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt) || a.id.localeCompare(b.id))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    try {
+      await flushTaskEvidenceOutboxForTasksPath(tasksPath, taskId)
+    } catch {
+      // The SQLite rows remain the durable outbox. Merge them below so a
+      // mirror filesystem failure cannot hide committed history from reads.
+    }
+    const compressed = await readCompressedTaskEvidence(projectRoot, taskId, kinds)
+    const pending = readProjectStateDatabaseTaskEvidenceOutbox(tasksPath, taskId)
+      .filter(event => kinds.includes(event.kind))
+    return mergeTaskEvidence(pending, compressed)
   }
   if (currentAuthority === 'database' && opts.allowLegacy !== true) {
     const legacyFiles: string[] = []

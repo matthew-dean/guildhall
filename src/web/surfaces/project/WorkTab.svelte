@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
-  import { tick } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import Card from '../../lib/ui-compat/Card.svelte'
   import CardList from '../../lib/CardList.svelte'
   import CardListItem from '../../lib/CardListItem.svelte'
@@ -15,21 +15,16 @@
   import SegmentedControl from '../../lib/SegmentedControl.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
-  import { friendlyPriority } from '../../lib/display.js'
-  import { friendlyTaskId } from '../../lib/identifier-labels.js'
+  import { taskDisplayKey } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { sourceRefsSummary } from '../../lib/source-refs.js'
-  import { taskGroundingDetail } from '../../lib/task-grounding.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
-  import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
-  import { hasUnmetDependencies, unmetDependencyIds } from '../../lib/task-dependencies.js'
+  import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { isCompleteForWorkerHandoff, needsSourceRecoveryShaping, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
-  import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
-  import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
-  import { deliveryProgressBadge, type DeliveryProgressBadge } from '../../lib/work-progress-display.js'
-  import { orientationPathByWorkId } from '../../lib/orientation-paths.js'
+  import { taskRunActionLabel, taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
+  import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
   import { taskDisplayLabel, taskSourceQuestion } from '@guildhall/shared'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
@@ -40,32 +35,8 @@
     mode?: 'list' | 'board'
   }
 
-  type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
-  type SortDir = 'asc' | 'desc'
   type WorkView = 'list' | 'board'
-  type WorkFilter = 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'review' | 'needs-you'
-
-  const STATUS_SORT_ORDER: Record<string, number> = {
-    proposed: 0,
-    exploring: 1,
-    spec_review: 2,
-    ready: 3,
-    pending: 3,
-    in_progress: 4,
-    review: 5,
-    gate_check: 6,
-    blocked: 7,
-    shelved: 8,
-    pending_pr: 9,
-    done: 10,
-  }
-
-  const PRIORITY_SORT_ORDER: Record<string, number> = {
-    critical: 0,
-    high: 1,
-    normal: 2,
-    low: 3,
-  }
+  type WorkFilter = 'current' | 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'review' | 'needs-you'
 
   let { detail, mode = 'list' }: Props = $props()
 
@@ -90,8 +61,6 @@
   })
 
   let progress = $state('Loading...')
-  let sortKey = $state<SortKey>('updated')
-  let sortDir = $state<SortDir>('desc')
   let routeWorkView = $state<WorkView>('list')
   let workFilter = $state<WorkFilter>('queued')
   let partFilter = $state('all')
@@ -100,9 +69,12 @@
   let selectedWorkId = $state<string | null>(null)
   let runWorkBusyId = $state<string | null>(null)
   let runWorkActiveId = $state<string | null>(null)
+  let runWorkObservedActive = $state(false)
+  let runWorkStartConfirmationTimer: ReturnType<typeof setTimeout> | null = null
   let runWorkError = $state<string | null>(null)
   let inventoryLoadBusy = $state(false)
   let pendingRouteScrollTaskId = $state<string | null>(null)
+  let pendingLocalSelectionTaskId = $state<string | null>(null)
   const workRowEls = new Map<string, HTMLElement>()
 
   const viewOptions = [
@@ -111,8 +83,9 @@
   ]
 
   const workFilterOptions = [
+    { value: 'current', label: 'Current work' },
     { value: 'queued', label: 'Ready to run' },
-    { value: 'scope', label: 'Current scope' },
+    { value: 'scope', label: 'Scope history' },
     { value: 'planning', label: 'Planning' },
     { value: 'open', label: 'Open' },
     { value: 'all', label: 'All' },
@@ -126,7 +99,6 @@
   const activeWorkView = $derived<WorkView>(routeWorkView)
   const hierarchy = $derived(buildWorkHierarchy(tasks))
   const deliveryQueue = $derived(detail.deliverySpine?.queue ?? null)
-  const orientationPaths = $derived(orientationPathByWorkId(detail.orientationSpine))
   const deliveryFirstRunnable = $derived(deliveryQueue?.firstRunnable ?? null)
   const projectRunning = $derived(detail.run?.status === 'running')
   const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
@@ -178,8 +150,9 @@
     }
     return new Set<string>()
   })
+  const selectedScopeRows = $derived(detail.orientationSpine?.scopeRows ?? [])
   const scopeTaskIds = $derived.by(() => {
-    const ids = (detail.orientationSpine?.scopeRows ?? [])
+    const ids = selectedScopeRows
       .map(row => row.taskId)
       .filter((id): id is string => Boolean(id))
     return new Set(ids)
@@ -189,29 +162,15 @@
   // reviewable from task prose or a route-local status scan.
   const ownerReviewTaskIds = $derived.by(() => new Set(detail.startReadiness?.reviewTaskIds ?? []))
   const scopeByTaskId = $derived.by(() => {
-    const entries = (detail.orientationSpine?.scopeRows ?? [])
+    const entries = selectedScopeRows
       .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
       .map(row => [row.taskId, row.scope] as const)
     return new Map(entries)
   })
-  const scopeRowByTaskId = $derived.by(() => {
-    const entries = (detail.orientationSpine?.scopeRows ?? [])
+  const handoffStateByTaskId = $derived.by(() => {
+    const entries = selectedScopeRows
       .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
-      .map(row => [row.taskId, row] as const)
-    return new Map(entries)
-  })
-  const releaseBlockerTaskIds = $derived.by(() => {
-    const taskIds = new Set((detail.tasks ?? []).map(task => task.id))
-    return new Set((detail.releaseReadiness?.releaseBlockers ?? [])
-      .map(blocker => blocker.id)
-      .filter((id): id is string => Boolean(id && taskIds.has(id))))
-  })
-  const releaseBlockerRankByTaskId = $derived.by(() => {
-    const taskIds = new Set((detail.tasks ?? []).map(task => task.id))
-    const entries = (detail.releaseReadiness?.releaseBlockers ?? [])
-      .map((blocker, index) => ({ id: blocker.id, index }))
-      .filter((entry): entry is { id: string; index: number } => Boolean(entry.id && taskIds.has(entry.id)))
-      .map(entry => [entry.id, entry.index] as const)
+      .map(row => [row.taskId, row.handoffState] as const)
     return new Map(entries)
   })
   const proofMissingCount = $derived(proofMissingTaskIds.size || (detail.startReadiness?.code === 'proof_evidence_missing' ? detail.startReadiness.count ?? 0 : 0))
@@ -253,9 +212,16 @@
     }
   })
   const allWorkItems = $derived([...tasks, ...importDrafts])
+  const ownerReviewQueueTasks = $derived.by(() => {
+    const tasksById = new Map(allWorkItems.map(task => [task.id, task]))
+    return (detail.startReadiness?.reviewTaskIds ?? []).flatMap(taskId => {
+      const task = tasksById.get(taskId)
+      return task ? [task] : []
+    })
+  })
   const workAreasByTaskId = $derived(viewModel.workAreasByTaskId)
   const workAreaOptions = $derived(viewModel.workAreaOptions)
-  const showsPlanningArtifacts = $derived(['scope', 'planning', 'open', 'all'].includes(workFilter))
+  const showsPlanningArtifacts = $derived(['current', 'scope', 'planning', 'open', 'all'].includes(workFilter))
   const filterableTasks = $derived(showsPlanningArtifacts ? allWorkItems : tasks)
   const visibleTasks = $derived(filterableTasks.filter(matchesWorkFilter))
   const partFilterOptions = $derived.by(() => {
@@ -278,11 +244,14 @@
     tasks: visibleTasks,
   } as ProjectDetail)
 
-  const taskCounts = $derived.by(() => {
+  const localTaskCounts = $derived.by(() => {
     const all = visibleTasks
+    const contextualTasks = workFilter === 'queued'
+      ? filterableTasks.filter(task => partFilter === 'all' || workAreaForTask(task).id === partFilter)
+      : all
     const running = detail.run?.status === 'running'
     const readyTasks = all.filter(task => task.status === 'ready' && !hasUnmetDependencies(task, tasks))
-    const stageCounts = all.reduce<Record<string, number>>((counts, task) => {
+    const stageCounts = contextualTasks.reduce<Record<string, number>>((counts, task) => {
       const key = taskPresentation(task).key
       counts[key] = (counts[key] ?? 0) + 1
       return counts
@@ -291,16 +260,18 @@
       total: filterableTasks.length,
       agentActive: all.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
       paused: stageCounts.paused ?? 0,
+      waiting: stageCounts.waiting_dependency ?? 0,
       reviewWaiting: stageCounts.review_waiting ?? 0,
       gatesWaiting: stageCounts.gates_waiting ?? 0,
       shaping: stageCounts.guildhall_shaping ?? 0,
       specRevisionQueued: stageCounts.spec_revision_queued ?? 0,
       readyForWorker: readyTasks.filter(isCompleteForWorkerHandoff).length,
       needsSpecCleanup: readyTasks.filter(needsWorkerHandoffSpecCleanup).length,
-      awaitingApproval: all.filter(task => task.status === 'spec_review').length,
+      awaitingApproval: (stageCounts.brief_review ?? 0) + (stageCounts.spec_review ?? 0),
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
   })
+  const taskCounts = $derived(detail.actionModel?.workSummary ?? localTaskCounts)
   const scopeVisibleCounts = $derived.by(() => {
     return visibleTasks.reduce(
       (counts, task) => {
@@ -312,94 +283,168 @@
     )
   })
   const workListCountLabel = $derived.by(() => {
-    if (workFilter !== 'scope') return `${visibleTasks.length} shown · ${taskCounts.total} total`
+    if (workFilter === 'current') return countLabel(visibleTasks.length, 'current item')
+    if (workFilter !== 'scope') {
+      const noun = workFilter === 'review'
+        ? 'review'
+        : workFilter === 'needs-you'
+          ? 'decision'
+          : workFilter === 'needs-proof'
+            ? 'proof gap'
+            : 'work item'
+      return countLabel(visibleTasks.length, noun)
+    }
+    const current = orientationScopeCounts?.current ?? scopeVisibleCounts.current
+    const deferred = orientationScopeCounts?.deferred ?? scopeVisibleCounts.deferred
     const pieces = [
-      countLabel(scopeVisibleCounts.current, 'current item'),
-      countLabel(scopeVisibleCounts.deferred, 'deferred item'),
+      countLabel(current, 'current item'),
+      countLabel(deferred, 'deferred item'),
     ]
-    return `${pieces.join(' · ')} · ${taskCounts.total} total`
+    return `${pieces.join(' · ')} · ${current + deferred} total`
   })
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`
   }
 
-  const sortedTasks = $derived.by(() => {
-    const list = [...visibleTasks]
-    list.sort((left, right) => {
-      if (workFilter === 'scope') {
-        const scopeDelta = compareScopedTasks(left, right)
-        if (scopeDelta !== 0) return scopeDelta
-      }
-      return compareTasks(left, right, sortKey, sortDir)
-    })
-    return list
-  })
+  // The server ordering is the project ordering. This surface deliberately
+  // does not invent a second ranking for people to decipher.
+  const sortedTasks = $derived([...visibleTasks])
   const selectedWorkVisible = $derived(Boolean(selectedWorkId && allWorkItems.some(task => task.id === selectedWorkId)))
-
-  function compareTasks(left: Task, right: Task, key: SortKey, dir: SortDir): number {
-    const direction = dir === 'asc' ? 1 : -1
-    const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' })
-
-    let delta = 0
-    switch (key) {
-      case 'title':
-        delta = compareText(left.title ?? '', right.title ?? '')
-        break
-      case 'status':
-        delta = (STATUS_SORT_ORDER[left.status ?? ''] ?? 99) - (STATUS_SORT_ORDER[right.status ?? ''] ?? 99)
-        break
-      case 'area':
-        delta = compareText(workAreaForTask(left).label, workAreaForTask(right).label)
-        break
-      case 'priority':
-        delta = (PRIORITY_SORT_ORDER[left.priority ?? 'normal'] ?? 99) - (PRIORITY_SORT_ORDER[right.priority ?? 'normal'] ?? 99)
-        break
-      case 'updated':
-        delta = Date.parse(left.updatedAt ?? '') - Date.parse(right.updatedAt ?? '')
-        break
-      case 'revisions':
-        delta = (left.revisionCount ?? 0) - (right.revisionCount ?? 0)
-        break
+  const focusedMode = $derived.by(() => {
+    path.href
+    if (boardMode || typeof window === 'undefined') return false
+    const params = new URL(window.location.href).searchParams
+    if (params.get('view') === 'queue') return false
+    const routeTaskId = readSelectedWorkIdFromUrl()
+    const actionTaskId = detail.actionModel?.primaryAction?.taskId
+    const readinessTaskId = detail.startReadiness?.focusTaskId
+    // Focus mode is only for an actual shared decision. A raw task URL is a
+    // useful diagnostic/deep-link compatibility path, not permission to
+    // invent an owner decision from a task's local status.
+    return Boolean(
+      actionTaskId ||
+      readinessTaskId ||
+      // Starting the focused work clears its pending action. Keep the active
+      // route in the same concise handoff instead of dropping the owner into
+      // the inventory dashboard mid-flow.
+      (projectRunActive && routeTaskId) ||
+      selectedReleaseShipped,
+    )
+  })
+  const queueMode = $derived.by(() => {
+    path.href
+    if (typeof window === 'undefined') return false
+    return new URL(window.location.href).searchParams.get('view') === 'queue'
+  })
+  const allWorkRequested = $derived.by(() => {
+    path.href
+    if (typeof window === 'undefined') return false
+    return new URL(window.location.href).searchParams.get('all') === '1'
+  })
+  const currentReleasePreviewLimit = 3
+  // A shared action keeps the generic queue concise. Owner review is stricter:
+  // its ordered task IDs are the only rows relevant to the decision.
+  const actionQueueMode = $derived(
+    queueMode &&
+      !allWorkRequested &&
+      Boolean(detail.actionModel?.primaryAction?.taskId),
+  )
+  const ownerReviewQueueMode = $derived(
+    actionQueueMode &&
+      detail.startReadiness?.code === 'owner_review_required' &&
+      ownerReviewQueueTasks.length > 0,
+  )
+  const focusedWork = $derived.by(() => {
+    path.href
+    const routeTaskId = readSelectedWorkIdFromUrl()
+    const actionTaskId = detail.actionModel?.primaryAction?.taskId
+    const readinessTaskId = detail.startReadiness?.focusTaskId
+    // A task URL is a compatibility/deep-link hint, not an authority to
+    // replace the current project decision. The shared action owns the owner
+    // handoff whenever it exists; only an active run may retain its route focus
+    // after that action is consumed.
+    const taskId = actionTaskId ?? readinessTaskId ?? (projectRunActive ? routeTaskId : null)
+    return taskId ? allWorkItems.find(task => task.id === taskId) ?? null : null
+  })
+  const focusedQueueWork = $derived(
+    queueMode &&
+      (detail.actionModel?.primaryAction?.code === 'paused_live_work' || detail.actionModel?.primaryAction?.code === 'worker_recovery') &&
+      focusedWork &&
+      isFocusedRunnableWork(focusedWork)
+      ? focusedWork
+      : null,
+  )
+  const currentReleaseTasks = $derived(
+    sortedTasks.filter(task => task.id !== focusedQueueWork?.id),
+  )
+  const hasAdditionalCurrentReleaseWork = $derived.by(() => {
+    if (!focusedWork) return false
+    return allWorkItems.some(task => {
+      if (task.id === focusedWork.id) return false
+      const scope = scopeByTaskId.get(task.id)
+      return scope === undefined || scope === 'included'
+    })
+  })
+  const displayedTasks = $derived(
+    ownerReviewQueueMode
+      ? ownerReviewQueueTasks
+      : actionQueueMode
+        ? currentReleaseTasks.slice(0, currentReleasePreviewLimit)
+        : currentReleaseTasks,
+  )
+  const hiddenCurrentReleaseTaskCount = $derived(
+    actionQueueMode ? Math.max(0, currentReleaseTasks.length - displayedTasks.length) : 0,
+  )
+  const fullCurrentReleaseLabel = $derived(
+    `Show all ${currentReleaseTasks.length} ${currentReleaseTasks.length === 1 ? 'work item' : 'work items'}`,
+  )
+  const displayedWorkListCountLabel = $derived(
+    ownerReviewQueueMode
+      ? `${ownerReviewQueueTasks.length} ${ownerReviewQueueTasks.length === 1 ? 'spec needs' : 'specs need'} your review`
+      : focusedQueueWork
+        ? countLabel(currentReleaseTasks.length, 'other current item')
+        : workListCountLabel,
+  )
+  const completedWorkLabel = $derived.by(() => {
+    const counts = detail.releaseSummary?.counts
+    if (!counts || !Number.isFinite(counts.total) || counts.total <= 0) return null
+    return `${counts.done ?? 0} of ${counts.total} complete`
+  })
+  const focusedDecisionDetail = $derived.by(() => {
+    if (focusedWork && isFocusedWorkStarting(focusedWork)) {
+      return 'Guildhall accepted the command and is starting this task.'
     }
-
-    if (delta === 0) {
-      delta = compareText(left.title ?? '', right.title ?? '')
+    const sharedDetail = detail.actionModel?.primaryAction?.detail?.trim()
+    if (sharedDetail) return sharedDetail
+    if (focusedWork && hasSpecRepair(focusedWork)) return 'Guildhall needs to repair this spec before it can ask you to review it.'
+    if (focusedWork && isOwnerSpecReview(focusedWork)) return 'Review this spec so Guildhall can continue.'
+    if (focusedWork?.status === 'exploring') return 'Review the brief before Guildhall starts this work.'
+    if (focusedWork?.status === 'blocked') return 'Open this work to resolve what is blocking it.'
+    return 'Open this work to take the next step.'
+  })
+  const focusedCardTitle = $derived.by(() => {
+    if (focusedWork && isFocusedWorkRunning(focusedWork)) return 'Work is underway'
+    if (focusedWork && isFocusedWorkStarting(focusedWork)) return 'Starting work'
+    if (focusedWork && detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
+      return detail.actionModel.primaryAction.ownerHeading ?? 'Worker needs a fresh pass'
     }
-    return delta * direction
-  }
-
-  function compareScopedTasks(left: Task, right: Task): number {
-    const delta = scopeTaskRank(left) - scopeTaskRank(right)
-    if (delta !== 0) return delta
-    return 0
-  }
-
-  function scopeTaskRank(task: Task): number {
-    const row = scopeRowByTaskId.get(task.id)
-    if (!row) return 50
-    if (row.scope === 'deferred') return 40
-    if (detail.startReadiness?.focusTaskId === task.id) return 0
-    const releaseBlockerRank = releaseBlockerRankByTaskId.get(task.id)
-    if (typeof releaseBlockerRank === 'number') return 1 + releaseBlockerRank
-    if (releaseBlockerTaskIds.has(task.id) || row.blocksStart || row.blocksRelease || row.humanBlocking) return 10
-    if (!['done', 'pending_pr'].includes(task.status ?? '')) return 10
-    return 20
-  }
-
-  function toggleSort(next: SortKey): void {
-    if (sortKey === next) {
-      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
-      return
+    if (focusedWork && detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
+      return detail.actionModel.primaryAction.ownerHeading ?? 'Automated review needs retry'
     }
-    sortKey = next
-    sortDir = next === 'title' || next === 'area' ? 'asc' : 'desc'
-  }
-
-  function sortLabel(key: SortKey): string {
-    if (sortKey !== key) return ''
-    return sortDir === 'asc' ? ' ↑' : ' ↓'
-  }
+    if (focusedWork && detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === focusedWork.id) {
+      return detail.actionModel?.primaryAction?.ownerHeading ?? 'Review ready to continue'
+    }
+    if (focusedWork && detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === focusedWork.id) return 'Work paused'
+    if (focusedWork && isFocusedRunnableWork(focusedWork)) return 'Ready to continue'
+    if (focusedWork && (effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger')) {
+      return 'What needs your attention'
+    }
+    return 'Current work'
+  })
+  const primaryActionCardTitle = $derived(
+    detail.actionModel?.primaryAction?.code === 'ready_work' ? 'Ready to continue' : 'What needs your attention',
+  )
 
   function openTask(task: Task): void {
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
@@ -443,8 +488,12 @@
         runWorkError = body.error ?? `Start failed (HTTP ${res.status})`
         return
       }
-      runWorkActiveId = taskId
-      await project.refresh(detail.id)
+      // A successful command deserves an immediate, honest acknowledgement.
+      // The shared run snapshot remains authoritative for the durable
+      // `running` state and can still reject or stop this request.
+      beginWorkStartConfirmation(taskId)
+      const refreshed = await project.refresh(detail.id)
+      if (refreshed?.run?.status === 'running') runWorkObservedActive = true
       setTimeout(() => void project.refresh(detail.id), 500)
       setTimeout(() => void project.refresh(detail.id), 1800)
     } finally {
@@ -455,13 +504,20 @@
   function selectWork(task: Task): void {
     selectedWorkId = task.id
     runWorkError = null
+    // The route is the selection authority. Keeping an older `?task=` after a
+    // user click lets a refresh silently put the old row back in focus.
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('task') !== task.id || url.searchParams.has('work')) {
+      pendingLocalSelectionTaskId = task.id
+      url.searchParams.set('task', task.id)
+      url.searchParams.delete('work')
+      nav(`${url.pathname}${url.search}${url.hash}`, { backgroundPath: path.value })
+    }
   }
 
   function selectWorkById(taskId: string): void {
-    if (allWorkItems.some(task => task.id === taskId)) {
-      selectedWorkId = taskId
-      runWorkError = null
-    }
+    const task = allWorkItems.find(candidate => candidate.id === taskId)
+    if (task) selectWork(task)
   }
 
   async function loadMoreWork(): Promise<void> {
@@ -497,33 +553,6 @@
     if (isQueuedWorkTask(task)) return 'queued'
     if (isPlanningTask(task)) return 'planning'
     return 'open'
-  }
-
-  function taskProgress(task: Task) {
-    const id = typeof task.id === 'string' ? task.id : ''
-    return id ? detail.workProgress?.byTaskId?.[id] : null
-  }
-
-  function semanticUnitCount(task: Task): number {
-    return task.workUnitCount ?? task.workUnitAnalysis?.units?.length ?? 0
-  }
-
-  function dependencyLabel(taskId: string): string {
-    const dependency = tasks.find(candidate => candidate.id === taskId)
-    return dependency ? taskDisplayLabel(dependency) : friendlyTaskId(taskId)
-  }
-
-  function taskDeliveryBadge(task: Task): DeliveryProgressBadge | null {
-    const childCount = hierarchy.byId.get(task.id)?.childIds.length ?? 0
-    const semanticUnits = semanticUnitCount(task)
-    if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
-      return {
-        label: `${semanticUnits} planned ${semanticUnits === 1 ? 'unit' : 'units'}`,
-        title: `${semanticUnits} semantic work ${semanticUnits === 1 ? 'unit is' : 'units are'} already shaped for this task before proof steps begin.`,
-        tone: 'neutral',
-      }
-    }
-    return deliveryProgressBadge(taskProgress(task))
   }
 
   function openImportedDraft(task: Task): void {
@@ -565,6 +594,7 @@
   }
 
   function emptyFilterTitle(): string {
+    if (workFilter === 'current') return 'No current work.'
     if (selectedReleaseShipped && workFilter === 'open') return 'Release work is complete.'
     if (workFilter === 'queued') return 'No work is ready to run yet.'
     if (workFilter === 'scope') return 'No current-scope work is visible yet.'
@@ -577,6 +607,7 @@
   }
 
   function emptyFilterDetail(): string {
+    if (workFilter === 'current') return 'Completed scope history is available when you need it.'
     if (selectedReleaseShipped && workFilter === 'open') return 'This release has shipped. Completed work stays available when you need the record.'
     if (workFilter === 'queued') return 'Planning and review work is still waiting. Use Planning to inspect intake and spec work.'
     if (workFilter === 'scope') return 'Current and deferred scope rows will appear here once Guildhall maps them to work records.'
@@ -591,6 +622,7 @@
   function emptyFilterAction(): { label: string; filter: WorkFilter } | null {
     if (selectedReleaseShipped && workFilter === 'open') return { label: 'Show completed work', filter: 'scope' }
     if (workFilter === 'queued' && allWorkItems.some(isPlanningTask)) return { label: 'Show planning', filter: 'planning' }
+    if (workFilter === 'current' && scopeTaskIds.size > 0) return { label: 'Show scope history', filter: 'scope' }
     if (workFilter !== 'queued') return { label: 'Show queued work', filter: 'queued' }
     return null
   }
@@ -598,6 +630,15 @@
   function matchesWorkFilter(task: Task): boolean {
     if (partFilter !== 'all' && workAreaForTask(task).id !== partFilter) return false
     if (workFilter === 'all') return true
+    if (workFilter === 'current') {
+      const isCurrentScopeTask = scopeTaskIds.size > 0
+        ? scopeTaskIds.has(task.id)
+        : task.id === detail.actionModel?.primaryAction?.taskId
+      return isCurrentScopeTask && (
+        !['done', 'pending_pr', 'shelved'].includes(task.status ?? '') ||
+        isProofMissingTask(task)
+      )
+    }
     if (workFilter === 'scope') return scopeTaskIds.has(task.id)
     if (workFilter === 'queued') return isQueuedWorkTask(task)
     if (workFilter === 'planning') return isPlanningTask(task)
@@ -611,7 +652,8 @@
 
   function defaultWorkFilterForTasks(): WorkFilter {
     if (selectedReleaseShipped) return 'open'
-    if (scopeTaskIds.size > 0) return 'scope'
+    if (actionQueueMode) return 'current'
+    if (scopeTaskIds.size > 0) return 'current'
     if (tasks.some(isQueuedWorkTask)) return 'queued'
     if (tasks.some(isPlanningTask)) return 'planning'
     if (tasks.some(task => task.status === 'blocked')) return 'blocked'
@@ -639,7 +681,15 @@
       runStatus: detail.run?.status,
       availabilityStatus: detail.availability?.status ?? 'active',
       tasks,
+      focusTaskId: detail.startReadiness?.focusTaskId,
+      focusKind: detail.startReadiness?.focusKind,
+      ownerReviewTaskIds: detail.startReadiness?.reviewTaskIds ?? [],
+      handoffState: handoffStateByTaskId.get(task.id),
     })
+  }
+
+  function hasSpecRepair(task: Task): boolean {
+    return handoffStateByTaskId.get(task.id) === 'spec_shaping'
   }
 
   type ChipTone = 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'running'
@@ -650,24 +700,11 @@
   }
 
   function effectiveStatusLabel(task: Task): string {
-    return needsBreakdownReview(task) ? 'Review breakdown' : taskPresentation(task).label
+    return taskPresentation(task).label
   }
 
   function effectiveStatusTone(task: Task): ChipTone {
-    return needsBreakdownReview(task) ? 'warn' : chipTone(taskPresentation(task).tone)
-  }
-
-  function priorityTone(priority: string | undefined): CardTone {
-    switch (priority) {
-      case 'critical':
-        return 'danger'
-      case 'high':
-        return 'warn'
-      case 'low':
-        return 'ok'
-      default:
-        return 'neutral'
-    }
+    return chipTone(taskPresentation(task).tone)
   }
 
   function listItemTone(task: Task): CardTone {
@@ -675,60 +712,8 @@
     return tone === 'running' ? 'accent' : tone
   }
 
-  function formatUpdatedAt(value: string | undefined): string {
-    if (!value) return '—'
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return '—'
-    return date.toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })
-  }
-
-  function taskSecondaryText(task: Task): string {
-    const node = hierarchy.byId.get(task.id)
-    const childCount = node?.childIds.length ?? 0
-    if (childCount > 0) return nestedWorkCountLabel(childCount)
-    if (needsBreakdownReview(task)) {
-      const count = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
-      return `${count} requirements; no contained work or decomposition proposal yet.`
-    }
-    const blockers = unmetDependencyIds(task, tasks)
-    if (blockers.length > 0) {
-      const prefix = task.status === 'blocked' ? 'Blocked by' : 'Waiting on'
-      return `${prefix} ${blockers.map(dependencyLabel).join(', ')}`
-    }
-    const semanticUnits = semanticUnitCount(task)
-    if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
-      return `${semanticUnits} planned work ${semanticUnits === 1 ? 'unit' : 'units'} already shaped.`
-    }
-    if (task.workKind) return workKindLabel(task.workKind)
-    if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
-    if (task.terminalSummary?.headline) return task.terminalSummary.headline
-    if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
-    const grounding = taskGroundingDetail(task)
-    if (grounding) return grounding
-    if (taskSourceQuestion(task)) return taskSourceQuestion(task)!
-    if (task.description) return task.description
-    return friendlyTaskId(task.id)
-  }
-
   function primitiveLabel(primitive: { id?: string; label?: string }): string {
     return primitive.label?.trim() || primitive.id || 'Primitive'
-  }
-
-  function orientationPathForTask(task: Task): string {
-    return orientationPaths.get(task.id) ?? ''
-  }
-
-  function hierarchyBreadcrumb(task: Task): string {
-    const orientationPath = orientationPathForTask(task)
-    if (orientationPath) return orientationPath
-    const crumbs = hierarchy.byId.get(task.id)?.breadcrumb ?? []
-    if (crumbs.length <= 1) return ''
-    return crumbs.map(crumb => crumb.title).join(' / ')
   }
 
   function needsBreakdownReview(task: Task): boolean {
@@ -774,6 +759,99 @@
     if (next === 'board') nav(currentProjectHref('/work?view=board'))
   }
 
+  function browseWork(): void {
+    // Focused mode may have selected a narrower review/queued filter. Browsing
+    // is an explicit request for the current release slice, not that old view.
+    workFilterUserSelected = false
+    workFilter = 'current'
+    partFilter = 'all'
+    selectedWorkId = null
+    nav(currentProjectHref('/work?view=queue', detail.id))
+  }
+
+  function browseAllWork(): void {
+    selectedWorkId = null
+    const url = new URL(window.location.href)
+    url.searchParams.set('view', 'queue')
+    url.searchParams.set('all', '1')
+    url.searchParams.delete('task')
+    url.searchParams.delete('work')
+    nav(`${url.pathname}${url.search}${url.hash}`, { backgroundPath: path.value })
+  }
+
+  function openFocusedWork(task: Task): void {
+    const tab = isOwnerSpecReview(task) ? '?tab=spec' : ''
+    nav(`${currentTaskHref(task.id, detail.id)}${tab}`, { backgroundPath: path.value })
+  }
+
+  function focusedActionLabel(task: Task): string {
+    const action = detail.actionModel?.primaryAction
+    if (isFocusedRunnableWork(task)) {
+      return action?.operation === 'repair_spec'
+        ? 'Repair spec'
+        : action?.buttonLabel ?? taskRunActionLabel(task.status)
+    }
+    if (action?.taskId === task.id && action.buttonLabel) {
+      return action.buttonLabel
+    }
+    if (isOwnerSpecReview(task)) return 'Review spec'
+    if (task.status === 'blocked') return 'Open task'
+    if (task.status === 'done' || task.status === 'pending_pr') return 'View record'
+    return 'Open task'
+  }
+
+  function isFocusedRunnableWork(task: Task): boolean {
+    const action = detail.actionModel?.primaryAction
+    if (action?.taskId !== task.id) return false
+    // Older saved ready-work actions predate the explicit operation field;
+    // their typed code remains a safe executable compatibility contract.
+    return action.code === 'ready_work' ||
+      ((action.code === 'paused_live_work' || action.code === 'worker_recovery' || action.code === 'review_retry') && action.operation === 'start_focused')
+  }
+
+  function isOwnerSpecReview(task: Task): boolean {
+    if (task.status !== 'spec_review' || hasSpecRepair(task)) return false
+    const ownerReviewTaskIds = detail.startReadiness
+      ? detail.startReadiness.reviewTaskIds ?? []
+      : undefined
+    if (ownerReviewTaskIds) return ownerReviewTaskIds.includes(task.id)
+    return task.specReviewGate?.authority !== 'coordinator'
+  }
+
+  function isFocusedWorkRunning(task: Task): boolean {
+    return projectRunActive && (detail.startReadiness?.focusTaskId ?? readSelectedWorkIdFromUrl()) === task.id
+  }
+
+  function isFocusedWorkStarting(task: Task): boolean {
+    return runWorkActiveId === task.id && !isFocusedWorkRunning(task)
+  }
+
+  function focusedStatusLabel(task: Task): string {
+    if (isFocusedWorkRunning(task)) return 'Working'
+    if (isFocusedWorkStarting(task)) return 'Starting'
+    if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'Needs retry'
+    if (detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === task.id) return 'Review retry'
+    if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'Review ready'
+    if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'Paused'
+    return isFocusedRunnableWork(task) ? 'Ready' : effectiveStatusLabel(task)
+  }
+
+  function focusedStatusTone(task: Task): ChipTone {
+    if (isFocusedWorkRunning(task)) return 'running'
+    if (isFocusedWorkStarting(task)) return 'accent'
+    if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
+    if (detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
+    if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
+    if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
+    return isFocusedRunnableWork(task) ? 'ok' : effectiveStatusTone(task)
+  }
+
+  function goToSharedAction(): void {
+    const action = detail.actionModel?.primaryAction
+    if (!action?.href) return
+    nav(projectActionHref(action.href, detail.id), { backgroundPath: path.value })
+  }
+
   function readWorkViewFromUrl(fallbackBoard: boolean): WorkView {
     if (fallbackBoard) return 'board'
     const params = new URL(window.location.href).searchParams
@@ -802,7 +880,7 @@
       partFilter = 'all'
     }
     if (!workFilterUserSelected) {
-      workFilter = defaultWorkFilterForTasks()
+      workFilter = allWorkRequested ? 'all' : defaultWorkFilterForTasks()
     }
   })
 
@@ -813,9 +891,22 @@
     if (!routeTaskId) return
     const routeTask = allWorkItems.find(task => task.id === routeTaskId)
     if (!routeTask) return
+    // A user click writes the route after local selection is set. That route
+    // update must not reinterpret the click as a deep-link and replace their
+    // deliberately chosen list filter.
+    if (selectedWorkId === routeTaskId) {
+      if (pendingLocalSelectionTaskId === routeTaskId) pendingLocalSelectionTaskId = null
+      return
+    }
+    const isLocalSelectionEcho = pendingLocalSelectionTaskId === routeTaskId
+    pendingLocalSelectionTaskId = null
     selectedWorkId = routeTaskId
     runWorkError = null
-    workFilter = workFilterForTask(routeTask)
+    // A click from the current queue writes the route after selection. Do not
+    // turn that route echo into a different filter and make the list jump.
+    if (!isLocalSelectionEcho) {
+      workFilter = workFilterForTask(routeTask)
+    }
     workFilterUserSelected = true
     partFilter = 'all'
     pendingRouteScrollTaskId = routeTaskId
@@ -833,31 +924,144 @@
   })
 
   $effect(() => {
-    if (!projectRunActive) runWorkActiveId = null
+    if (!runWorkActiveId) return
+    // The tab can receive a fresh shared snapshot before its parent has passed
+    // matching props down. Clear the local marker only after this component has
+    // observed shared running work followed by a later stopped snapshot.
+    if (projectRunActive) {
+      runWorkObservedActive = true
+      clearWorkStartConfirmationTimer()
+      return
+    }
+    if (runWorkObservedActive) {
+      runWorkActiveId = null
+      clearWorkStartConfirmationTimer()
+    }
   })
+
+  function beginWorkStartConfirmation(taskId: string): void {
+    runWorkActiveId = taskId
+    runWorkObservedActive = false
+    clearWorkStartConfirmationTimer()
+    runWorkStartConfirmationTimer = setTimeout(() => {
+      void confirmWorkStart(taskId)
+    }, 3500)
+  }
+
+  async function confirmWorkStart(taskId: string): Promise<void> {
+    const refreshed = await project.refresh(detail.id)
+    if (runWorkActiveId !== taskId || refreshed?.run?.status === 'running') return
+    runWorkActiveId = null
+    runWorkError = 'Guildhall could not confirm that this work started. Try again.'
+  }
+
+  function clearWorkStartConfirmationTimer(): void {
+    if (runWorkStartConfirmationTimer === null) return
+    clearTimeout(runWorkStartConfirmationTimer)
+    runWorkStartConfirmationTimer = null
+  }
+
+  onDestroy(clearWorkStartConfirmationTimer)
 </script>
 
-<div class="work-list-view">
-  <UtilityPanel as="div" className="work-view-header" tone="neutral" role="toolbar" ariaLabel="Work view controls">
-    <SegmentedControl label="Work view" ariaLabel="Work view" value={activeWorkView} options={viewOptions} onChange={setWorkView} />
-    <div class="work-view-actions">
-      <div class="show-picker" role="group" aria-label="Shown work">
-        <label for="work-view-show">Show</label>
-        <Select id="work-view-show" value={workFilter} options={workFilterOptions} onchange={onWorkFilterSelect} />
-      </div>
-      {#if partFilterOptions.length > 2}
-        <div class="show-picker" role="group" aria-label="Work part">
-          <label for="work-view-part">Part</label>
-          <Select id="work-view-part" value={partFilter} options={partFilterOptions} onchange={(value) => { partFilter = value }} />
-        </div>
+{#if focusedMode}
+  <section class="work-focus" aria-label="Current work">
+    <header class="work-focus-header">
+      <h1>Work</h1>
+      {#if completedWorkLabel}
+        <p class="work-focus-progress">{completedWorkLabel}</p>
       {/if}
-    </div>
-  </UtilityPanel>
+    </header>
+
+    {#if focusedWork}
+      <Card title={focusedCardTitle} titleTag="h2" tone={effectiveStatusTone(focusedWork) === 'danger' ? 'danger' : effectiveStatusTone(focusedWork) === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
+        <div class="work-focus-decision">
+          <div class="work-focus-copy">
+            <div class="work-focus-meta">
+              <span>{taskDisplayKey(focusedWork, allWorkItems, detail.id)}</span>
+              <Chip label={focusedStatusLabel(focusedWork)} tone={focusedStatusTone(focusedWork)} />
+            </div>
+            <h2>{taskDisplayLabel(focusedWork, focusedWork.id)}</h2>
+            {#if focusedDecisionDetail}
+              <p>{focusedDecisionDetail}</p>
+            {/if}
+          </div>
+          {#if !isFocusedWorkRunning(focusedWork) && !isFocusedWorkStarting(focusedWork)}
+            <Button
+              variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'}
+              disabled={runWorkBusyId === focusedWork.id || runWorkActiveId === focusedWork.id}
+              onclick={() => isFocusedRunnableWork(focusedWork) ? void runWorkItem(focusedWork.id) : openFocusedWork(focusedWork)}
+            >
+              {focusedActionLabel(focusedWork)}
+            </Button>
+          {/if}
+        </div>
+        {#if runWorkError}
+          <p class="work-focus-error" role="alert">{runWorkError}</p>
+        {/if}
+      </Card>
+    {:else if detail.actionModel?.primaryAction}
+      <Card title={primaryActionCardTitle} titleTag="h2" tone="accent" variant="callout" railStrength="strong">
+        <div class="work-focus-decision">
+          <div class="work-focus-copy">
+            <h2>{detail.actionModel.primaryAction.label ?? 'Continue project work'}</h2>
+            {#if detail.actionModel.primaryAction.detail}
+              <p>{detail.actionModel.primaryAction.detail}</p>
+            {/if}
+          </div>
+          <Button variant="primary" onclick={goToSharedAction}>{detail.actionModel.primaryAction.buttonLabel ?? 'Continue'}</Button>
+        </div>
+      </Card>
+    {:else if selectedReleaseShipped}
+      <Card title="Current release" titleTag="h2" tone="ok" variant="callout" railStrength="strong">
+        <div class="work-focus-decision">
+          <div class="work-focus-copy">
+            <h2>Shipped</h2>
+            <p>This release is complete. There is nothing you need to do here.</p>
+          </div>
+        </div>
+      </Card>
+    {:else}
+      <Card title="Current work" titleTag="h2" tone="neutral" variant="callout">
+        <div class="work-focus-decision">
+          <div class="work-focus-copy">
+            <h2>Nothing needs your attention</h2>
+            <p>Guildhall has no owner decision waiting right now.</p>
+          </div>
+        </div>
+      </Card>
+    {/if}
+
+    {#if hasAdditionalCurrentReleaseWork}
+      <div class="work-focus-footer">
+        <Button variant="secondary" onclick={browseWork}>Browse work</Button>
+      </div>
+    {/if}
+  </section>
+{:else}
+<div class="work-list-view">
+  {#if !actionQueueMode}
+    <UtilityPanel as="div" className="work-view-header" tone="neutral" role="toolbar" ariaLabel="Work view controls">
+      <SegmentedControl label="Work view" ariaLabel="Work view" value={activeWorkView} options={viewOptions} onChange={setWorkView} />
+      <div class="work-view-actions">
+        <div class="show-picker" role="group" aria-label="Shown work">
+          <label for="work-view-show">Show</label>
+          <Select id="work-view-show" value={workFilter} options={workFilterOptions} onchange={onWorkFilterSelect} />
+        </div>
+        {#if partFilterOptions.length > 2}
+          <div class="show-picker" role="group" aria-label="Work part">
+            <label for="work-view-part">Part</label>
+            <Select id="work-view-part" value={partFilter} options={partFilterOptions} onchange={(value) => { partFilter = value }} />
+          </div>
+        {/if}
+      </div>
+    </UtilityPanel>
+  {/if}
 
   {#if activeWorkView === 'board'}
     <PlannerTab detail={boardDetail} />
   {:else}
-    {#if deliveryQueue}
+    {#if deliveryQueue && !queueMode}
       <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : scopeQueueFallback ? 'warn' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
         <div class="queue-copy">
           <p class="queue-label">{scopeQueueFallback?.label ?? 'Delivery queue'}</p>
@@ -898,49 +1102,46 @@
         </div>
       </UtilityPanel>
     {/if}
+    {#if focusedQueueWork}
+      <section class="work-queue-current-action" aria-label="Current work">
+        <div class="work-queue-current-copy">
+          <p>Current work</p>
+          <div>
+            <span>{taskDisplayKey(focusedQueueWork, allWorkItems, detail.id)}</span>
+            <Chip label={focusedStatusLabel(focusedQueueWork)} tone={focusedStatusTone(focusedQueueWork)} />
+          </div>
+          <strong>{taskDisplayLabel(focusedQueueWork, focusedQueueWork.id)}</strong>
+          {#if detail.actionModel?.primaryAction?.detail}
+            <p>{detail.actionModel.primaryAction.detail}</p>
+          {/if}
+        </div>
+        <Button
+          variant="primary"
+          disabled={runWorkBusyId === focusedQueueWork.id || runWorkActiveId === focusedQueueWork.id}
+          onclick={() => void runWorkItem(focusedQueueWork.id)}
+        >
+          {focusedActionLabel(focusedQueueWork)}
+        </Button>
+      </section>
+    {/if}
     <div class="work-list-inspector-layout" class:has-selection={Boolean(selectedWorkId)}>
-      <Card title="Work list" titleTag="h2">
+      <Card title={ownerReviewQueueMode ? 'Specs to review' : actionQueueMode ? 'Up next' : 'Work list'} titleTag="h2">
 
         <div class="work-list-overview">
-          <div class="work-list-count">{workListCountLabel}</div>
-          <div class="work-summary">
-            {#if taskCounts.agentActive > 0}
-              <Chip label={countLabel(taskCounts.agentActive, 'Working', 'Working')} tone="running" />
-            {/if}
-            {#if taskCounts.paused > 0}
-              <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
-            {/if}
-            {#if taskCounts.reviewWaiting > 0}
-              <Chip label={countLabel(taskCounts.reviewWaiting, 'Review', 'Review')} tone="warn" />
-            {/if}
-            {#if taskCounts.gatesWaiting > 0}
-              <Chip label={countLabel(taskCounts.gatesWaiting, 'Gates', 'Gates')} tone="warn" />
-            {/if}
-            {#if taskCounts.shaping > 0}
-              <Chip label={countLabel(taskCounts.shaping, 'Queued', 'Queued')} tone="running" />
-            {/if}
-            {#if taskCounts.specRevisionQueued > 0}
-              <Chip label={countLabel(taskCounts.specRevisionQueued, 'Queued', 'Queued')} tone="running" />
-            {/if}
-            {#if taskCounts.readyForWorker > 0}
-              <Chip label={countLabel(taskCounts.readyForWorker, 'Ready', 'Ready')} tone="ok" />
-            {/if}
-            {#if taskCounts.needsSpecCleanup > 0}
-              <Chip label={countLabel(taskCounts.needsSpecCleanup, 'Needs brief', 'Needs brief')} tone="warn" />
-            {/if}
-            {#if taskCounts.awaitingApproval > 0}
-              <Chip label={countLabel(taskCounts.awaitingApproval, 'Review', 'Review')} tone="warn" />
-            {/if}
-            {#if taskCounts.done > 0}
-              <Chip label={`${taskCounts.done} done`} tone="ok" />
-            {/if}
-            {#if visibleImportDraftCount > 0}
-              <Chip label={countLabel(visibleImportDraftCount, 'import draft')} tone="neutral" />
+          <div>
+            <div class="work-list-count">{displayedWorkListCountLabel}</div>
+            {#if ownerReviewQueueMode}
+              <p class="review-queue-detail">Choose a spec to review. Guildhall can continue after these decisions are resolved.</p>
             {/if}
           </div>
+          {#if ownerReviewQueueMode}
+            <Button variant="secondary" size="sm" onclick={browseAllWork}>Show all work</Button>
+          {:else if actionQueueMode && hiddenCurrentReleaseTaskCount > 0}
+            <Button variant="secondary" size="sm" onclick={browseAllWork}>{fullCurrentReleaseLabel}</Button>
+          {/if}
         </div>
 
-        {#if visibleImportDraftCount > 0 && nextImportDraft}
+        {#if !focusedQueueWork && visibleImportDraftCount > 0 && nextImportDraft}
           <UtilityPanel as="div" className="draft-queue-card" tone="neutral">
             <div class="draft-queue-copy">
               <p class="draft-queue-label">Imported draft queue</p>
@@ -965,7 +1166,7 @@
               <p class="muted">{setupInboxItem?.detail ?? 'No tasks yet. Finish project setup first.'}</p>
               <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref(setupInboxItem?.actionHref ?? '/setup'))}>
                 {setupInboxItem?.kind === 'required_migration'
-                  ? 'Migrate project'
+                  ? 'Review project update'
                   : setupInboxItem?.kind === 'workspace_import_pending' || setupInboxItem?.kind === 'import_draft_queue'
                     ? 'Review import'
                     : 'Open setup'}
@@ -974,7 +1175,7 @@
           {:else}
             <p class="muted">No tasks yet — <strong>New thread</strong> to begin.</p>
           {/if}
-        {:else if visibleTasks.length === 0}
+        {:else if displayedTasks.length === 0}
           <UtilityPanel as="div" className="work-empty-filter" tone="neutral">
             <div>
               <strong>{emptyFilterTitle()}</strong>
@@ -988,66 +1189,42 @@
             {/if}
           </UtilityPanel>
         {:else}
-          <div class="work-list-scroll" role="region" aria-label="Scrollable work list columns">
-            <CardList className="work-list-stack">
-              <div class="list-column-head" aria-label="Sort work list">
-                <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Work{sortLabel('title')}</button>
-                <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
-                <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
-                <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
-                <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
-                <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
-              </div>
-              {#each sortedTasks as task (task.id)}
-                {@const deliveryBadge = taskDeliveryBadge(task)}
-                <CardListItem
-                  as="button"
-                  className="work-list-row"
-                  tone={listItemTone(task)}
-                  railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
-                  railStrength="strong"
-                  ariaLabel={`Inspect work ${taskDisplayLabel(task, task.id)}`}
-                  ariaCurrent={selectedWorkId === task.id ? 'true' : null}
-                  selected={selectedWorkId === task.id}
-                  elementRef={(node) => setWorkRowElement(task.id, node)}
-                  onclick={() => selectWork(task)}
-                  onkeydown={(event) => onTaskKey(event, task)}
-                >
-                  <span class="row-main">
-                    <span class="task-title">{taskDisplayLabel(task)}</span>
-                    {#if hierarchyBreadcrumb(task)}
-                      <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
-                    {/if}
-                    <span class="task-subcopy">{taskSecondaryText(task)}</span>
-                  </span>
-                  <span class="row-status">
-                    <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
-                    {#if deliveryBadge}
-                      <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} size="compact" />
-                    {/if}
-                  </span>
-                  <span class="row-domain">
-                    {workAreaForTask(task).label}
-                  </span>
-                  <span class="row-priority">
-                    <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
-                  </span>
-                  <span class="row-updated">
-                    {formatUpdatedAt(task.updatedAt)}
-                  </span>
-                  <span class="row-revisions">
-                    {task.revisionCount ?? 0}
-                  </span>
-                </CardListItem>
-              {/each}
-            </CardList>
-          </div>
-          {#if inventoryPage?.hasMore}
+          <CardList className="work-list-stack" ariaLabel="Work items">
+            {#each displayedTasks as task (task.id)}
+              <CardListItem
+                as="button"
+                className="work-list-row"
+                tone={listItemTone(task)}
+                railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
+                railStrength="strong"
+                ariaLabel={`Inspect work ${taskDisplayLabel(task, task.id)}`}
+                ariaCurrent={selectedWorkId === task.id ? 'true' : null}
+                selected={selectedWorkId === task.id}
+                elementRef={(node) => setWorkRowElement(task.id, node)}
+                onclick={() => selectWork(task)}
+                onkeydown={(event) => onTaskKey(event, task)}
+              >
+                <span class="row-main">
+                  <span class="task-key">{taskDisplayKey(task.id, allWorkItems, detail.id)}</span>
+                  <span class="task-title" title={taskDisplayLabel(task)}>{taskDisplayLabel(task)}</span>
+                </span>
+                <span class="row-status">
+                  <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
+                </span>
+              </CardListItem>
+            {/each}
+          </CardList>
+          {#if actionQueueMode && hiddenCurrentReleaseTaskCount > 0}
+            <div class="inventory-more">
+              <span class="muted">{hiddenCurrentReleaseTaskCount} more in this milestone.</span>
+            </div>
+          {/if}
+          {#if !ownerReviewQueueMode && inventoryPage?.hasMore && workFilter === 'all'}
             <div class="inventory-more">
               <Button variant="secondary" size="sm" disabled={inventoryLoadBusy} onclick={() => void loadMoreWork()}>
                 {inventoryLoadBusy ? 'Loading more work' : 'Load more work'}
               </Button>
-              <span class="muted">Showing {allWorkItems.length} of {inventoryPage.totalEffectiveCount ?? allWorkItems.length} work items.</span>
+              <span class="muted">More work is available.</span>
             </div>
           {/if}
         {/if}
@@ -1063,19 +1240,77 @@
           runBusyTaskId={runWorkBusyId}
           runActiveTaskId={effectiveRunActiveId}
           proofMissingTaskIds={[...proofMissingTaskIds]}
+          ownerReviewTaskIds={detail.startReadiness ? detail.startReadiness.reviewTaskIds ?? [] : undefined}
+          {handoffStateByTaskId}
           runError={runWorkError}
+          actionOnly={queueMode}
         />
       {/if}
     </div>
   {/if}
 
-  <details class="progress-more progress-more--full">
-    <summary>Recent progress</summary>
-    <ProgressFeed {progress} {tasks} />
-  </details>
+  {#if !queueMode}
+    <details class="progress-more progress-more--full">
+      <summary>Recent progress</summary>
+      <ProgressFeed {progress} {tasks} />
+    </details>
+  {/if}
 </div>
+{/if}
 
 <style>
+  .work-focus {
+    display: grid;
+    gap: var(--s-4);
+    max-width: var(--gh-layout-measure-wide);
+    min-width: 0;
+    padding: var(--s-4) var(--s-4) var(--s-6);
+  }
+  .work-focus-header,
+  .work-focus-copy {
+    min-width: 0;
+  }
+  .work-focus-progress,
+  .work-focus-copy p {
+    margin: 0;
+    color: var(--text-muted);
+  }
+  .work-focus h1,
+  .work-focus h2 {
+    margin: var(--s-1) 0 0;
+    color: var(--text);
+    line-height: var(--gh-type-line-height-tight);
+  }
+  .work-focus h1 { font-size: var(--gh-type-size-5); }
+  .work-focus h2 { font-size: var(--gh-type-size-4); }
+  .work-focus-progress { margin-top: var(--s-1); }
+  .work-focus-decision {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--s-4);
+  }
+  .work-focus-copy {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .work-focus-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .work-focus-footer {
+    display: flex;
+    justify-content: flex-start;
+  }
+  .work-focus-error {
+    margin: var(--s-3) 0 0;
+    color: var(--gh-color-danger-text, #c43a3a);
+  }
   .work-list-view {
     display: flex;
     flex-direction: column;
@@ -1118,11 +1353,50 @@
     gap: var(--s-3);
     margin-bottom: var(--s-3);
   }
+  .review-queue-detail {
+    max-width: 56ch;
+    margin: var(--s-1) 0 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
+  }
   .work-list-inspector-layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: var(--s-4);
     align-items: start;
+  }
+  .work-queue-current-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+    min-width: 0;
+    padding: var(--s-3) var(--s-4);
+    border-bottom: 1px solid var(--gh-color-border-subtle);
+  }
+  .work-queue-current-copy {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+  .work-queue-current-copy p,
+  .work-queue-current-copy strong {
+    margin: 0;
+  }
+  .work-queue-current-copy p,
+  .work-queue-current-copy span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    font-weight: var(--gh-type-weight-strong);
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+  .work-queue-current-copy div {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--s-2);
   }
   .work-list-inspector-layout.has-selection {
     grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
@@ -1134,13 +1408,6 @@
     font-weight: var(--gh-type-weight-strong);
     line-height: var(--gh-type-line-height-tight);
     white-space: nowrap;
-  }
-  .work-summary {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: var(--gh-space-2);
-    min-width: 0;
   }
   :global(.delivery-queue-panel) {
     display: block;
@@ -1225,19 +1492,6 @@
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
-  .work-list-scroll {
-    max-inline-size: 100%;
-    min-inline-size: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-block: var(--gh-space-1) var(--gh-space-2);
-    scrollbar-gutter: stable;
-  }
-  .work-list-scroll:focus-visible {
-    outline: var(--gh-layout-focus-ring-width) solid var(--gh-color-border-focus);
-    outline-offset: var(--gh-space-1);
-  }
-
   .inventory-more {
     display: flex;
     align-items: center;
@@ -1246,55 +1500,14 @@
     margin-top: var(--gh-space-3);
   }
   :global(.work-list-stack) {
-    --work-list-columns:
-      minmax(280px, 1fr)
-      minmax(120px, max-content)
-      minmax(96px, 124px)
-      minmax(84px, max-content)
-      minmax(96px, max-content)
-      48px;
     display: grid;
-    grid-template-columns: var(--work-list-columns);
     gap: var(--gh-space-2);
-    inline-size: max(100%, 860px);
-  }
-  .list-column-head {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: subgrid;
-    align-items: center;
-    gap: var(--gh-space-2);
-    padding: 0 var(--s-3);
-  }
-  .list-column-head button {
-    min-width: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--text-muted);
-    font: inherit;
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-    letter-spacing: 0.05em;
-    line-height: var(--gh-type-line-height-tight);
-    text-align: left;
-    text-transform: uppercase;
-    cursor: pointer;
-  }
-  .list-column-head button:nth-child(5),
-  .list-column-head button:nth-child(6) {
-    text-align: right;
-  }
-  .list-column-head button:hover,
-  .list-column-head button.active {
-    color: var(--text);
   }
   :global(.work-list-row) {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: subgrid;
+    display: flex;
     align-items: center;
-    gap: var(--gh-space-2);
+    justify-content: space-between;
+    gap: var(--gh-space-3);
     width: 100%;
     border-radius: var(--r-2);
     color: inherit;
@@ -1308,8 +1521,14 @@
   }
   :global(.work-list-row) .row-main {
     display: grid;
-    gap: 4px;
+    gap: var(--gh-space-1);
     min-width: 0;
+  }
+  :global(.work-list-row) .task-key {
+    color: var(--text-muted);
+    font-family: var(--gh-font-mono, ui-monospace, monospace);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
   }
   :global(.work-list-row) .task-title {
     display: -webkit-box;
@@ -1321,53 +1540,11 @@
     -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
   }
-  :global(.work-list-row) .task-subcopy {
-    display: -webkit-box;
-    overflow: hidden;
-    font-size: var(--gh-type-size-meta);
-    color: var(--text-muted);
-    line-height: var(--gh-type-line-height-body);
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-  :global(.work-list-row) .task-breadcrumb {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-tight);
-  }
-  :global(.work-list-row) .row-status,
-  :global(.work-list-row) .row-domain,
-  :global(.work-list-row) .row-priority,
-  :global(.work-list-row) .row-updated,
-  :global(.work-list-row) .row-revisions {
-    min-width: 0;
-  }
-  :global(.work-list-row) .row-status,
-  :global(.work-list-row) .row-priority {
+  :global(.work-list-row) .row-status {
     display: inline-flex;
+    flex: none;
     align-items: center;
     justify-content: flex-start;
-  }
-  :global(.work-list-row) .row-domain {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  :global(.work-list-row) .row-updated,
-  :global(.work-list-row) .row-revisions {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    line-height: var(--gh-type-line-height-tight);
-    text-align: right;
-    white-space: nowrap;
-  }
-  @supports not (grid-template-columns: subgrid) {
-    .list-column-head,
-    :global(.work-list-row) {
-      grid-template-columns: var(--work-list-columns);
-    }
   }
   .progress-more {
     align-self: stretch;
@@ -1397,6 +1574,16 @@
   }
 
   @media (max-width: 860px) {
+    .work-focus {
+      padding: var(--s-3) var(--s-3) var(--s-5);
+    }
+    .work-focus-decision {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .work-focus-decision :global(button) {
+      inline-size: 100%;
+    }
     :global(.work-view-header) {
       align-items: stretch;
       flex-direction: column;
@@ -1404,51 +1591,33 @@
     .work-view-actions {
       justify-content: flex-start;
     }
+    .work-list-overview {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .work-queue-current-action {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .work-queue-current-action :global(button) {
+      inline-size: 100%;
+    }
     :global(.draft-queue-card) {
       flex-direction: column;
       align-items: stretch;
     }
-    .work-list-overview {
-      flex-direction: column;
-      align-items: stretch;
-    }
-    .work-summary {
-      justify-content: flex-start;
-    }
     .work-list-inspector-layout.has-selection {
       grid-template-columns: minmax(0, 1fr);
     }
-    .work-list-scroll {
-      overflow-x: visible;
-      padding-block-end: 0;
-    }
-    :global(.work-list-stack) {
-      --work-list-columns: minmax(0, 1fr);
-      inline-size: 100%;
-    }
     :global(.work-list-row) {
-      grid-template-columns: minmax(0, 1fr);
       align-items: stretch;
-    }
-    .list-column-head {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--gh-space-2);
-      padding: 0;
+      flex-direction: column;
     }
     :global(.work-list-row) .task-title {
       font-size: var(--gh-type-size-meta);
     }
-    :global(.work-list-row) .task-subcopy {
-      -webkit-line-clamp: 3;
-    }
-    :global(.work-list-row) .row-status,
-    :global(.work-list-row) .row-priority {
+    :global(.work-list-row) .row-status {
       justify-content: flex-start;
-    }
-    :global(.work-list-row) .row-updated,
-    :global(.work-list-row) .row-revisions {
-      text-align: left;
     }
   }
 </style>

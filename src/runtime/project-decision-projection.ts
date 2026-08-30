@@ -688,6 +688,7 @@ export interface ProjectDecisionExecution {
   /** Exact selected-scope records behind an owner-review decision. */
   reviewTaskIds?: string[]
   count?: number
+  progressState?: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss'
   message?: string
 }
 
@@ -727,7 +728,7 @@ export interface ProjectDecisionProjectionInput {
   projectRevision?: number | null
   queueRevision?: number | null
   generatedAt: string
-  start: Pick<ProjectScopeProjection['start'], 'canStart' | 'code' | 'focusTaskId' | 'focusTaskTitle' | 'focusKind' | 'reviewTaskIds' | 'count' | 'message'>
+  start: Pick<ProjectScopeProjection['start'], 'canStart' | 'code' | 'focusTaskId' | 'focusTaskTitle' | 'focusKind' | 'reviewTaskIds' | 'count' | 'progressState' | 'message'>
   release: {
     scopeMode: 'named_release' | 'unreleased' | 'unavailable'
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
@@ -803,15 +804,19 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
             : 'Guildhall is advancing the selected work.',
     }
   }
-  if (start.code === 'ready_work') {
+  // Scope projection owns whether a stopped focus is executable. Keep every
+  // executable recovery path runnable here instead of letting only the
+  // ordinary ready-work code survive the shared decision packet.
+  if (start.canStart) {
     return {
       state: 'runnable',
-      code: start.code,
+      code: start.code ?? 'ready_work',
       ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
       ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
       ...(start.reviewTaskIds?.length ? { reviewTaskIds: [...start.reviewTaskIds] } : {}),
       ...(typeof start.count === 'number' ? { count: start.count } : {}),
+      ...(start.progressState ? { progressState: start.progressState } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
   }
@@ -824,6 +829,7 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
       ...(start.focusKind ? { focusKind: start.focusKind } : {}),
       ...(start.reviewTaskIds?.length ? { reviewTaskIds: [...start.reviewTaskIds] } : {}),
       ...(typeof start.count === 'number' ? { count: start.count } : {}),
+      ...(start.progressState ? { progressState: start.progressState } : {}),
       ...(start.message ? { message: start.message } : {}),
     }
   }
@@ -853,19 +859,25 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   focusKind?: string
   reviewTaskIds?: string[]
   count?: number
+  progressState?: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss'
 } {
   const focus = decision.execution.focus
+  const code = decision.execution.focusKind === 'brief_cleanup' &&
+    decision.execution.code === 'no_unattended_progress'
+    ? 'owner_input_required'
+    : decision.execution.code
   return {
     canStart: decision.execution.state === 'runnable' ||
       decision.execution.state === 'running' ||
       decision.execution.state === 'paused',
-    code: decision.execution.code,
+    code,
     ...(decision.execution.message ? { message: decision.execution.message } : {}),
     ...(focus?.taskId ?? decision.execution.focusTaskId ? { focusTaskId: focus?.taskId ?? decision.execution.focusTaskId } : {}),
     ...(focus?.displayTitle ?? decision.execution.focusTaskTitle ? { focusTaskTitle: focus?.displayTitle ?? decision.execution.focusTaskTitle } : {}),
     ...(decision.execution.focusKind ? { focusKind: decision.execution.focusKind } : {}),
     ...(decision.execution.reviewTaskIds?.length ? { reviewTaskIds: [...decision.execution.reviewTaskIds] } : {}),
     ...(typeof decision.execution.count === 'number' ? { count: decision.execution.count } : {}),
+    ...(decision.execution.progressState ? { progressState: decision.execution.progressState } : {}),
   }
 }
 
@@ -920,13 +932,21 @@ function primaryActionForDecision(input: {
       ? { kind: 'answer_owner_input' as const, targetId: ownerInput.requestId, reasonCode: 'owner_input_required' }
       : ownerReview.state === 'required'
         ? { kind: 'review_spec' as const, targetId: ownerReview.taskId, reasonCode: 'owner_review_required' }
+      : execution.state === 'blocked' && execution.code === 'owner_input_required'
+        ? { kind: 'answer_owner_input' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
+        : execution.state === 'blocked' && execution.code === 'owner_review_required'
+          ? { kind: 'review_spec' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
+          : execution.state === 'blocked' && execution.code === 'no_unattended_progress' && execution.focusKind === 'brief_cleanup'
+            ? { kind: 'answer_owner_input' as const, targetId: execution.focusTaskId, reasonCode: 'owner_input_required' }
+            : execution.state === 'blocked' && execution.code === 'no_unattended_progress' && execution.focusKind === 'spec_review'
+              ? { kind: 'review_spec' as const, targetId: execution.focusTaskId, reasonCode: 'owner_review_required' }
       : execution.state === 'runnable'
         ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
         : execution.state === 'paused'
           ? { kind: 'resume' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
           : execution.state === 'running'
             ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
-            : execution.state === 'complete' && release.state === 'ready' && release.lifecycleState !== 'shipped'
+            : execution.state === 'complete' && release.state === 'ready' && Boolean(release.releaseId) && release.lifecycleState !== 'shipped'
               ? { kind: 'review_release' as const, targetId: release.releaseId, reasonCode: 'release_ready' }
               : release.proofBlockerTaskIds.length > 0
                 ? { kind: 'review_proof' as const, targetId: release.proofBlockerTaskIds[0], reasonCode: 'proof_evidence_missing' }
@@ -943,7 +963,10 @@ export function applyProjectActionModelPrimaryAction(
   action: {
     source?: string
     taskId?: string
+    taskLabel?: string
     code?: string
+    label?: string
+    detail?: string
   } | null | undefined,
 ): ProjectDecisionProjection {
   if (!action || decision.conflicts.length > 0 || decision.ownerInput.state === 'required' || decision.ownerReview.state === 'required') return decision
@@ -961,8 +984,30 @@ export function applyProjectActionModelPrimaryAction(
       : decision.execution.state === 'paused'
         ? 'resume' as const
         : 'open_work' as const
+  const actionTitle = action.taskLabel?.trim() || action.label?.trim() || decision.execution.focusTaskTitle || taskId
+  // The shared action model may surface a concrete blocked task after saved
+  // readiness picked unrelated resumable work. Keep every summary consumer on
+  // that same focus instead of leaving orientation on the stale task.
+  const actionOwnsExecutionFocus = action.source === 'start_readiness' || action.code === 'blocked_work'
+  const execution = actionOwnsExecutionFocus
+    ? {
+        ...decision.execution,
+        state: action.code === 'ready_work'
+          ? 'runnable' as const
+          : action.code === 'blocked_work'
+            ? 'blocked' as const
+            : decision.execution.state,
+        code: action.code ?? decision.execution.code,
+        focusKind: action.code === 'blocked_work' ? 'blocked_work' : decision.execution.focusKind,
+        focusTaskId: taskId,
+        focusTaskTitle: actionTitle,
+        focus: { taskId, displayTitle: actionTitle },
+        ...(action.detail?.trim() ? { message: action.detail.trim() } : {}),
+      }
+    : decision.execution
   return {
     ...decision,
+    execution,
     primaryAction: {
       kind,
       targetId: taskId,
@@ -1005,8 +1050,41 @@ export function applyRuntimeExecutionToProjectDecision(
     }
   }
   if (decision.conflicts.some(conflict => conflict.field === 'execution')) return decision
-  const activeTaskId = runtimeExecution?.activeTaskId?.trim()
-  const activeTaskTitle = runtimeExecution?.activeTaskTitle?.trim()
+  // A live supervisor can still be flushing state after it has produced a
+  // concrete, typed owner handoff. Preserve that handoff as the decision
+  // authority; callers receive runtime status separately for the
+  // pause/control surface. A planning-only brief/spec state is not enough:
+  // without an open owner request or review it must never eclipse live work
+  // or invent an action the owner cannot take.
+  if (
+    decision.planExecution?.state === 'blocked' &&
+    (
+      decision.ownerInput.state === 'required' ||
+      decision.ownerReview.state === 'required'
+    )
+  ) {
+    return {
+      ...decision,
+      execution: decision.planExecution,
+      primaryAction: primaryActionForDecision({
+        conflicts: decision.conflicts,
+        ownerInput: decision.ownerInput,
+        ownerReview: decision.ownerReview,
+        execution: decision.planExecution,
+        release: decision.release,
+      }),
+    }
+  }
+  // A focused run can become live before its supervisor row has written the
+  // active-task identity. In that short window, retain the runnable plan's
+  // exact focus rather than turning a real running task into anonymous work
+  // with no owner action. Blocked plan decisions returned above never take
+  // this fallback.
+  const plannedFocus = decision.planExecution?.state === 'runnable' || decision.planExecution?.state === 'paused'
+    ? decision.planExecution.focus
+    : undefined
+  const activeTaskId = runtimeExecution?.activeTaskId?.trim() || plannedFocus?.taskId
+  const activeTaskTitle = runtimeExecution?.activeTaskTitle?.trim() || plannedFocus?.displayTitle
   const execution: ProjectDecisionExecution = {
     state: 'running',
     code: status,

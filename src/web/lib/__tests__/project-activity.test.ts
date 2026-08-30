@@ -405,6 +405,33 @@ describe('buildProjectTicker', () => {
     expect(
       buildProjectTicker(
         {
+          run: { status: 'running', mode: 'continuous' },
+          decision: {
+            execution: {
+              count: 19,
+              focusTaskId: 'task-1',
+              focusTaskTitle: 'Prove packaged sidecar',
+            },
+          },
+          tasks: Array.from({ length: 19 }, (_, index) => ({
+            id: `task-${index + 1}`,
+            status: 'ready',
+            title: `Ready task ${index + 1}`,
+          })),
+        },
+        { event: { type: 'unknown_event' } },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'active',
+      pulse: true,
+      actorLabel: 'Coordinator',
+      message: 'Working on: Prove packaged sidecar',
+    })
+
+    expect(
+      buildProjectTicker(
+        {
           run: { status: 'running', mode: 'one_task' },
           tasks: [
             { id: 'task-1', status: 'ready', title: 'Ready task' },
@@ -686,6 +713,34 @@ describe('buildProjectTicker', () => {
       tone: 'warn',
       actorLabel: 'Needs you',
       message: 'Spec review pending',
+    })
+  })
+
+  it('keeps owner-review readiness ahead of scoped-work resume copy', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Keep the migration docs synchronized',
+        focusKind: 'owner_review',
+        count: 10,
+      },
+      orientationSpine: {
+        summary: {
+          includedWorkCount: 17,
+          selectedScopeLabel: 'Stage 1',
+        },
+      },
+      tasks: [{ id: 'task-spec-a', title: 'Keep the migration docs synchronized', status: 'spec_review' }],
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Review',
+      label: 'Review',
+      message: 'Keep the migration docs synchronized',
+      detail: '9 more waiting behind it',
     })
   })
 

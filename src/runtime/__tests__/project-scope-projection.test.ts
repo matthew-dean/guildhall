@@ -50,7 +50,93 @@ function queue(tasks: Task[]): TaskQueue {
   }
 }
 
+function ownerReviewFields(): Partial<Task> {
+  return {
+    productBrief: {
+      userJob: 'Review a bounded implementation plan.',
+      successMetric: 'The task has a complete owner-reviewable contract.',
+      nonGoals: ['Do not start implementation during review.'],
+      authoredBy: 'spec-agent',
+    },
+    structuredSpec: {
+      whatThisIs: 'A bounded implementation plan.',
+      problemContext: 'The task needs an explicit completion contract.',
+      goals: ['Provide a reviewable implementation plan.'],
+      nonGoals: ['Do not start implementation during review.'],
+      proposedDesign: 'Use the existing project boundary.',
+      keyDecisions: ['Keep the scope bounded.'],
+      acceptanceCriteria: [{
+        scenario: 'Given the owner opens the review',
+        expectation: 'The completion contract is visible.',
+        verificationMode: 'review',
+      }],
+      verification: ['Review the contract before approval.'],
+      completionBoundary: {
+        productOutcome: 'The owner can approve a complete plan.',
+        whatGuildhallCanCompleteInCode: 'Record the implementation contract.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'The registered project.',
+        whatCountsAsDone: 'The complete contract is available for review.',
+        whatMustBeSplitOrBlocked: 'Split only independent work.',
+        splitPolicy: 'conditional',
+      },
+    },
+    acceptanceCriteria: [{
+      id: 'ac-1',
+      description: 'The completion contract is visible.',
+      verifiedBy: 'review',
+      met: false,
+    }],
+  }
+}
+
 describe('buildProjectScopeProjection', () => {
+  it('focuses the runnable dependency before blocked downstream shaping', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-2',
+      releases: [{
+        id: 'stage-2',
+        label: 'Stage 2',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-gate', 'work:task-ui'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        task({
+          id: 'task-gate',
+          title: 'Prove architecture gate',
+          status: 'ready',
+          spec: 'One approved gate.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'The gate is proven.', verifiedBy: 'review', met: false }],
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-ui',
+          title: 'Build desktop UI',
+          status: 'exploring',
+          dependsOn: ['task-gate'],
+          releaseIds: ['stage-2'],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-ui')).toMatchObject({
+      dependencyBlocked: true,
+      dependencyTaskIds: ['task-gate'],
+      blocksStart: true,
+    })
+    expect(projection.start).toMatchObject({
+      code: 'ready_work',
+      focusTaskId: 'task-gate',
+    })
+  })
+
   it('keeps public release membership totals when execution scope is compacted', () => {
     expect(projectScopeMembershipCounts({
       id: 'stage-1',
@@ -140,6 +226,33 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start).toMatchObject({ code: 'proof_evidence_missing', focusTaskId: 'task-complete' })
   })
 
+  it('keeps a release active while retaining blockers behind resumable work', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current', 'work:task-blocked'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        task({ id: 'task-current', title: 'Current work', status: 'in_progress', releaseIds: ['stage-1'] }),
+        task({ id: 'task-blocked', title: 'Later blocked work', status: 'blocked', releaseIds: ['stage-1'] }),
+      ],
+    })
+
+    expect(projection.release).toMatchObject({ state: 'active' })
+    expect(projection.release.blockers).toEqual([
+      expect.objectContaining({ owningTaskId: 'task-blocked', code: 'blocked' }),
+    ])
+  })
+
   it('uses the current release proof child instead of a shipped proof child', () => {
     const projection = buildProjectScopeProjection({
       version: 1,
@@ -207,13 +320,16 @@ describe('buildProjectScopeProjection', () => {
             id: 'current-proof-command',
             kind: 'command',
             command: 'pnpm proof:current',
-            status: 'verified',
-            verificationRecords: [{
-              evidenceId: 'ac-1',
-              status: 'passed',
-              command: 'pnpm proof:current',
-              recordedAt: now,
-            }],
+            status: 'planned',
+            verificationRecords: [],
+          }],
+          gateResults: [{
+            gateId: 'ac-1',
+            type: 'hard',
+            passed: true,
+            command: 'pnpm proof:current',
+            output: 'Current proof command passed.',
+            checkedAt: now,
           }],
         }),
       ],
@@ -263,6 +379,97 @@ describe('buildProjectScopeProjection', () => {
       code: 'no_unattended_progress',
       focusTaskId: 'task-blocked',
       focusKind: 'blocked_work',
+    })
+  })
+
+  it('focuses runnable review work before a downstream dependency block', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-dependent', 'work:task-review'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({
+          id: 'task-dependent',
+          title: 'Package the app',
+          status: 'ready',
+          dependsOn: ['task-review'],
+          releaseIds: ['stage-1'],
+          spec: 'Package the current app.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Package succeeds.', verifiedBy: 'automated', met: false }],
+        }),
+        task({
+          id: 'task-review',
+          title: 'Review the desktop adapter',
+          status: 'review',
+          releaseIds: ['stage-1'],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-dependent')).toMatchObject({
+      dependencyBlocked: true,
+    })
+    expect(projection.start).toMatchObject({
+      canStart: true,
+      code: 'ready_work',
+      focusTaskId: 'task-review',
+      focusKind: 'review_work',
+      label: 'Resume',
+      message: '"Review the desktop adapter" has saved changes ready for automated review.',
+    })
+  })
+
+  it('distinguishes an exhausted reviewer contract retry from ordinary review work', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-review'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [task({
+        id: 'task-review',
+        title: 'Review the desktop adapter',
+        status: 'review',
+        releaseIds: ['stage-1'],
+        reviewVerdicts: [{
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reviewerId: 'visual-designer',
+          reviewerName: 'Visual designer',
+          reason: 'Invalid review contract.',
+          reasoning: '',
+          failureCode: 'invalid_review_contract',
+          recordedAt: now,
+        }],
+      })],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-review')).toMatchObject({
+      handoffState: 'review_retry',
+    })
+    expect(projection.start).toMatchObject({
+      canStart: true,
+      code: 'review_retry',
+      focusKind: 'review_retry',
+      label: 'Retry review',
     })
   })
 
@@ -324,6 +531,130 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.counts).toMatchObject({ ownerBlocked: 0, humanBlocking: 0 })
     expect(projection.release).toMatchObject({ state: 'shaping' })
     expect(projection.start).toMatchObject({ canStart: true, focusTaskId: 'task-shaping' })
+  })
+
+  it('makes a complete unapproved brief the only owner action ahead of dependency-blocked drafts', () => {
+    const completeBrief = {
+      userJob: 'Prove the packaged sidecar before desktop work begins.',
+      whyItMattersNow: 'The desktop release depends on this architecture gate.',
+      successMetric: 'The packaged app completes one offline fixture run.',
+      nonGoals: ['Do not build the full interface yet.'],
+    }
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-2',
+      releases: [{
+        id: 'stage-2',
+        label: 'Stage 2',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-086', 'work:task-087', 'work:task-088'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        task({
+          id: 'task-086',
+          title: 'Prove packaged Tauri sidecar',
+          status: 'exploring',
+          productBrief: completeBrief,
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-087',
+          title: 'Define typed desktop harness adapter',
+          status: 'spec_review',
+          ...ownerReviewFields(),
+          dependsOn: ['task-086'],
+          spec: 'Define the typed adapter.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Typed adapter exists.', verifiedBy: 'review', met: false }],
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-088',
+          title: 'Build quiet desktop shell',
+          status: 'exploring',
+          dependsOn: ['task-086'],
+          productBrief: completeBrief,
+          releaseIds: ['stage-2'],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-086')).toMatchObject({
+      handoffState: 'brief_cleanup',
+      humanBlocking: true,
+      dependencyBlocked: false,
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-087')).toMatchObject({ dependencyBlocked: true })
+    expect(projection.rows.find(row => row.taskId === 'task-088')).toMatchObject({ dependencyBlocked: true })
+    expect(projection.start).toMatchObject({
+      canStart: false,
+      code: 'owner_input_required',
+      focusTaskId: 'task-086',
+      focusKind: 'brief_cleanup',
+      actionHref: '/thread?thread=task%3Atask-086',
+    })
+    expect(projection.start.message).toMatch(/drafted brief ready for review/i)
+  })
+
+  it('keeps the current spec review ahead of dependency-blocked downstream reviews', () => {
+    const approvedBrief = {
+      userJob: 'Prove the packaged sidecar.',
+      whyItMattersNow: 'The desktop release depends on the architecture gate.',
+      successMetric: 'The packaged app completes one offline fixture run.',
+      nonGoals: ['Do not build the full interface.'],
+      approvedAt: now,
+    }
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-2',
+      releases: [{
+        id: 'stage-2',
+        label: 'Stage 2',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-086', 'work:task-087'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        task({
+          id: 'task-086',
+          title: 'Prove packaged Tauri sidecar',
+          status: 'spec_review',
+          ...ownerReviewFields(),
+          productBrief: approvedBrief,
+          spec: 'Prove the package.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Package proof exists.', verifiedBy: 'review', met: false }],
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-087',
+          title: 'Define typed desktop harness adapter',
+          status: 'spec_review',
+          ...ownerReviewFields(),
+          dependsOn: ['task-086'],
+          productBrief: approvedBrief,
+          spec: 'Define the adapter.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'Typed adapter exists.', verifiedBy: 'review', met: false }],
+          releaseIds: ['stage-2'],
+        }),
+      ],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-087')).toMatchObject({ dependencyBlocked: true })
+    expect(projection.start).toMatchObject({
+      canStart: false,
+      focusTaskId: 'task-086',
+      focusKind: 'spec_review',
+      count: 1,
+      actionHref: '/thread?thread=task%3Atask-086',
+    })
   })
 
   it('reports later work when a named release is complete', () => {
@@ -572,6 +903,7 @@ describe('buildProjectScopeProjection', () => {
           id: 'spec-review-task',
           title: 'Spec review release work',
           status: 'spec_review',
+          ...ownerReviewFields(),
           releaseIds: [],
           spec: 'Review this spec.',
           acceptanceCriteria: [{ id: 'AC-1', description: 'Spec is reviewed.', verifiedBy: 'review', met: false }],
@@ -625,6 +957,7 @@ describe('buildProjectScopeProjection', () => {
       id: 'release-parent-split-review-proof',
       title: 'Review proof packet',
       status: 'spec_review',
+      ...ownerReviewFields(),
       hierarchy: { parentId: 'release-parent', childIds: [], relation: 'decomposes', order: 0 },
     })
     const derived = deriveReleaseContainersFromTaskMembership([parent, child])
@@ -765,13 +1098,16 @@ describe('buildProjectScopeProjection', () => {
           id: 'proof-step-command',
           kind: 'command',
           command: proofCommand,
-          status: 'verified',
-          verificationRecords: [{
-            evidenceId: 'AC-1',
-            status: 'passed',
-            command: proofCommand,
-            recordedAt: now,
-          }],
+          status: 'planned',
+          verificationRecords: [],
+        }],
+        gateResults: [{
+          gateId: 'AC-1',
+          type: 'hard',
+          passed: true,
+          command: proofCommand,
+          output: 'The bounded proof passed.',
+          checkedAt: now,
         }],
       }),
     ]))
@@ -814,6 +1150,7 @@ describe('buildProjectScopeProjection', () => {
         id: 'task-contracts',
         title: 'Define fixture contracts.',
         status: 'spec_review',
+        ...ownerReviewFields(),
         spec: 'Fixture contract spec.',
         acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is parseable.', verifiedBy: 'automated', met: false }],
       }),
@@ -1103,5 +1440,30 @@ describe('buildProjectScopeProjection', () => {
     })
     expect(projection.start.message).toContain(recoveryReason)
     expect(projection.start.message).not.toContain('max_revisions_exceeded')
+  })
+
+  it('deduplicates task source references while preserving their first-seen order', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Trace source references',
+        description: 'Use docs/guide/owner-flow.md while shaping this task.',
+        references: ['docs/guide/owner-flow.md', ' docs/reference/cli.md '],
+        sourceClaims: [{ references: ['docs/reference/cli.md', 'docs/guide/owner-flow.md'] }],
+      }),
+    ]))
+
+    expect(projection.rows.find(row => row.taskId === 'task-contracts')?.sourceRefs).toEqual([
+      'docs/guide/owner-flow.md',
+      'docs/reference/cli.md',
+    ])
+  })
+
+  it('uses the task reference when no source is recorded', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({ id: 'task-contracts', title: 'No source yet', description: 'No linked source.' }),
+    ]))
+
+    expect(projection.rows.find(row => row.taskId === 'task-contracts')?.sourceRefs).toEqual(['task:task-contracts'])
   })
 })

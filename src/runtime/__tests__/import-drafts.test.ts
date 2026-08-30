@@ -19,6 +19,16 @@ function importedExploringTask(notes: Task['notes']): Task {
 }
 
 describe('imported draft state', () => {
+  it('does not treat ordinary source-backed work as a workspace import', () => {
+    const task = {
+      ...importedExploringTask([]),
+      requestIntake: undefined,
+      sourceClaims: [{ claim: 'The package exposes a CLI.', references: ['package.json'] }],
+    } as unknown as Task
+
+    expect(shouldUseImportDraftState(task)).toBe(false)
+  })
+
   it('preserves exploring after Guildhall records imported-draft shaping progress', () => {
     const task = importedExploringTask([
       {

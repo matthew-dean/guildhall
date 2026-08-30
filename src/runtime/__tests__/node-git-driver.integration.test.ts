@@ -315,9 +315,154 @@ describe('NodeGitDriver.push', () => {
     expect(result.ok).toBe(false)
     expect(result.detail).toBeDefined()
   })
+
+  it('sets an upstream when publishing a branch for the first time', async () => {
+    const remoteRoot = path.join(repoRoot, 'origin.git')
+    await git(repoRoot, ['init', '--bare', '-q', remoteRoot])
+    await git(repoRoot, ['remote', 'add', 'origin', remoteRoot])
+    await git(repoRoot, ['checkout', '-q', '-b', 'guildhall/task-publish'])
+    await fs.writeFile(path.join(repoRoot, 'published.txt'), 'ready\n', 'utf8')
+    await git(repoRoot, ['add', 'published.txt'])
+    await git(repoRoot, ['commit', '-q', '-m', 'ready to publish'])
+
+    const result = await new NodeGitDriver().push(repoRoot, 'guildhall/task-publish')
+
+    expect(result).toEqual({ ok: true })
+    expect((await git(repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])).stdout.trim())
+      .toBe('origin/guildhall/task-publish')
+  })
 })
 
 describe('NodeGitDriver.cherryPickBranch', () => {
+  it('removes a stale index lock and retries the failed Git command before landing task work', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'stale-index-lock')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-stale-index-lock',
+      baseBranch: 'main',
+    })
+    await fs.writeFile(path.join(worktreePath, 'landed.txt'), 'landed\n', 'utf8')
+    await git(worktreePath, ['add', 'landed.txt'])
+    await git(worktreePath, ['commit', '-q', '-m', 'task work'])
+
+    const lockPath = path.join(repoRoot, '.git', 'index.lock')
+    await fs.writeFile(lockPath, '', 'utf8')
+    const staleAt = new Date(Date.now() - 60_000)
+    await fs.utimes(lockPath, staleAt, staleAt)
+
+    const result = await driver.cherryPickBranch(repoRoot, 'guildhall/task-stale-index-lock', 'main')
+
+    expect(result.ok).toBe(true)
+    await expect(fs.readFile(path.join(repoRoot, 'landed.txt'), 'utf8')).resolves.toBe('landed\n')
+    await expect(fs.stat(lockPath)).rejects.toThrow()
+  })
+
+  it('lands the remaining task delta when owner checkout paths already match the branch target', async () => {
+    const driver = new NodeGitDriver()
+    await fs.writeFile(path.join(repoRoot, 'package-lock.json'), '{"lock":true}\n', 'utf8')
+    await git(repoRoot, ['add', 'package-lock.json'])
+    await git(repoRoot, ['commit', '-q', '-m', 'add lockfile'])
+
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'matching-owner-paths')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-matching-owner-paths',
+      baseBranch: 'main',
+    })
+    const fixturePath = path.join('fixtures', 'run.json')
+    await fs.rm(path.join(worktreePath, 'package-lock.json'))
+    await fs.mkdir(path.join(worktreePath, 'fixtures'), { recursive: true })
+    await fs.writeFile(path.join(worktreePath, fixturePath), '{"ok":true}\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'feature.txt'), 'land me\n', 'utf8')
+    await git(worktreePath, ['add', '-A'])
+    await git(worktreePath, ['commit', '-q', '-m', 'task work'])
+
+    await fs.rm(path.join(repoRoot, 'package-lock.json'))
+    await fs.mkdir(path.join(repoRoot, 'fixtures'), { recursive: true })
+    await fs.writeFile(path.join(repoRoot, fixturePath), '{"ok":true}\n', 'utf8')
+
+    const result = await driver.cherryPickBranch(
+      repoRoot,
+      'guildhall/task-matching-owner-paths',
+      'main',
+    )
+
+    expect(result.ok).toBe(true)
+    await expect(fs.readFile(path.join(repoRoot, 'feature.txt'), 'utf8')).resolves.toBe('land me\n')
+    await expect(fs.readFile(path.join(repoRoot, fixturePath), 'utf8')).resolves.toBe('{"ok":true}\n')
+    await expect(fs.stat(path.join(repoRoot, 'package-lock.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    const { stdout: status } = await git(repoRoot, ['status', '--short'])
+    expect(status).toContain(' D package-lock.json')
+    expect(status).toContain('?? fixtures/')
+    const { stdout: committedFiles } = await git(repoRoot, ['show', '--name-only', '--format=', 'HEAD'])
+    expect(committedFiles).toContain('feature.txt')
+    expect(committedFiles).not.toContain('package-lock.json')
+    expect(committedFiles).not.toContain(fixturePath)
+  })
+
+  it('does not land an executable-mode change already present in the owner checkout', async () => {
+    const driver = new NodeGitDriver()
+    const scriptPath = path.join(repoRoot, 'release.sh')
+    await fs.writeFile(scriptPath, '#!/bin/sh\necho base\n', 'utf8')
+    await git(repoRoot, ['add', 'release.sh'])
+    await git(repoRoot, ['commit', '-q', '-m', 'add release script'])
+
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'matching-owner-mode')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-matching-owner-mode',
+      baseBranch: 'main',
+    })
+    await fs.chmod(path.join(worktreePath, 'release.sh'), 0o755)
+    await fs.writeFile(path.join(worktreePath, 'feature.txt'), 'land me\n', 'utf8')
+    await git(worktreePath, ['add', 'release.sh', 'feature.txt'])
+    await git(worktreePath, ['commit', '-q', '-m', 'task work'])
+
+    await fs.chmod(scriptPath, 0o755)
+    const result = await driver.cherryPickBranch(
+      repoRoot,
+      'guildhall/task-matching-owner-mode',
+      'main',
+    )
+
+    expect(result.ok).toBe(true)
+    const { stdout: committedFiles } = await git(repoRoot, ['show', '--name-only', '--format=', 'HEAD'])
+    expect(committedFiles).toContain('feature.txt')
+    expect(committedFiles).not.toContain('release.sh')
+    expect((await fs.stat(scriptPath)).mode & 0o100).toBe(0o100)
+  })
+
+  it('lands an executable-mode change when the owner checkout has only a group execute bit', async () => {
+    const driver = new NodeGitDriver()
+    const scriptPath = path.join(repoRoot, 'release.sh')
+    await fs.writeFile(scriptPath, '#!/bin/sh\necho base\n', 'utf8')
+    await git(repoRoot, ['add', 'release.sh'])
+    await git(repoRoot, ['commit', '-q', '-m', 'add release script'])
+
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'owner-mode-mismatch')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-owner-mode-mismatch',
+      baseBranch: 'main',
+    })
+    await fs.chmod(path.join(worktreePath, 'release.sh'), 0o755)
+    await git(worktreePath, ['add', 'release.sh'])
+    await git(worktreePath, ['commit', '-q', '-m', 'make script executable'])
+
+    await fs.chmod(scriptPath, 0o654)
+    const result = await driver.cherryPickBranch(
+      repoRoot,
+      'guildhall/task-owner-mode-mismatch',
+      'main',
+    )
+
+    expect(result.ok).toBe(true)
+    const { stdout: committedFiles } = await git(repoRoot, ['show', '--name-only', '--format=', 'HEAD'])
+    expect(committedFiles).toContain('release.sh')
+    expect((await fs.stat(scriptPath)).mode & 0o100).toBe(0o100)
+  })
+
   it('lands product files while ignoring Guildhall runtime state from the task branch', async () => {
     const driver = new NodeGitDriver()
     const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'landing')
@@ -354,6 +499,27 @@ describe('NodeGitDriver.cherryPickBranch', () => {
     expect(committedFiles).toContain('feature.txt')
     expect(committedFiles).not.toContain('guildhall.yaml')
     expect(committedFiles).not.toContain('memory/TASKS.json')
+  })
+
+  it('preserves leading and trailing whitespace in NUL-delimited Git paths', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'whitespace-path')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-whitespace-path',
+      baseBranch: 'main',
+    })
+    const unusualPath = ' leading-and-trailing.txt '
+    await fs.writeFile(path.join(worktreePath, unusualPath), 'preserve exact path\n', 'utf8')
+    await git(worktreePath, ['add', unusualPath])
+    await git(worktreePath, ['commit', '-q', '-m', 'add exact whitespace path'])
+
+    const result = await driver.cherryPickBranch(repoRoot, 'guildhall/task-whitespace-path', 'main')
+
+    expect(result.ok).toBe(true)
+    await expect(fs.readFile(path.join(repoRoot, unusualPath), 'utf8')).resolves.toBe('preserve exact path\n')
+    const { stdout: committedFiles } = await git(repoRoot, ['show', '--name-only', '--format=', 'HEAD'])
+    expect(committedFiles).toContain(unusualPath)
   })
 })
 

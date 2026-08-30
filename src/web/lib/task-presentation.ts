@@ -18,6 +18,20 @@ export interface TaskPresentation {
   tone: TaskPresentationTone
 }
 
+/** Names the next executable pass using the persisted lifecycle stage. */
+export function taskRunActionLabel(status: string | null | undefined, busy = false): string {
+  switch (status) {
+    case 'in_progress':
+      return busy ? 'Resuming...' : 'Resume work'
+    case 'review':
+      return busy ? 'Continuing review...' : 'Continue review'
+    case 'gate_check':
+      return busy ? 'Checking...' : 'Run checks'
+    default:
+      return busy ? 'Starting...' : 'Start work'
+  }
+}
+
 interface TaskPresentationInput {
   id?: string
   taskId?: string
@@ -39,6 +53,9 @@ interface TaskPresentationInput {
   requestKind?: string
   requestStage?: string
   spec?: string
+  specReviewGate?: {
+    authority?: string
+  } | null
   acceptanceCriteria?: AcceptanceCriterion[]
   productBrief?: ProductBrief
   openQuestions?: AgentQuestion[]
@@ -48,6 +65,12 @@ export interface TaskPresentationOptions {
   runStatus?: string | null
   availabilityStatus?: string | null
   tasks?: TaskDependencyLite[]
+  focusTaskId?: string | null
+  focusKind?: string | null
+  ownerReviewTaskIds?: readonly string[] | null
+  // Project scope is the authoritative workflow handoff. A compact task
+  // status can remain `spec_review` while Guildhall repairs an invalid spec.
+  handoffState?: string | null
 }
 
 function taskId(input: TaskPresentationInput): string | undefined {
@@ -110,6 +133,11 @@ export function taskStagePresentation(
   const waitingOnDependency = hasUnmetDependencies({ id: taskId(input), status, dependsOn: input.dependsOn }, options.tasks)
 
   if (input.status === 'done' || status === 'done') return { key: 'done', label: 'Done', tone: 'ok' }
+  // A paused focused item is the project-level owner decision. Its stale
+  // assignment metadata must not make a stopped run look live in a list.
+  if (taskId(input) === options.focusTaskId && options.focusKind === 'paused_work') {
+    return { key: 'paused', label: 'Paused', tone: 'neutral' }
+  }
   if (needsRecovery({ ...input, taskStatus: status })) return { key: 'needs_recovery', label: 'Needs recovery', tone: 'warn' }
   if (agentName === 'spec-agent') {
     return { key: 'working', label: 'Working', tone: 'running' }
@@ -118,9 +146,19 @@ export function taskStagePresentation(
   if (agentName === 'worker-agent') return { key: 'working', label: 'Working', tone: 'running' }
   if (agentName === 'reviewer-agent') return { key: 'review', label: 'Review', tone: 'running' }
   if (agentName === 'gate-checker-agent') return { key: 'gates', label: 'Gates', tone: 'running' }
+  if (options.handoffState === 'spec_shaping') return { key: 'spec_shaping', label: 'Spec repair', tone: 'neutral' }
   if (hasOpenQuestion(input)) return { key: 'needs_you', label: 'Needs you', tone: 'warn' }
   if (input.requestKind === 'project_question') return { key: 'needs_you', label: 'Needs you', tone: 'warn' }
   if (taskId(input) === 'task-meta-intake') return { key: 'setup', label: 'Setup', tone: 'warn' }
+  if (status === 'blocked') return { key: 'blocked', label: 'Blocked', tone: 'danger' }
+  if (waitingOnDependency) return { key: 'waiting_dependency', label: 'Waiting', tone: 'warn' }
+  if (taskId(input) === options.focusTaskId) {
+    if (options.focusKind === 'brief_cleanup') return { key: 'brief_review', label: 'Review brief', tone: 'warn' }
+    if (options.focusKind === 'spec_review') return { key: 'spec_review', label: 'Review spec', tone: 'warn' }
+    if (options.focusKind === 'review_retry') return { key: 'review_retry', label: 'Review retry', tone: 'warn' }
+    if (options.focusKind === 'review_work') return { key: 'review', label: 'Review ready', tone: 'accent' }
+    if (options.focusKind === 'ready_work') return { key: 'ready', label: 'Ready', tone: 'ok' }
+  }
 
   switch (status) {
     case 'import_draft':
@@ -143,17 +181,17 @@ export function taskStagePresentation(
         ? { key: 'queued', label: 'Queued', tone: 'running' }
         : { key: 'paused', label: 'Paused', tone: 'neutral' }
     case 'spec_review':
-      if (specRevisionQueued(input)) {
-        return runIsActive(options)
-          ? { key: 'queued', label: 'Queued', tone: 'running' }
-          : { key: 'paused', label: 'Paused', tone: 'neutral' }
+      if (
+        input.specReviewGate?.authority === 'coordinator' ||
+        (options.ownerReviewTaskIds !== null && options.ownerReviewTaskIds !== undefined && !options.ownerReviewTaskIds.includes(taskId(input) ?? ''))
+      ) {
+        return { key: 'queued', label: 'Queued', tone: 'neutral' }
       }
-      return { key: 'spec_review', label: friendlyStatus(status), tone: 'warn' }
+      return { key: 'spec_review', label: 'Review spec', tone: 'warn' }
     case 'ready':
       if (needsWorkerHandoffSpecCleanup({ ...input, taskStatus: status })) {
         return { key: 'needs_brief', label: 'Needs brief', tone: 'warn' }
       }
-      if (waitingOnDependency) return { key: 'waiting_dependency', label: 'Waiting', tone: 'warn' }
       return runIsActive(options)
         ? { key: 'queued', label: 'Queued', tone: 'running' }
         : { key: 'ready', label: 'Ready', tone: 'ok' }
@@ -169,8 +207,6 @@ export function taskStagePresentation(
       return runIsActive(options)
         ? { key: 'gates', label: 'Gates', tone: 'ok' }
         : { key: 'gates', label: 'Gates', tone: 'ok' }
-    case 'blocked':
-      return { key: 'blocked', label: 'Blocked', tone: 'danger' }
     case 'shelved':
       return { key: 'shelved', label: 'Shelved', tone: 'warn' }
     case 'pending_pr':

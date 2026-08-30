@@ -2,7 +2,7 @@
   Banner at the top of the Spec tab when a task is blocked, shelved, or has
   an open escalation. Primary/secondary/overflow IA:
     · Primary: one-line reason headline + chip row (reason code + role).
-    · Secondary: single action row (Retry gates / I handled this...).
+    · Secondary: single action row (Retry gates / Mark blocker resolved...).
     · Overflow: details collapsed behind a <details> toggle.
 -->
 <script lang="ts">
@@ -127,7 +127,7 @@
             disabled={busy}
             onclick={() => onResolve(firstOpen, 'resolve')}
           >
-            I handled this...
+            Mark blocker resolved...
           </Button>
         {/if}
       {/if}

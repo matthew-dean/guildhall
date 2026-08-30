@@ -4,9 +4,22 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/svelt
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectView from '../ProjectView.svelte'
-import { path } from '../../lib/nav.svelte.js'
+import { nav, path } from '../../lib/nav.svelte.js'
 import { project } from '../../lib/project.svelte.js'
 import type { ProjectDetail, ProjectView as ProjectViewName } from '../../lib/types.js'
+
+const eventSubscribers = vi.hoisted(() => new Set<(event: { event?: { type?: string } }) => void>())
+
+vi.mock('../../lib/events.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../lib/events.js')>()
+  return {
+    ...actual,
+    onEvent(listener: (event: { event?: { type?: string } }) => void) {
+      eventSubscribers.add(listener)
+      return () => eventSubscribers.delete(listener)
+    },
+  }
+})
 
 const now = '2026-05-19T15:00:00.000Z'
 
@@ -396,9 +409,45 @@ describe('ProjectView', () => {
 
   afterEach(() => {
     cleanup()
+    eventSubscribers.clear()
     vi.restoreAllMocks()
     project.detail = null
+    project.surfaceLoading = false
     project.error = null
+  })
+
+  it('waits for the shared action packet instead of flashing a false empty Overview decision', async () => {
+    const runningPartial = detail({
+      run: { status: 'running', mode: 'continuous' },
+      orientationSpine: { summary: { headline: 'Current scope is underway.' } },
+    } as Partial<ProjectDetail>)
+    const { pendingProject } = installFetchFakesWithPendingProject(runningPartial)
+    project.detail = runningPartial
+    project.surfaceLoading = true
+    project.error = null
+
+    render(ProjectView, { initialView: 'overview', projectId: 'looma-knit' })
+
+    expect(screen.getByText('Work is underway')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing needs your attention')).toBeNull()
+    pendingProject.resolve(json({
+      ...runningPartial,
+      actionModel: {
+        primaryAction: {
+          label: 'Knit: add link editor controls',
+          ownerHeading: 'Work is underway',
+          detail: 'Guildhall is running "Knit: add link editor controls".',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-link-editor',
+          tone: 'running',
+          code: 'running',
+          taskId: 'task-link-editor',
+        },
+      },
+    }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument())
+    expect(screen.queryByText('Nothing needs your attention')).toBeNull()
   })
 
   it('keeps task questions inside Thread and answers without opening the details pane', async () => {
@@ -431,6 +480,23 @@ describe('ProjectView', () => {
     })
   })
 
+  it('waits for the shared project snapshot before mounting a cold Thread route', async () => {
+    const { fetchMock, pendingProject } = installFetchFakesWithPendingProject()
+    project.detail = null
+    project.error = null
+
+    render(ProjectView, { initialView: 'thread', initialSub: null, projectId: 'looma-knit' })
+
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(fetchMock.mock.calls.some(([input]) => new URL(String(input), 'http://localhost').pathname === '/api/project/thread')).toBe(false)
+
+    pendingProject.resolve(json(detail()))
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => new URL(String(input), 'http://localhost').pathname === '/api/project/thread')).toBe(true)
+    })
+  })
+
   it('does not let stale project detail rename a drawer-backed Thread route while detail refreshes', async () => {
     project.detail = detail({ id: 'jess', name: 'Jess', path: '/workspace/jess' })
     project.error = null
@@ -446,16 +512,16 @@ describe('ProjectView', () => {
   })
 
   it.each([
-    ['overview', 'Work mix'],
+    ['overview', 'What needs your attention'],
     ['inbox', 'Choose link editor scope'],
     ['work', 'Knit: add link editor controls'],
     ['planner', 'Knit: add link editor controls'],
     ['map', 'Project map'],
-    ['timeline', 'Coordinator timeline'],
-    ['release', 'Current counts'],
+    ['timeline', 'What needs your attention'],
+    ['release', 'Current work'],
     ['settings', 'Settings'],
     ['workspace-import', 'Review existing project work'],
-    ['facts', 'Project facts'],
+    ['facts', 'Project map'],
   ] as Array<[ProjectViewName, string]>)('renders the %s project surface from the project shell', async (view, expectedText) => {
     await renderProjectView(view)
 
@@ -467,11 +533,141 @@ describe('ProjectView', () => {
   it('loads project detail before rendering a cold direct Release route', async () => {
     await renderProjectViewWithoutInitialDetail('release')
 
-    expect(await screen.findByText('Current counts')).toBeInTheDocument()
+    expect(await screen.findByText('Current work')).toBeInTheDocument()
     expect(screen.queryByText('Loading project...')).not.toBeInTheDocument()
   })
 
-  it('renders Release readiness when the broad project payload is still loading', async () => {
+  it('waits for the Work inventory instead of rendering a previous Overview ordering', async () => {
+    const pendingProject = deferredResponse()
+    const overviewPayload = detail({
+      tasks: [task({ id: 'task-overview-only', title: 'Overview ordering task' })],
+      taskPayload: { surface: 'overview', kind: 'selected_scope_cards' },
+      summary: 'Old project summary should not replace the Work decision.',
+    } as Partial<ProjectDetail>)
+    const workPayload = detail({
+      tasks: [task({ id: 'task-work-only', title: 'Work inventory task' })],
+      taskPayload: { surface: 'work', kind: 'project_work_inventory' },
+    } as Partial<ProjectDetail>)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return pendingProject.promise
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      return json({})
+    }))
+    project.detail = overviewPayload
+    project.error = null
+
+    render(ProjectView, { initialView: 'work', initialSub: null, projectId: 'looma-knit' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Checking what changed')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Guildhall finished the last pass and is loading the next decision.')).toBeInTheDocument()
+    expect(screen.queryByText('Old project summary should not replace the Work decision.')).toBeNull()
+    expect(screen.queryByText('Overview ordering task')).not.toBeInTheDocument()
+
+    pendingProject.resolve(json(workPayload))
+    await waitFor(() => {
+      expect(screen.getByText('Work inventory task')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Overview ordering task')).not.toBeInTheDocument()
+  })
+
+  it('keeps the active task and release progress visible while Work refreshes', async () => {
+    const running = detail({
+      run: { status: 'running', mode: 'one_task', activeTaskId: 'task-link-editor' },
+      startReadiness: {
+        canStart: true,
+        code: 'running',
+        focusTaskId: 'task-link-editor',
+        focusTaskTitle: 'Knit: add link editor controls',
+      },
+      actionModel: {
+        primaryAction: {
+          label: 'Knit: add link editor controls',
+          taskId: 'task-link-editor',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-link-editor',
+          tone: 'running',
+          code: 'running',
+        },
+      },
+      releaseSummary: {
+        release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'active', source: 'release_plan' },
+        counts: { total: 16, done: 3 },
+      },
+      taskPayload: { surface: 'overview' },
+    } as Partial<ProjectDetail>)
+    const pendingProject = deferredResponse()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return pendingProject.promise
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      return json({})
+    }))
+    project.detail = running
+    project.error = null
+
+    render(ProjectView, { initialView: 'work', initialSub: null, projectId: 'looma-knit' })
+
+    expect(await screen.findByRole('heading', { name: 'Knit: add link editor controls' })).toBeInTheDocument()
+    expect(screen.getByText('Stage 1 · 3 of 16 complete. Nothing is waiting on you.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Guildhall is working' })).toBeNull()
+
+    pendingProject.resolve(json(running))
+  })
+
+  it('keeps the Work inventory projection when a supervisor event refreshes the project', async () => {
+    const projectPayload = detail({
+      tasks: [task({ id: 'task-work-only', title: 'Work inventory task' })],
+      taskPayload: { surface: 'work', kind: 'project_work_inventory' },
+    } as Partial<ProjectDetail>)
+    const fetchMock = installFetchFakes(projectPayload)
+
+    await renderProjectView('work', null, 'looma-knit', projectPayload)
+    fetchMock.mockClear()
+
+    for (const listener of eventSubscribers) {
+      listener({ event: { type: 'supervisor_stopped' } })
+    }
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/project?surface=work&compact=true&inventoryLimit=40&inventoryOffset=0&projectId=looma-knit',
+        { cache: 'no-store' },
+      )
+    })
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/project?compact=true&projectId=looma-knit')
+  })
+
+  it('refreshes the Work inventory when browsing removes a focused task query', async () => {
+    const fetchMock = installFetchFakes(detail({
+      taskPayload: { surface: 'work', kind: 'project_work_inventory' },
+    } as Partial<ProjectDetail>))
+    nav('/projects/looma-knit/work?task=task-link-editor')
+
+    await renderProjectView('work')
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => {
+        const url = new URL(String(input), 'http://localhost')
+        return url.pathname === '/api/project' && url.searchParams.get('task') === 'task-link-editor'
+      })).toBe(true)
+    })
+    fetchMock.mockClear()
+
+    nav('/projects/looma-knit/work?view=queue')
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => {
+        const url = new URL(String(input), 'http://localhost')
+        return url.pathname === '/api/project' &&
+          url.searchParams.get('surface') === 'work' &&
+          url.searchParams.get('task') === null
+      })).toBe(true)
+    })
+  })
+
+  it('waits for the shared project packet before rendering Release readiness', async () => {
     const pendingProject = deferredResponse()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
@@ -497,10 +693,11 @@ describe('ProjectView', () => {
 
     render(ProjectView, { initialView: 'release', initialSub: null, projectId: 'looma-knit' })
 
-    expect(await screen.findByText('Current counts')).toBeInTheDocument()
-    expect(screen.getByText('Tasks done')).toBeInTheDocument()
-    expect(screen.getByText('3/3')).toBeInTheDocument()
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(screen.queryByText('Current work')).toBeNull()
     pendingProject.resolve(json(detail()))
+    expect(await screen.findByText('Current work')).toBeInTheDocument()
+    expect(screen.getByText('Release status')).toBeInTheDocument()
   })
 
   it('does not foreground resolved git runtime errors in Overview', async () => {
@@ -578,7 +775,7 @@ describe('ProjectView', () => {
     expect(path.value).toBe('/projects/looma-knit/task/task-import-1')
   })
 
-  it('lets Do this next own owner-input blockers on secondary pages', async () => {
+  it('keeps an owner-input blocker in the shared shell action on secondary pages', async () => {
     const projectPayload = detail({
       startReadiness: {
         canStart: false,
@@ -595,7 +792,7 @@ describe('ProjectView', () => {
     await screen.findAllByText('Review the waiting spec before Guildhall can continue')
     expect(screen.getAllByText('Review the waiting spec before Guildhall can continue')).toHaveLength(1)
     expect(screen.getByRole('link', { name: /review spec/i })).toBeInTheDocument()
-    expect(screen.getByText('Spec review pending')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
   })
 
   it('dedupes shell attention when spec approval blocks both start readiness and idle summary', async () => {
@@ -628,13 +825,70 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', projectPayload)
 
-    const alerts = screen.getAllByRole('alert')
-    const specAlerts = alerts.filter(alert => within(alert).queryByText('2 specs are waiting for review before work can start. Start with "Spec A".'))
-    const idleAlerts = alerts.filter(alert => within(alert).queryByText('Waiting on input: 2 awaiting approval.'))
+    expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Spec A' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open work' })).toBeInTheDocument()
+  })
 
-    expect(specAlerts).toHaveLength(1)
-    expect(idleAlerts).toHaveLength(0)
-    expect(within(specAlerts[0]!).getByRole('link', { name: /review next spec/i })).toBeInTheDocument()
+  it('lets focused Work own an owner-review decision instead of repeating it in shell chrome', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        message: '10 specs are ready for your review before work can continue',
+        actionHref: '/work?task=task-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Spec A',
+        focusKind: 'owner_review',
+        count: 10,
+      },
+      actionModel: {
+        primaryAction: {
+          taskId: 'task-spec-a',
+          label: 'Review Spec A',
+          buttonLabel: 'Review spec',
+          href: '/work?task=task-spec-a',
+          tone: 'warn',
+        },
+      },
+      tasks: [task({ id: 'task-spec-a', title: 'Spec A', status: 'spec_review' })],
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('work', null, 'looma-knit', projectPayload)
+
+    expect(screen.getByRole('button', { name: 'Review spec' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open item' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
+  })
+
+  it('lets Thread own an action-model decision instead of repeating it in shell chrome', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        message: '10 specs are ready for your review before work can continue',
+        actionHref: '/work?task=task-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusKind: 'owner_review',
+        count: 10,
+      },
+      actionModel: {
+        primaryAction: {
+          taskId: 'task-spec-a',
+          label: 'Review a spec',
+          buttonLabel: 'Review next spec',
+          href: '/work?task=task-spec-a',
+          tone: 'warn',
+        },
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
   })
 
   it('surfaces required migrations as the primary setup action and can apply them intentionally', async () => {
@@ -685,8 +939,7 @@ describe('ProjectView', () => {
       if (url.pathname === '/api/project/migrations/apply') {
         expect(init?.method).toBe('POST')
         expect(JSON.parse(String(init?.body))).toMatchObject({
-          includePrompt: true,
-          migrationId: '0.8.0/project-state-layout',
+          includeRequired: true,
         })
         return json({
           ok: true,
@@ -716,17 +969,17 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
 
-    expect(screen.getAllByRole('button', { name: /migrate project/i }).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Required migration').length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Run required Guildhall migration/).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: /update project/i })).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'Project update required' })).toBeInTheDocument()
+    expect(screen.getByText('Guildhall needs to update this project before it can run.')).toBeInTheDocument()
 
-    await user.click(screen.getAllByRole('button', { name: /migrate project/i }).at(-1)!)
+    await user.click(screen.getByRole('button', { name: /update project/i }))
     await screen.findByRole('dialog', { name: /migrate project/i })
     expect(screen.getByText('Move legacy project memory into split project state')).toBeInTheDocument()
-    expect(screen.getByText('memory/')).toBeInTheDocument()
-    expect(screen.getByText('.guildhall/')).toBeInTheDocument()
+    expect(screen.queryByText('memory/')).not.toBeInTheDocument()
+    expect(screen.queryByText('.guildhall/')).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /apply required migration/i }))
+    await user.click(screen.getByRole('button', { name: /apply required updates/i }))
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -734,8 +987,102 @@ describe('ProjectView', () => {
         expect.objectContaining({ method: 'POST' }),
       )
     })
-    expect(await screen.findByText('Migration complete.')).toBeInTheDocument()
+    expect(await screen.findByText('Update applied. Another project update is required.')).toBeInTheDocument()
+    expect(screen.getByText('Project update applied', { exact: true })).toBeInTheDocument()
+    expect(screen.queryByText('Migration complete', { exact: true })).toBeNull()
     expect(screen.getByText('Move task questions into owner-input bounded chat')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /apply required updates/i })).toBeEnabled()
+  })
+
+  it('uses one migration control outside Overview instead of replaying a stale stop notice', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run the required project update before working.',
+        actionHref: '/migrations',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Required migration',
+          buttonLabel: 'Migrate project',
+          href: '/migrations',
+          tone: 'danger',
+          code: 'required_migration_pending',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Migrate', startEnabled: false, pauseEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      run: {
+        status: 'stopped',
+        mode: 'continuous',
+        stopSummary: {
+          stopReason: 'required_migration_pending',
+          stopMessage: 'Run the required project update before working.',
+        },
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('work', null, 'looma-knit', projectPayload)
+
+    expect(await screen.findAllByRole('button', { name: /review project update/i })).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'One update is needed' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Project update required')).toHaveTextContent('Guildhall needs to update this project before work can continue.')
+    expect(screen.queryByRole('alert', { name: 'Project update required' })).toBeNull()
+    expect(screen.queryByText('Run the required project update before working.')).toBeNull()
+    expect(screen.queryByRole('toolbar', { name: /work view controls/i })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Work list' })).toBeNull()
+    expect(screen.queryByText('Knit: add link editor controls')).toBeNull()
+  })
+
+  it('keeps the interrupted work item visible at a required project update', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue&task=task-link-editor&repair=migration')
+    path.value = '/projects/looma-knit/work'
+    path.href = '/projects/looma-knit/work?view=queue&task=task-link-editor&repair=migration'
+    const migrationBlocked = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run the required project update before working.',
+        actionHref: '/migrations',
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(migrationBlocked)
+
+    await renderProjectView('work', null, 'looma-knit', migrationBlocked)
+
+    expect(screen.getByLabelText('Project update required')).toHaveTextContent('Review paused · LOO-E6YU7J')
+    expect(screen.getByLabelText('Project update required')).toHaveTextContent(
+      'Review the update, then apply it to return to this work item.',
+    )
+    expect(screen.getByLabelText('Project update required')).not.toHaveTextContent('task-link-editor')
+    expect(screen.getByLabelText('Project update required')).not.toHaveTextContent('Knit: add link editor controls')
+    expect(screen.getAllByRole('button', { name: /review project update/i })).toHaveLength(1)
+  })
+
+  it('turns an already-clear migration repair route into a direct project handoff', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/projects/looma-knit/overview?repair=migration')
+    path.value = '/projects/looma-knit/overview'
+    path.href = '/projects/looma-knit/overview?repair=migration'
+
+    await renderProjectView('overview')
+
+    const modal = await screen.findByRole('dialog', { name: /migrate project/i })
+    expect(screen.queryByText(/Run required Guildhall migration/i)).toBeNull()
+    expect(within(modal).getByText('No project update is blocking this release.')).toBeInTheDocument()
+    expect(within(modal).getByText('Guildhall checked this project. No project update is blocking this release. The project is unblocked.')).toBeInTheDocument()
+    expect(within(modal).queryByText('Migration status', { exact: true })).not.toBeInTheDocument()
+
+    await user.click(within(modal).getByRole('button', { name: 'Continue to project' }))
+    expect(path.href).toBe('/projects/looma-knit/overview')
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /migrate project/i })).not.toBeInTheDocument()
+    })
   })
 
   it('keeps the migration modal blocking until apply and refreshes finish', async () => {
@@ -781,11 +1128,11 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
 
-    await user.click(screen.getAllByRole('button', { name: /migrate project/i }).at(-1)!)
+    await user.click(screen.getByRole('button', { name: /update project/i }))
     await screen.findByRole('dialog', { name: /migrate project/i })
-    await user.click(screen.getByRole('button', { name: /apply required migration/i }))
+    await user.click(screen.getByRole('button', { name: /apply required updates/i }))
 
-    expect(await screen.findByText('Applying migration')).toBeInTheDocument()
+    expect(await screen.findByText('Applying required updates')).toBeInTheDocument()
     expect(screen.getByText('Do not stop Guildhall until this finishes.')).toBeInTheDocument()
     expect(screen.queryByText('Migration complete.')).toBeNull()
     expect(screen.getAllByRole('button', { name: 'Close' }).every(button => button.hasAttribute('disabled'))).toBe(true)
@@ -814,9 +1161,93 @@ describe('ProjectView', () => {
     }))
 
     expect(await screen.findByText('Migration complete.')).toBeInTheDocument()
+    expect(screen.getByText('Guildhall applied 1 required update. The project is unblocked.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Continue to project' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Close' }).every(button => button.hasAttribute('disabled'))).toBe(false)
-    expect(screen.getByLabelText('Migration changed paths')).toHaveTextContent('memory/')
-    expect(screen.getByLabelText('Migration changed paths')).toHaveTextContent('.guildhall/')
+    expect(screen.queryByLabelText('Migration changed paths')).not.toBeInTheDocument()
+  })
+
+  it('continues from a completed migration into the refreshed shared owner action', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/projects/looma-knit/overview?repair=migration')
+    path.value = '/projects/looma-knit/overview'
+    path.href = '/projects/looma-knit/overview?repair=migration'
+    const migrationBlocked = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run the required project update before working.',
+        actionHref: '/migrations',
+      },
+    } as Partial<ProjectDetail>)
+    const reviewReady = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        message: 'Review the next spec before work can continue.',
+        focusKind: 'spec_review',
+        focusTaskId: 'task-link-editor',
+        actionHref: '/task/task-link-editor',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Review a spec',
+          buttonLabel: 'Review spec',
+          href: '/task/task-link-editor',
+          tone: 'attention',
+          code: 'owner_review_required',
+          taskId: 'task-link-editor',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Start', startEnabled: false, pauseEnabled: false },
+        ownerInput: { active: true },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as Partial<ProjectDetail>)
+    let migrationApplied = false
+    const fetchMock = installFetchFakes(migrationBlocked)
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(migrationApplied ? reviewReady : migrationBlocked)
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/migrations') {
+        return json({
+          pending: [],
+          blocked: migrationApplied
+            ? []
+            : [{
+              id: '0.8.0/project-state-layout',
+              title: 'Move legacy project memory into split project state',
+              safety: 'prompt',
+              requirement: 'required',
+            }],
+          applied: [],
+        })
+      }
+      if (url.pathname === '/api/project/migrations/apply') {
+        migrationApplied = true
+        return json({
+          ok: true,
+          result: { applied: [{ id: '0.8.0/project-state-layout', title: 'Move legacy project memory into split project state' }], skipped: [], failed: [] },
+          status: { pending: [], blocked: [], applied: [] },
+        })
+      }
+      if (url.pathname === '/api/project/spine') return json({ spine: null })
+      return json({})
+    })
+
+    await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
+
+    const modal = await screen.findByRole('dialog', { name: /migrate project/i })
+    await user.click(within(modal).getByRole('button', { name: /apply required updates/i }))
+    expect(await screen.findByText('Guildhall applied 1 required update. The project is unblocked. Next: Review a spec.')).toBeInTheDocument()
+
+    await user.click(within(modal).getByRole('button', { name: 'Review spec' }))
+    expect(path.href).toBe('/projects/looma-knit/task/task-link-editor')
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /migrate project/i })).not.toBeInTheDocument()
+    })
   })
 
   it('does not present stable done-only projects as paused or needing setup attention', async () => {
@@ -879,10 +1310,8 @@ describe('ProjectView', () => {
 
     await renderProjectView('overview', null, 'looma-knit', projectPayload)
 
-    expect(screen.getByRole('status', { name: 'Release shipped' })).toHaveTextContent('Release shipped.')
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Stage 1 shipped')
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('15/15 complete')
-    expect(screen.getByText('Stable')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Current release' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Shipped' })).toBeInTheDocument()
     expect(screen.queryByText('A stale migration check says this project needs attention.')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /resume/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /pause/i })).not.toBeInTheDocument()
@@ -1195,7 +1624,7 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Loading project...')).toBeNull()
   })
 
-  it('shows all-terminal supervisor stop detail in the project ticker footer', async () => {
+  it('does not add a passive footer report to a terminal Thread route', async () => {
     const projectPayload = detail({
       run: { status: 'stopped', mode: 'continuous' },
       tasks: [
@@ -1217,8 +1646,7 @@ describe('ProjectView', () => {
 
     await renderProjectView('thread', null, 'looma-knit', projectPayload)
 
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Run finished')
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('No actionable tasks remain')
+    expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
   })
 
   it('does not treat open escalation records on terminal shelved work as live blockers', async () => {
@@ -1313,6 +1741,58 @@ describe('ProjectView', () => {
     })
   })
 
+  it('returns chrome to the authoritative stopped state when a focused run finishes before its first refresh', async () => {
+    const user = userEvent.setup()
+    const projectPayload = pausedDetail()
+    const fetchMock = installFetchFakes(projectPayload)
+
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+    await user.click(screen.getByRole('button', { name: /^resume$/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/project/start?projectId=looma-knit'),
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+    expect(screen.getByRole('button', { name: /^pause$/i })).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument()
+    }, { timeout: 1200 })
+  })
+
+  it('quickly reconciles chrome after a focused run transitions from running to stopped', async () => {
+    const user = userEvent.setup()
+    const stopped = pausedDetail()
+    const running = detail({
+      run: { status: 'running', mode: 'one_task' },
+      availability: { status: 'active', pausedAt: null, resumedAt: now },
+    } as Partial<ProjectDetail>)
+    let projectRequestCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') {
+        projectRequestCount += 1
+        return json(projectRequestCount === 2 ? running : stopped)
+      }
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      if (url.pathname === '/api/project/start') return json({ ok: true })
+      return json({})
+    }))
+
+    await renderProjectView('thread', null, 'looma-knit', stopped)
+    await user.click(screen.getByRole('button', { name: /^resume$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^pause/i })).toBeInTheDocument()
+    }, { timeout: 700 })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument()
+    }, { timeout: 1200 })
+  })
+
   it('offers one-task advancement from the overflow menu without changing project context', async () => {
     const user = userEvent.setup()
     const fetchMock = installFetchFakes()
@@ -1346,6 +1826,141 @@ describe('ProjectView', () => {
     expect(topbar).not.toHaveTextContent('Needs you')
     expect(topbar).not.toHaveTextContent('Stuck')
     expect(topbar).not.toHaveTextContent('Provider')
+  })
+
+  it.each(['ready_work', 'paused_live_work'] as const)(
+    'keeps generic Resume out of project chrome when focused %s work owns the next action',
+    async code => {
+    const user = userEvent.setup()
+    const readyWork = detail({
+      startReadiness: {
+        canStart: true,
+        code,
+        message: 'Knit: add link editor controls is ready to continue review.',
+        actionHref: '/work?task=task-link-editor',
+        focusTaskId: 'task-link-editor',
+        focusTaskTitle: 'Knit: add link editor controls',
+        focusKind: 'ready_work',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          code,
+          taskId: 'task-link-editor',
+          label: 'Work ready to resume',
+          taskLabel: 'Knit: add link editor controls',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-link-editor',
+          tone: 'accent',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Resume',
+          startEnabled: true,
+          pauseEnabled: true,
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    })
+    installFetchFakes(readyWork)
+
+    await renderProjectView('overview', null, 'looma-knit', readyWork)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Resume')
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open actions menu' }))
+    expect(screen.queryByRole('button', { name: 'Advance one task' })).not.toBeInTheDocument()
+    },
+  )
+
+  it('keeps the generic project run control out of chrome when review retry owns the next action', async () => {
+    const reviewRetry = detail({
+      startReadiness: {
+        canStart: true,
+        code: 'review_retry',
+        message: 'The saved change is intact; retry review starts that check again.',
+        actionHref: '/work?task=task-link-editor',
+        focusTaskId: 'task-link-editor',
+        focusTaskTitle: 'Knit: add link editor controls',
+        focusKind: 'review_retry',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          code: 'review_retry',
+          taskId: 'task-link-editor',
+          label: 'Automated review needs retry',
+          taskLabel: 'Knit: add link editor controls',
+          buttonLabel: 'Retry review',
+          href: '/work?task=task-link-editor',
+          tone: 'warn',
+          operation: 'start_focused',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Retry review',
+          startEnabled: true,
+          pauseEnabled: false,
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    })
+    installFetchFakes(reviewRetry)
+
+    await renderProjectView('overview', null, 'looma-knit', reviewRetry)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Resume')
+    expect(topbar).not.toHaveTextContent('Retry review')
+    expect(screen.getByRole('button', { name: 'Retry review' })).toBeInTheDocument()
+  })
+
+  it('keeps generic Resume out of project chrome when blocked task recovery owns the next action', async () => {
+    const blockedTask = detail({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: 'Unrelated work is ready.',
+        focusTaskId: 'task-unrelated-ready',
+        focusTaskTitle: 'Unrelated ready work',
+        focusKind: 'ready_work',
+        actionHref: '/work?task=task-unrelated-ready',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          code: 'blocked_work',
+          taskId: 'task-blocked',
+          label: 'Component implementation',
+          detail: 'This task stopped and needs recovery.',
+          buttonLabel: 'Open task',
+          href: '/task/task-blocked',
+          tone: 'warn',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Needs recovery',
+          startEnabled: false,
+          pauseEnabled: false,
+          disabledReason: 'Open the blocked task to choose its recovery action.',
+          href: '/task/task-blocked',
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    })
+    installFetchFakes(blockedTask)
+
+    await renderProjectView('thread', null, 'looma-knit', blockedTask)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Resume')
   })
 
   it('labels owner-input recovery blockers without saying answer', async () => {
@@ -1435,8 +2050,7 @@ describe('ProjectView', () => {
     const topbar = document.querySelector('header.topbar')
     expect(topbar).not.toBeNull()
     expect(topbar).toHaveTextContent('Needs provider')
-    expect(screen.getByRole('link', { name: /choose provider/i })).toHaveAttribute('href', '/providers')
-    expect(screen.queryByRole('link', { name: /open next action/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /choose provider/i })).toBeInTheDocument()
     expect(screen.getAllByText('Provider unavailable').length).toBeGreaterThan(0)
   })
 
@@ -1514,6 +2128,22 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'New thread' })).toBeInTheDocument()
   })
 
+  it('keeps release details as the only action-menu follow-up', async () => {
+    const user = userEvent.setup()
+    await renderProjectView('overview')
+
+    const rail = screen.getByRole('complementary', { name: 'Project navigation' })
+    expect(within(rail).queryByRole('button', { name: 'Release' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Open actions menu' }))
+    expect(screen.getByRole('button', { name: 'Release details' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Project activity' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Release details' }))
+    expect(path.value).toBe('/projects/looma-knit/release')
+  })
+
   it('keeps the last good project view visible when a refresh returns 503', async () => {
     const user = userEvent.setup()
     await renderProjectView('overview')
@@ -1529,8 +2159,7 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('status', { name: 'Project refresh warning' })).not.toBeInTheDocument()
   })
 
-  it('keeps repository follow-up separate from the project Pause command', async () => {
-    const user = userEvent.setup()
+  it('does not render a Pause command for a stopped repository follow-up', async () => {
     const blocked = detail({
       run: { status: 'stopped', mode: 'continuous' },
       availability: { status: 'active', pausedAt: null, resumedAt: null },
@@ -1543,10 +2172,18 @@ describe('ProjectView', () => {
         focusKind: 'repository_followup',
       },
       actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Release blocked by uncommitted changes.',
+          buttonLabel: 'Open release',
+          href: '/release',
+          tone: 'warn',
+          code: 'repository_followup_required',
+        },
         runControl: {
           label: 'Repo follow-up',
           startEnabled: false,
-          pauseEnabled: true,
+          pauseEnabled: false,
           disabledReason: 'Release blocked by uncommitted changes.',
           href: '/release',
         },
@@ -1558,30 +2195,64 @@ describe('ProjectView', () => {
       if (url.pathname === '/api/project') return json(blocked)
       if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
       if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
-      if (url.pathname === '/api/project/stop') {
-        expect(url.searchParams.get('projectId')).toBe('looma-knit')
-        expect(init?.method).toBe('POST')
-        return json({ ok: true, status: 'stopping' })
-      }
       return json({})
     })
     vi.stubGlobal('fetch', fetchMock)
 
     await renderProjectView('overview', null, 'looma-knit', blocked)
 
-    const blockerAlert = screen.getByRole('alert', { name: 'Needs you' })
-    expect(blockerAlert).toHaveClass('single-line')
-    expect(blockerAlert).toHaveTextContent('Release blocked by uncommitted changes.')
-    expect(blockerAlert).toHaveTextContent('Open release')
-    const pauseButton = screen.getByRole('button', { name: 'Pause project processing' })
-    expect(pauseButton).toHaveTextContent('Pause')
+    expect(screen.queryByRole('alert', { name: 'Needs you' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open release' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^pause/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /repo follow-up/i })).not.toBeInTheDocument()
+  })
 
-    await user.click(pauseButton)
-
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(true)
+  it('keeps a repository pull-request handoff as the only owner action', async () => {
+    const blocked = detail({
+      run: { status: 'stopped', mode: 'continuous' },
+      availability: { status: 'active', pausedAt: null, resumedAt: null },
+      providerStatus: null,
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: 'Pull request is ready to open.',
+        actionHref: '/release',
+        focusKind: 'repository_followup',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          taskId: 'task-004',
+          label: 'Pull request is ready to open.',
+          buttonLabel: 'Open pull request',
+          href: '/release',
+          tone: 'warn',
+          code: 'repository_followup_required',
+          operation: 'open_pull_request',
+        },
+        runControl: {
+          label: 'Repo follow-up',
+          startEnabled: false,
+          pauseEnabled: false,
+          disabledReason: 'Pull request is ready to open.',
+          href: '/release',
+        },
+      },
+      recentEvents: [],
     })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(blocked)
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderProjectView('overview', null, 'looma-knit', blocked)
+
+    expect(screen.getByRole('button', { name: 'Open pull request' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /repo follow-up/i })).not.toBeInTheDocument()
   })
 
   it('labels a running one-task pass as Pause 1 and pauses the scoped project run', async () => {
@@ -1615,8 +2286,7 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: /pausing/i })).toBeDisabled()
   })
 
-  it('links a running project ticker to the live Timeline stream', async () => {
-    const user = userEvent.setup()
+  it('does not add a second live feed below Work while a run is active', async () => {
     const running = detail({
       run: { status: 'running', mode: 'one_task' },
       startReadiness: { canStart: true, message: 'Ready' },
@@ -1626,10 +2296,7 @@ describe('ProjectView', () => {
 
     await renderProjectView('work', null, 'looma-knit', running)
 
-    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Advancing one task')
-    await user.click(screen.getByRole('link', { name: 'View live stream' }))
-
-    expect(path.value).toBe('/projects/looma-knit/timeline')
+    expect(screen.queryByLabelText('Live project ticker')).not.toBeInTheDocument()
   })
 
   it('acknowledges pause immediately while the project run is stopping', async () => {
@@ -1680,7 +2347,7 @@ describe('ProjectView', () => {
     expect(path.value).toBe('/projects/looma-knit/settings/providers')
   })
 
-  it('renders thread shell while project detail is still loading, then keeps explicit error and uninitialized states honest', async () => {
+  it('keeps the thread shell stable while the shared project packet is loading, then keeps explicit error and uninitialized states honest', async () => {
     const user = userEvent.setup()
     const uninitialized = detail({ initializationNeeded: true })
     const pendingProject = new Promise<Response>(() => {})
@@ -1700,7 +2367,8 @@ describe('ProjectView', () => {
     const loading = render(ProjectView, { initialView: 'thread', projectId: 'looma-knit' })
     await screen.findByRole('button', { name: 'Project' })
     expect(screen.getByRole('complementary', { name: 'Project navigation' })).toBeInTheDocument()
-    await waitFor(() => expect(screen.queryByText('Loading project...')).toBeNull())
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
     loading.unmount()
 
     project.detail = null
@@ -1890,16 +2558,16 @@ describe('ProjectView', () => {
     window.removeEventListener('guildhall:thread-show-list', threadBackSpy)
   })
 
-  it('keeps collapsed rail navigation accessible by name', async () => {
+  it('keeps only current-decision routes in the collapsed rail', async () => {
     await renderProjectView('work')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
 
     expect(within(rail).getByRole('button', { name: 'Project' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Threads' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Release' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Threads' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Release' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Board' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Overview' })).not.toBeInTheDocument()
@@ -1907,7 +2575,7 @@ describe('ProjectView', () => {
     expect(within(rail).queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
 
-  it('groups project orientation under Project with Structure visible by default', async () => {
+  it('groups only owner-facing orientation under Project by default', async () => {
     await renderProjectView('overview')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
     await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
@@ -1915,35 +2583,37 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Project' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Facts' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Threads' })).toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: 'Map' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Facts' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Release' })).toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Threads' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Release' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Inbox' })).not.toBeInTheDocument()
     expect(screen.queryByText('Project graph')).not.toBeInTheDocument()
   })
 
-  it('keeps project children visible for any Project child route', async () => {
+  it('routes legacy Facts to Map without restoring Facts navigation', async () => {
     await renderProjectView('facts')
     const rail = screen.getByRole('complementary', { name: 'Project navigation' })
     await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
     expect(within(rail).getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Facts' })).toHaveClass('active')
-    expect(within(rail).getByRole('button', { name: 'Structure' })).toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: 'Map' })).toHaveClass('active')
+    expect(within(rail).queryByRole('button', { name: 'Facts' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Structure' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
   })
 
-  it('shows only the active section children for Work and Release routes', async () => {
+  it('keeps release checks out of primary navigation while preserving Work choices', async () => {
     await renderProjectView('release', 'criteria')
     let rail = screen.getByRole('complementary', { name: 'Project navigation' })
     await userEvent.click(within(rail).getByRole('button', { name: 'Pin project navigation open' }))
 
-    expect(within(rail).getByRole('button', { name: 'Summary' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Checks' })).toHaveClass('active')
+    expect(within(rail).queryByRole('button', { name: 'Summary' })).not.toBeInTheDocument()
+    expect(within(rail).queryByRole('button', { name: 'Checks' })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Overview' })).not.toBeInTheDocument()
 
     cleanup()

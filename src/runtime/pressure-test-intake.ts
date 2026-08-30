@@ -1,4 +1,5 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -11,6 +12,7 @@ import {
   projectRootFromMemoryDir,
   projectStatePath,
   projectStatePathFromMemoryDir,
+  withProjectStateWriteLock,
 } from '@guildhall/sessions'
 import { readCachedJson } from './file-read-cache.js'
 import { listBoundedChatSessions } from './bounded-chat.js'
@@ -103,6 +105,11 @@ export const PressureTestIntake = z.object({
     taskSplitCandidates: z.array(z.string()).default([]),
     projectQuestionPlanner: ProjectQuestionPlannerMemory.optional(),
   }),
+  handoff: z.object({
+    status: z.literal('materialized'),
+    taskId: z.string(),
+    materializedAt: z.string(),
+  }).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 })
@@ -124,33 +131,120 @@ export async function createPressureTestIntake(input: {
   target: PressureTestIntake['target']
   rawRequest: string
 }): Promise<PressureTestIntake> {
-  const now = new Date().toISOString()
   if (input.target.type === 'project') {
+    const now = new Date().toISOString()
     const intake = await createProjectQuestionIntake(input.memoryDir, input.target, input.rawRequest, now)
     await savePressureTestIntake(input.memoryDir, intake)
     return intake
   }
-  const domains = seedDomainsForRequest(input.rawRequest)
-  domains[0]!.status = 'active'
-  const intake: PressureTestIntake = {
-    id: `pti-${input.target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()}`,
-    rawRequest: input.rawRequest,
-    target: input.target,
-    status: 'active',
-    activeDomainId: domains[0]!.id,
-    pendingQuestion: firstQuestion(domains[0]!, input.target, now),
-    domains,
-    outputs: {
-      assumptions: [],
-      decisions: [],
-      languageMapCandidates: [],
-      taskSplitCandidates: [],
-    },
-    createdAt: now,
-    updatedAt: now,
+  return withProjectStateWriteLock(pressureTestDir(input.memoryDir), async () => {
+    const now = new Date().toISOString()
+    const domains = seedDomainsForRequest(input.rawRequest)
+    domains[0]!.status = 'active'
+    return createPressureTestIntakeWithDurableTarget({ ...input, domains, now })
+  })
+}
+
+async function createPressureTestIntakeWithDurableTarget(input: {
+  memoryDir: string
+  target: PressureTestIntake['target']
+  rawRequest: string
+  domains: PressureTestIntake['domains']
+  now: string
+}): Promise<PressureTestIntake> {
+  const baseId = input.target.id.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()
+  let candidateId = baseId
+  let suffix = 2
+  while (true) {
+    const intakeId = `pti-${candidateId}`
+    const existing = await loadPressureTestIntakeIfPresent(input.memoryDir, intakeId)
+    if (existing) {
+      if (samePressureTestIntakeRequest(existing, input)) return existing
+      candidateId = `${baseId}-${suffix}`
+      suffix += 1
+      continue
+    }
+
+    const target = candidateId === input.target.id
+      ? input.target
+      : { ...input.target, id: candidateId }
+    const intake: PressureTestIntake = {
+      id: intakeId,
+      rawRequest: input.rawRequest,
+      target,
+      status: 'active',
+      activeDomainId: input.domains[0]!.id,
+      pendingQuestion: firstQuestion(input.domains[0]!, target, input.now),
+      domains: input.domains,
+      outputs: {
+        assumptions: [],
+        decisions: [],
+        languageMapCandidates: [],
+        taskSplitCandidates: [],
+      },
+      createdAt: input.now,
+      updatedAt: input.now,
+    }
+    if (await publishPressureTestIntakeExclusive(input.memoryDir, intake)) return intake
+    // Another process claimed this candidate after our read. Re-read it so an
+    // identical retry converges on the winner before a distinct request moves
+    // to the next suffix.
   }
-  await savePressureTestIntake(input.memoryDir, intake)
-  return intake
+}
+
+async function loadPressureTestIntakeIfPresent(
+  memoryDir: string,
+  intakeId: string,
+): Promise<PressureTestIntake | null> {
+  try {
+    return await loadPressureTestIntake({ memoryDir, intakeId })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+function samePressureTestIntakeRequest(
+  existing: PressureTestIntake,
+  input: Pick<PressureTestIntake, 'rawRequest' | 'target'>,
+): boolean {
+  return existing.rawRequest === input.rawRequest &&
+    existing.target.type === input.target.type &&
+    existing.target.title === input.target.title
+}
+
+async function publishPressureTestIntakeExclusive(
+  memoryDir: string,
+  intake: PressureTestIntake,
+): Promise<boolean> {
+  const filePath = pressureTestPath(memoryDir, intake.id)
+  const parentDir = path.dirname(filePath)
+  const tempPath = path.join(
+    parentDir,
+    `.${path.basename(filePath)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
+  )
+  await fsp.mkdir(parentDir, { recursive: true })
+  let handle: fsp.FileHandle | null = null
+  try {
+    handle = await fsp.open(tempPath, 'wx')
+    await handle.writeFile(JSON.stringify(intake, null, 2) + '\n', 'utf-8')
+    await handle.sync()
+    await handle.close()
+    handle = null
+    try {
+      // A hard link publishes a complete inode and fails instead of replacing
+      // a candidate another Guildhall process already claimed.
+      await fsp.link(tempPath, filePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+      throw error
+    }
+    emitProjectSummaryInvalidation(projectRootFromMemoryDir(memoryDir), 'pressure-test-write', { domains: ['thread'] })
+    return true
+  } finally {
+    await handle?.close().catch(() => undefined)
+    await fsp.rm(tempPath, { force: true }).catch(() => undefined)
+  }
 }
 
 export async function loadPressureTestIntake(input: {
@@ -215,9 +309,6 @@ export async function answerPressureTestQuestion(input: {
       intake.activeDomainId = null
       intake.pendingQuestion = null
     }
-  } else if (needsConcreteFollowUp(input.answer)) {
-    domain.status = 'follow-up'
-    intake.pendingQuestion = followUpQuestion(domain, intake.target, now, domain.askedQuestions.length + 1)
   } else {
     domain.status = 'closeout'
     domain.closeoutAsked = true
@@ -715,22 +806,6 @@ function firstQuestionPrompt(domainTitle: string, target: PressureTestIntake['ta
   }
 }
 
-function followUpQuestion(
-  domain: z.infer<typeof PressureTestDomain>,
-  target: PressureTestIntake['target'],
-  askedAt: string,
-  index: number,
-): PressureTestQuestion {
-  return {
-    id: `${domain.id}-q-${index}`,
-    domainId: domain.id,
-    prompt: followUpQuestionPrompt(domain.id, target),
-    why: followUpQuestionWhy(domain.id),
-    evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
-    askedAt,
-  }
-}
-
 function followUpQuestionPrompt(domainId: string, target: PressureTestIntake['target']): string {
   if (target.type === 'project') {
     switch (domainId) {
@@ -815,6 +890,29 @@ function projectCheckInQuestionPrompt(domainTitle: string): string {
 }
 
 function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIntake {
+  // Older feature/release intakes could re-ask a domain forever based on words
+  // in an owner's prose. Feature intake is deliberately bounded to one answer
+  // and one optional closeout; project check-ins use their own typed planner.
+  if (intake.target.type !== 'project') {
+    const activeDomain = intake.domains.find(domain => domain.id === intake.activeDomainId)
+    if (activeDomain?.status === 'follow-up') {
+      const askedAt = intake.pendingQuestion?.askedAt ?? intake.updatedAt
+      intake = {
+        ...intake,
+        pendingQuestion: {
+          id: `${activeDomain.id}-closeout`,
+          domainId: activeDomain.id,
+          prompt: `Is there anything else Guildhall should know about ${activeDomain.title.toLowerCase()} before we move to the next topic?`,
+          why: 'Guildhall asks this before leaving a topic so hidden constraints do not vanish.',
+          evidence: activeDomain.knownFacts.map(fact => `${fact.source}: ${fact.fact}`),
+          askedAt,
+        },
+        domains: intake.domains.map(domain => domain.id === activeDomain.id
+          ? { ...domain, status: 'closeout', closeoutAsked: true }
+          : domain),
+      }
+    }
+  }
   const active = intake.domains.find(domain => domain.id === intake.activeDomainId)
   if (active && intake.pendingQuestion?.id === `${active.id}-q-1`) {
     const replacement = firstQuestion(active, intake.target, intake.pendingQuestion.askedAt)
@@ -912,10 +1010,6 @@ function normalizeQuestionCopy<T extends { prompt: string; why?: string }>(
     prompt,
     ...(why === undefined ? {} : { why }),
   }
-}
-
-function needsConcreteFollowUp(answer: string): boolean {
-  return /\b(rigorous|annoying|fast|safe|simple|good|strict|polished|clear|friendly|better|worse)\b/i.test(answer)
 }
 
 function isConfusedProjectSummary(summary: string): boolean {

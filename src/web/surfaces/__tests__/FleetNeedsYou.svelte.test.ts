@@ -61,10 +61,13 @@ describe('FleetNeedsYou', () => {
     await screen.findByText('Fair Labor License')
     expect(screen.getByText('Review imported notes')).toBeTruthy()
     expect(screen.getByText('Provider warning')).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: /^queue$/i })).toHaveLength(2)
-    expect(screen.queryByRole('button', { name: /project needs you/i })).toBeNull()
+    const summary = screen.getByLabelText('Needs-you summary')
+    expect(summary.textContent).toContain('2 projects need a decision.')
+    expect(summary.textContent).not.toContain('total item')
+    expect(screen.queryByRole('button', { name: /^queue$/i })).toBeNull()
+    expect(screen.queryByText('/repo/looma-knit')).toBeNull()
 
-    await userEvent.click(screen.getByText('Review imported notes'))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Review import' })[0])
 
     expect(path.value).toBe('/projects/looma-knit/workspace-import')
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -97,7 +100,7 @@ describe('FleetNeedsYou', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/project/inbox'))).toBe(false)
   })
 
-  it('renders repeated inbox rows without crashing the fleet queue', async () => {
+  it('shows only the current API-ranked decision and defers the rest to the project queue', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
       expect(url.pathname).toBe('/api/fleet/attention')
@@ -131,6 +134,72 @@ describe('FleetNeedsYou', () => {
     render(FleetNeedsYou)
 
     await screen.findByText('Looma + Knit')
-    expect(screen.getAllByText('Block menu')).toHaveLength(2)
+    expect(screen.getByText('Block menu')).toBeTruthy()
+    expect(screen.getByText('1 more decision')).toBeTruthy()
+  })
+
+  it('uses the shared action button label for a projected owner decision', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      groups: [{
+        project: { id: 'looma-knit', path: '/repo/looma-knit', name: 'Looma + Knit' },
+        items: [{
+          kind: 'project_action',
+          severity: 'medium',
+          title: 'Review the release spec',
+          detail: 'Approve the spec before work can continue.',
+          taskId: 'task-014',
+          actionHref: '/work?task=task-014',
+          buttonLabel: 'Review spec',
+        }],
+        error: null,
+      }],
+    })))
+
+    render(FleetNeedsYou)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Review spec' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-014')
+  })
+
+  it('names the setup action instead of presenting a vague open control', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      groups: [{
+        project: { id: 'commerce-project', path: '/repo/commerce-project', name: 'Commerce project' },
+        items: [{
+          kind: 'setup_pending',
+          severity: 'medium',
+          title: 'Give the project direction',
+          detail: 'Start with a short brief.',
+          actionHref: '/thread',
+        }],
+        error: null,
+      }],
+    })))
+
+    render(FleetNeedsYou)
+
+    expect(await screen.findByRole('button', { name: 'Start setup' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull()
+  })
+
+  it('routes a required project update into the shared repair flow', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      groups: [{
+        project: { id: 'looma-knit', path: '/repo/looma-knit', name: 'Looma + Knit' },
+        items: [{
+          kind: 'required_migration',
+          severity: 'high',
+          title: 'Required migration',
+          detail: 'Apply the project update before reviewing work.',
+          actionHref: '/migrations',
+        }],
+        error: null,
+      }],
+    })))
+
+    render(FleetNeedsYou)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Migrate' }))
+    expect(path.href).toBe('/projects/looma-knit/overview?repair=migration')
   })
 })

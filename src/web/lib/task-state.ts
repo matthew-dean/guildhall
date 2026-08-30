@@ -60,7 +60,7 @@ export function needsSourceRecoveryShaping(turn: TaskStateLike): boolean {
 export function isQueuedSpecRevision(turn: TaskStateLike): boolean {
   if (needsSourceRecoveryShaping(turn)) return false
   return (
-    (turn.taskStatus === 'exploring' || turn.taskStatus === 'spec_review') &&
+    turn.taskStatus === 'exploring' &&
     !turn.importedDraft &&
     !turn.liveAgent &&
     !turn.checklist &&

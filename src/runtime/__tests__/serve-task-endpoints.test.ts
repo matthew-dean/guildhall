@@ -14,6 +14,7 @@ import {
   getProjectSystemStatePath,
   getProjectTranscriptPath,
   projectStateDatabasePath,
+  readProjectStateDatabaseCurrentThread,
   readProjectStateDatabaseQueueDefinition,
   readProjectStateDatabaseTaskPointWithRevision,
   readTaskEvidence,
@@ -446,11 +447,108 @@ describe('GET /api/project/task/:id', () => {
       projectRevision: body.projectRevision,
       queueRevision: body.queueRevision,
     })
+    expect(body.actionModel?.primaryAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
     expect(body.recentEvents).toBeUndefined()
     expect(body.contextDebug).toBeUndefined()
     expect(body.exploringTranscript).toBeUndefined()
     expect(body.threadTurns).toBeUndefined()
     expect(body.detailPayload?.extrasHref).toBe('/api/project/task/task-1/extras')
+  })
+
+  it('reuses the shared project action for the task named by the current decision', async () => {
+    await seedTask('task-1')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const [projectResponse, taskResponse] = await Promise.all([
+      app.fetch(new Request(projectUrl('/api/project'))),
+      app.fetch(new Request(projectUrl('/api/project/task/task-1'))),
+    ])
+
+    expect(projectResponse.status).toBe(200)
+    expect(taskResponse.status).toBe(200)
+    const projectBody = await projectResponse.json() as Record<string, any>
+    const taskBody = await taskResponse.json() as Record<string, any>
+    expect(taskBody.decision).toEqual(projectBody.decision)
+    expect(taskBody.actionModel?.primaryAction).toEqual(projectBody.actionModel?.primaryAction)
+  })
+
+  it('does not let a stale task-opening cache replace a paused project resume action', async () => {
+    await seedTask('task-1')
+    updateProjectStateDatabaseSummaryAndCurrentState(taskQueuePath(), summary => ({
+      summary: {
+        ...summary,
+        decision: {
+          ...(summary.decision as Record<string, unknown>),
+          execution: {
+            state: 'paused',
+            code: 'paused_live_work',
+            focusTaskId: 'task-1',
+            focusTaskTitle: 'Seeded task for tests',
+            focusKind: 'paused_work',
+            message: 'Seeded task for tests is paused in live work.',
+          },
+          primaryAction: {
+            kind: 'resume',
+            targetId: 'task-1',
+            reasonCode: 'paused_live_work',
+          },
+        },
+        actionModel: {
+          ...(summary.actionModel as Record<string, unknown>),
+          primaryAction: {
+            source: 'task',
+            label: 'Seeded task for tests',
+            buttonLabel: 'Open task',
+            href: '/task/task-1',
+            tone: 'warn',
+            taskId: 'task-1',
+          },
+        },
+      },
+      currentState: {
+        execution: { status: 'stopped', updatedAt: new Date().toISOString() },
+      },
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const [projectResponse, taskResponse] = await Promise.all([
+      app.fetch(new Request(projectUrl('/api/project'))),
+      app.fetch(new Request(projectUrl('/api/project/task/task-1'))),
+    ])
+    const projectBody = await projectResponse.json() as Record<string, any>
+    const taskBody = await taskResponse.json() as Record<string, any>
+
+    expect(projectBody.actionModel?.primaryAction).toMatchObject({
+      code: 'paused_live_work',
+      taskId: 'task-1',
+      buttonLabel: 'Resume work',
+      href: `/projects/${projectId}/work?task=task-1`,
+    })
+    expect(taskBody.actionModel?.primaryAction).toEqual(projectBody.actionModel?.primaryAction)
+  })
+
+  it('explains saved partial work through both the project and task API actions', async () => {
+    await seedTask('task-1')
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      workerRecovery: { dirtyTimeoutRetries: 1 },
+      updatedAt: new Date().toISOString(),
+    })
+    await refreshCanonicalSummary()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const [projectResponse, taskResponse] = await Promise.all([
+      app.fetch(new Request(projectUrl('/api/project'))),
+      app.fetch(new Request(projectUrl('/api/project/task/task-1'))),
+    ])
+    const projectBody = await projectResponse.json() as Record<string, any>
+    const taskBody = await taskResponse.json() as Record<string, any>
+
+    expect(projectBody.actionModel?.primaryAction).toMatchObject({
+      code: 'paused_live_work',
+      taskId: 'task-1',
+      buttonLabel: 'Resume work',
+      detail: 'Progress is saved. Resume continues this task from its current workspace.',
+    })
+    expect(taskBody.actionModel?.primaryAction).toEqual(projectBody.actionModel?.primaryAction)
   })
 
   it('keeps task detail inspectable but exposes no action when the shared decision is stale', async () => {
@@ -470,6 +568,7 @@ describe('GET /api/project/task/:id', () => {
       decision: null,
       decisionFreshness: 'stale',
       requiresRefresh: true,
+      actionModel: null,
     })
   })
 
@@ -504,6 +603,37 @@ describe('GET /api/project/task/:id', () => {
       'review verdict history',
       'review adjudications',
     ]))
+  })
+
+  it('does not present a checkpoint from before a reframe as current task progress', async () => {
+    await seedTask('task-1', { status: 'spec_review' })
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      currentLifecycle: {
+        reopenedAt: '2026-08-08T12:00:00.000Z',
+        status: 'exploring',
+        source: 'rerun_spec',
+      },
+      updatedAt: '2026-08-08T12:00:00.000Z',
+    })
+    const checkpoint = await writeCheckpoint({
+      tasksPath: taskQueuePath(),
+      memoryDir,
+      taskId: 'task-1',
+      agentId: 'worker-agent',
+      intent: 'Old worker checkpoint',
+      nextPlannedAction: 'Resume the old worker pass.',
+      filesTouched: ['src/old-work.ts'],
+    })
+    expect(checkpoint.success).toBe(true)
+    if (!checkpoint.path) throw new Error('Expected checkpoint writer to return its path')
+    const persisted = JSON.parse(await fs.readFile(checkpoint.path, 'utf8')) as Record<string, unknown>
+    persisted.writtenAt = '2026-08-08T11:59:59.000Z'
+    await fs.writeFile(checkpoint.path, JSON.stringify(persisted), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(response.status).toBe(200)
+    expect((await response.json() as Record<string, any>).task?.latestCheckpoint).toBeUndefined()
   })
 
   it('reads a current task detail from the database queue, not TASKS.json', async () => {
@@ -2356,7 +2486,7 @@ describe('POST /api/project/task/:id/hold|shelve', () => {
 })
 
 describe('POST /api/project/task/:id/mark-done', () => {
-  it('marks a ready task done with human evidence and closes its checklist', async () => {
+  it('does not let a Thread evidence note manufacture completion proof', async () => {
     await seedTask('task-1', {
       status: 'ready',
       assignedTo: null,
@@ -2384,32 +2514,17 @@ describe('POST /api/project/task/:id/mark-done', () => {
         body: JSON.stringify({ evidence: 'supabase db push reports remote database is up to date' }),
       }),
     )
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(409)
     const body = (await res.json()) as Record<string, any>
-    expect(body.status).toBe('done')
+    expect(body.code).toBe('task_completion_proof_required')
 
     const q = await readTaskQueue()
     const task = q.tasks[0]
-    expect(task.status).toBe('done')
+    expect(task.status).toBe('ready')
     expect(task.assignedTo).toBeNull()
-    expect(task.blockReason).toBeUndefined()
-    expect(task.acceptanceCriteria.every((criterion: Record<string, any>) => criterion.met === true)).toBe(true)
-    expect(task.doneSummaryBundle).toMatchObject({
-      taskId: 'task-1',
-      status: 'done',
-      retention: {
-        transcriptPrimaryArtifact: false,
-      },
-    })
-    expect(task.doneSummaryBundle.summary.decision).toMatch(/Task finished as done/)
-    const evidence = await readTaskEvidence(tmpDir, 'task-1')
-    expect(findLastMatching(evidence, event => event.kind === 'escalation')?.payload).toMatchObject({
-      id: 'esc-1',
-      summary: 'Waiting on hosted database credentials',
-    })
-    expect(findLastMatching(evidence, event => event.kind === 'note')?.payload).toMatchObject({
-      content: expect.stringMatching(/supabase db push/),
-    })
+    expect(task.blockReason).toBe('Old blocker')
+    expect(task.acceptanceCriteria.every((criterion: Record<string, any>) => criterion.met === false)).toBe(true)
+    expect(task.doneSummaryBundle).toBeUndefined()
   })
 
   it('rejects mark-done on active execution stages', async () => {
@@ -2418,9 +2533,9 @@ describe('POST /api/project/task/:id/mark-done', () => {
     const res = await app.fetch(
       new Request(projectUrl('/api/project/task/task-1/mark-done'), { method: 'POST' }),
     )
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(409)
     const body = (await res.json()) as Record<string, any>
-    expect(body.error).toMatch(/active run/i)
+    expect(body.error).toMatch(/cannot complete/i)
   })
 })
 
@@ -2432,6 +2547,20 @@ describe('POST /api/project/task/:id/start', () => {
         title: 'ContextMenu',
         status: 'spec_review',
         spec: '## Summary\nImplement ContextMenu.\n\n## Acceptance Criteria\n1. ContextMenu works.',
+        structuredSpec: structuredSpecForTest('ContextMenu'),
+        specReviewGate: {
+          authority: 'owner',
+          requestedAt: new Date().toISOString(),
+          requestedBy: 'spec-agent',
+          reason: 'spec_handoff',
+        },
+        productBrief: {
+          userJob: 'Review the ContextMenu implementation contract.',
+          successMetric: 'The owner can approve a complete ContextMenu contract.',
+          nonGoals: [],
+          authoredBy: 'spec-agent',
+          authoredAt: new Date().toISOString(),
+        },
         acceptanceCriteria: [{ id: 'ac-1', description: 'ContextMenu works.', verifiedBy: 'review' }],
       },
       {
@@ -2460,6 +2589,41 @@ describe('POST /api/project/task/:id/start', () => {
     expect(body.code).toBe('no_unattended_progress')
     expect(body.error ?? body.message).toMatch(/spec.*waiting for review/i)
     expect(starts).toHaveLength(0)
+  })
+
+  it('starts a malformed spec review through the shared repair readiness', async () => {
+    await seedTasks([{
+      id: 'task-needs-spec-repair',
+      title: 'Repair the legacy draft',
+      status: 'spec_review',
+      spec: 'Rendered Markdown is not a durable contract.',
+      structuredSpec: undefined,
+      acceptanceCriteria: [{ id: 'ac-1', description: 'The owner sees this only after repair.', verifiedBy: 'review' }],
+    }])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const res = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-needs-spec-repair/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+        }),
+      )
+
+      expect(res.status, await res.text()).toBe(200)
+      await vi.waitFor(() => {
+        expect(starts.at(-1)).toMatchObject({
+          preferredTaskId: 'task-needs-spec-repair',
+          stopAfterOneTask: true,
+        })
+      })
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
   })
 
   it('does not infer recovery child work before blocking focused start for spec review', async () => {
@@ -2796,6 +2960,11 @@ describe('POST /api/project/task/:id/start', () => {
           stopAfterOneTask: true,
         })
       })
+      expect(supervisor.get(projectId)).toMatchObject({
+        status: 'running',
+        activeTaskId: 'task-model-proof',
+        activeTaskTitle: 'Define drafting model proof',
+      })
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }
@@ -2845,6 +3014,86 @@ describe('POST /api/project/task/:id/start', () => {
       })
       expect(task?.blockReason).toBeUndefined()
       expect(task?.notes?.at(-1)?.content).toContain('stale spec-timeout blocker')
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('resumes checkpointed implementation when compacted state has no open blocker', async () => {
+    const now = new Date().toISOString()
+    await seedTasks([
+      {
+        id: 'task-desktop-spike',
+        title: 'Prove packaged desktop sidecar',
+        status: 'blocked',
+        blockReason: 'Historical worker blocker text that no longer has an escalation record.',
+        productBrief: {
+          userJob: 'Prove the packaged desktop architecture.',
+          successMetric: 'The packaged sidecar runs without a separate host runtime.',
+          approvedAt: now,
+        },
+        spec: '## Summary\nBuild and verify the packaged desktop sidecar.',
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The packaged sidecar proof passes.',
+          verifiedBy: 'pnpm test:desktop-sidecar',
+          met: false,
+        }],
+        taskReadiness: {
+          taskKind: 'implementation',
+          recommendation: 'ready',
+          summary: 'Task is ready for a focused worker pass.',
+          dimensions: [],
+          definitionOfDone: { items: [], evidenceRequired: [] },
+          blockerPlans: [],
+          contextBudget: { estimatedTokens: 100, risk: 'low', fitsInOneWorkerBrief: true, reasons: [] },
+          assessedAt: now,
+        },
+        runtime: {
+          openEscalationIds: [],
+          openIssueIds: [],
+        },
+      },
+    ])
+    await writeCheckpoint({
+      tasksPath: taskQueuePath(),
+      memoryDir,
+      taskId: 'task-desktop-spike',
+      agentId: 'worker-agent',
+      intent: 'Fix the failing packaged-app verification.',
+      nextPlannedAction: 'Rerun the declared package command.',
+      nextActionKind: 'rerun_verification',
+      filesTouched: ['tauri.conf.json'],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const focusedStart = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-desktop-spike/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+        }),
+      )
+
+      expect(focusedStart.status).toBe(200)
+      await vi.waitFor(() => {
+        expect(starts.at(-1)).toMatchObject({
+          preferredTaskId: 'task-desktop-spike',
+          stopAfterOneTask: true,
+        })
+      })
+      const queue = await readTaskQueue()
+      const task = queue.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-desktop-spike')
+      expect(task).toMatchObject({ status: 'in_progress', assignedTo: null })
+      expect(task?.blockReason).toBeUndefined()
+      expect(task?.notes?.at(-1)?.structured).toMatchObject({
+        event: 'orphaned_checkpoint_blocker_repaired',
+        source: 'focused_task_start',
+      })
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }
@@ -2954,6 +3203,13 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     const q = await readTaskQueue()
     expect(q.tasks[0].status).toBe('ready')
     expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/ship it/i)
+    const thread = readProjectStateDatabaseCurrentThread(tmpDir) as {
+      payload: { turns: Array<{ taskId?: string; taskStatus?: string }> }
+    } | null
+    expect(thread?.payload.turns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'task-1', taskStatus: 'ready' }),
+    ]))
+    expect(JSON.stringify(thread?.payload.turns)).not.toMatch(/needs brief|full product brief/i)
   })
 
   it('keeps a script-only release spec and links proof setup when it has no concrete command', async () => {
@@ -3231,6 +3487,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     })
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/fresh spec pass/i)
+    expect(transcript).toMatch(/earlier spec approval.*superseded/i)
   })
 
   it('records explicit proof re-intake guidance and clears the old executable plan', async () => {
@@ -3810,6 +4067,110 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(transcript).toMatch(/respect DOM ordering/)
   })
 
+  it('rejects an invalid revision target without mutating the task', async () => {
+    await seedTask('task-1', { status: 'spec_review', spec: 'Keep this spec.' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Revise the document.',
+          revisionTarget: 'acceptance-criteria',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({
+      error: 'revisionTarget must be "brief" or "spec".',
+    })
+    const queue = await readTaskQueue() as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]).toMatchObject({ status: 'spec_review', spec: 'Keep this spec.' })
+    const transcript = await readExploringTranscript({ memoryDir, taskId: 'task-1' })
+    expect(transcript.content ?? '').not.toContain('Revise the document.')
+  })
+
+  it('reopens a rejected brief for revision instead of returning to the same approval gate', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      productBrief: {
+        userJob: 'Build the desktop spike with Vue.',
+        whyItMattersNow: 'Prove packaging first.',
+        successMetric: 'A packaged app launches.',
+        nonGoals: [],
+        antiPatterns: ['Do not widen the architecture spike.'],
+        authoredBy: 'spec-agent',
+        authoredAt: '2026-08-08T00:00:00.000Z',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Keep the spike framework-neutral.',
+          revisionTarget: 'brief',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const queue = await readTaskQueue() as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]!.status).toBe('exploring')
+    expect(queue.tasks[0]!.productBrief).toBeUndefined()
+    const thread = readProjectStateDatabaseCurrentThread(tmpDir) as {
+      payload: { turns: unknown[] }
+    } | null
+    expect(thread?.payload.turns).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'brief_approval', taskId: 'task-1' }),
+    ]))
+  })
+
+  it('reopens a rejected spec without leaving its approval turn authoritative', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      productBrief: {
+        userJob: 'Prove a framework-neutral desktop sidecar.',
+        whyItMattersNow: 'The architecture must be proven before UI work.',
+        successMetric: 'A packaged app runs one offline fixture.',
+        nonGoals: ['Do not build the full UI.'],
+        antiPatterns: [],
+        authoredBy: 'spec-agent',
+        authoredAt: '2026-08-08T00:00:00.000Z',
+      },
+      spec: '## What this is\nAn incomplete spike.\n\n## Completion Boundary\n- Product outcome: prove packaging.',
+      acceptanceCriteria: [{ id: 'ac-old', description: 'Old proof', verifiedBy: 'review', met: false }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Add exact packaged-app proof before approval.',
+          revisionTarget: 'spec',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const queue = await readTaskQueue() as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'exploring',
+      productBrief: { userJob: 'Prove a framework-neutral desktop sidecar.' },
+      acceptanceCriteria: [],
+    })
+    expect(queue.tasks[0]!.spec).toBeUndefined()
+    const thread = readProjectStateDatabaseCurrentThread(tmpDir) as {
+      payload: { turns: unknown[] }
+    } | null
+    expect(thread?.payload.turns).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'spec_review', taskId: 'task-1' }),
+    ]))
+  })
+
   it('preserves an in-flight task status when Thread sends a steering note', async () => {
     await seedTask('task-1', { status: 'in_progress', notes: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -3872,6 +4233,56 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(transcript).toContain('create the main reviewer file')
   })
 
+  it('does not mistake an unimplemented ready task for completed proof recovery', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      notes: [],
+      spec: '## Completion Boundary\nBuild the bounded desktop spike before running its proof.',
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'The project typechecks after the desktop spike is implemented.',
+        verifiedBy: 'automated',
+        command: 'pnpm typecheck',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'task-1-ac-1-command-proof',
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm typecheck',
+        status: 'planned',
+        expectedEvidence: [{
+          id: 'ac-1',
+          kind: 'automated',
+          description: 'The project typechecks after the desktop spike is implemented.',
+          required: true,
+        }],
+        verificationRecords: [],
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Implement the approved desktop spike.' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.runtime?.proofRecovery).toBeUndefined()
+    const queue = await readTaskQueue()
+    const noteText = queue.tasks[0]?.notes
+      .map((note: Record<string, unknown>) => String(note.content ?? ''))
+      .join('\n') ?? ''
+    expect(noteText).toContain('Retry partial worker pass')
+    expect(noteText).not.toContain('missing release proof')
+  })
+
   it('reopens in-progress work for blueprint shaping instead of resuming a worker', async () => {
     await seedTask('task-1', {
       status: 'in_progress',
@@ -3902,8 +4313,12 @@ describe('POST /api/project/task/:id/resume', () => {
     })
     expect(queue.tasks[0]?.spec).toBeUndefined()
     expect(queue.tasks[0]?.acceptanceCriteria).toEqual([])
-    expect(queue.tasks[0]?.notes.some((note: Record<string, any>) =>
-      String(note.content).includes('source-backed implementation contract'))).toBe(true)
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.doneSummaryBundle?.status).not.toBe('done')
+    expect(effective.runtime?.currentLifecycle).toMatchObject({
+      status: 'exploring',
+      source: 'rerun_spec',
+    })
   })
 
   it('reopens blocked work when retry encounters stale missing escalation runtime state', async () => {
@@ -4214,7 +4629,8 @@ describe('POST /api/project/task/:id/resume', () => {
     })
     expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-1-proof-setup')).toMatchObject({
       status: 'ready',
-      releaseIds: ['release-next'],
+      releaseIds: [],
+      proofForReleaseId: 'release-next',
       hierarchy: { parentId: 'task-1', relation: 'decomposes' },
     })
 
@@ -4225,7 +4641,6 @@ describe('POST /api/project/task/:id/resume', () => {
     database.close()
     expect(memberships).toEqual([
       { release_id: 'release-next', task_id: 'task-1' },
-      { release_id: 'release-next', task_id: 'task-1-proof-setup' },
       { release_id: 'release-shipped', task_id: 'task-1' },
     ])
   })
@@ -4311,7 +4726,8 @@ describe('POST /api/project/task/:id/resume', () => {
     })
     expect(queue.tasks.find((task: Record<string, any>) => task.id === 'task-1-proof-setup')).toMatchObject({
       status: 'ready',
-      releaseIds: ['release-1'],
+      releaseIds: [],
+      proofForReleaseId: 'release-1',
       hierarchy: { parentId: 'task-1', relation: 'decomposes' },
     })
   })
@@ -5990,6 +6406,49 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     expect(task.escalations[0].resolvedBy).toBe('codex_delegated_owner')
   })
 
+  it('collapses identical direct-recovery escalations into one owner action', async () => {
+    const now = new Date().toISOString()
+    await seedTask('task-1', {
+      status: 'blocked',
+      blockReason: 'Escalation raised',
+      escalations: [
+        {
+          id: 'esc-1', taskId: 'task-1', reason: 'human_judgment_required',
+          summary: 'The spec pass stalled.', agentId: 'spec-agent', raisedAt: now,
+        },
+        {
+          id: 'esc-2', taskId: 'task-1', reason: 'human_judgment_required',
+          summary: 'The same spec pass stalled again.', agentId: 'spec-agent', raisedAt: now,
+        },
+        {
+          id: 'esc-3', taskId: 'task-1', reason: 'spec_ambiguous',
+          summary: 'A different recovery remains open.', agentId: 'spec-agent', raisedAt: now,
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resolve-escalation'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          escalationId: 'esc-1',
+          resolution: 'Retry the spec from its saved notes.',
+          nextStatus: 'exploring',
+          resolveEquivalent: true,
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, resolvedCount: 2 })
+    const task = await readEffectiveTask('task-1')
+    expect(task.status).toBe('blocked')
+    expect(task.escalations.find((escalation: { id: string; resolvedAt?: string }) => escalation.id === 'esc-1')?.resolvedAt).toBeTruthy()
+    expect(task.escalations.find((escalation: { id: string; resolvedAt?: string }) => escalation.id === 'esc-2')?.resolvedAt).toBeTruthy()
+    expect(task.escalations.find((escalation: { id: string; resolvedAt?: string }) => escalation.id === 'esc-3')?.resolvedAt).toBeUndefined()
+  })
+
   it('requires both escalationId and resolution', async () => {
     await seedTask('task-1', { status: 'blocked' })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -6093,11 +6552,99 @@ describe('GET /api/project/activity', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.counts.blocked).toBe(1)
     expect(body.counts.ready).toBe(1)
+    expect(body.topAction).toEqual(body.actionModel.primaryAction)
     expect(body.topAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
     expect(body.actionModel.primaryAction?.taskId).toBe(body.decision?.primaryAction?.targetId)
     expect(body.summary).toMatchObject({
       taskId: body.decision?.primaryAction?.targetId,
     })
+  })
+
+  it('keeps a worker retry verbatim across the Activity aliases', async () => {
+    await seedTask('task-retry')
+    await upsertTaskRuntimeState(tmpDir, 'task-retry', {
+      workerRecovery: { noProgressAttempts: 2 },
+      updatedAt: new Date().toISOString(),
+    })
+    await refreshCanonicalSummary()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    const body = await res.json() as Record<string, any>
+
+    expect(res.status).toBe(200)
+    expect(body.actionModel?.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      taskId: 'task-retry',
+      buttonLabel: 'Retry worker',
+      operation: 'start_focused',
+    })
+    expect(body.topAction).toEqual(body.actionModel.primaryAction)
+    expect(body.current).toEqual(body.actionModel.primaryAction)
+    expect(body.summary).toMatchObject({
+      actionLabel: 'Retry worker',
+      taskId: 'task-retry',
+    })
+  })
+
+  it('keeps a drafted brief review task-scoped in Thread across saved Activity state', async () => {
+    const now = new Date().toISOString()
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'desktop-mvp',
+      releases: [{
+        id: 'desktop-mvp',
+        label: 'Desktop MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-086'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'task-086',
+        title: 'Prove packaged Tauri sidecar',
+        description: '',
+        domain: 'desktop',
+        projectPath: tmpDir,
+        status: 'exploring',
+        priority: 'normal',
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        productBrief: {
+          userJob: 'Prove the packaged sidecar before desktop work begins.',
+          whyItMattersNow: 'The desktop release depends on this architecture gate.',
+          successMetric: 'The packaged app completes one offline fixture run.',
+          nonGoals: ['Do not build the full interface yet.'],
+        },
+        createdAt: now,
+        updatedAt: now,
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    const reviewHref = `/projects/${projectId}/thread?thread=task%3Atask-086`
+    expect(body.decision).toMatchObject({
+      execution: { focusKind: 'brief_cleanup', focusTaskId: 'task-086' },
+      primaryAction: { kind: 'answer_owner_input', targetId: 'task-086' },
+    })
+    expect(body.topAction).toMatchObject({
+      label: 'Prove packaged Tauri sidecar',
+      buttonLabel: 'Review brief',
+      href: reviewHref,
+      taskId: 'task-086',
+    })
+    expect(body.actionModel).toMatchObject({
+      primaryAction: { buttonLabel: 'Review brief', href: reviewHref, taskId: 'task-086' },
+      runControl: { label: 'Waiting on answer', startEnabled: false },
+      setup: { state: 'ready', freshIntakeNeeded: false },
+    })
+    expect(body.topAction).toEqual(body.actionModel.primaryAction)
   })
 
   it('keeps live Activity and fleet on the same project decision packet', async () => {
@@ -6143,6 +6690,7 @@ describe('GET /api/project/activity', () => {
     expect(projectSummary?.workProgress?.counts.visibleTotal).toBe(1)
     expect(activity.actionModel).toEqual(projectSummary?.actionModel)
     expect(activity.decision).toEqual(projectSummary?.decision)
+    expect(activity.topAction).toEqual(activity.actionModel?.primaryAction)
     expect(activity.topAction?.taskId).toBe(activity.decision?.primaryAction?.targetId)
   })
 

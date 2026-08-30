@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyRunStatusToStartReadiness, buildProjectActionModel, resolveProjectActionModel } from '../project-action-model.js'
+import { applyRunStatusToStartReadiness, buildFleetAttentionActionModel, buildProjectActionModel, isFocusedOwnerInputTaskReview, projectTaskActionHref, resolveProjectActionModel } from '../project-action-model.js'
 
 describe('applyRunStatusToStartReadiness', () => {
   it('does not leave a saved paused action visible while a run is active', () => {
@@ -20,6 +20,80 @@ describe('applyRunStatusToStartReadiness', () => {
 })
 
 describe('buildProjectActionModel', () => {
+  it('promotes saved fleet attention only when no project action exists', () => {
+    const attentionAction = buildFleetAttentionActionModel({
+      items: [{
+        kind: 'setup_pending',
+        severity: 'medium',
+        title: 'Give the project direction',
+        detail: 'Start with a short brief you can edit.',
+        actionHref: '/thread',
+      }],
+    })
+
+    expect(attentionAction?.primaryAction).toMatchObject({
+      source: 'inbox',
+      label: 'Give the project direction',
+      buttonLabel: 'Start setup',
+      href: '/thread',
+      tone: 'warn',
+    })
+    expect(attentionAction?.runControl).toMatchObject({
+      label: 'Start setup',
+      startEnabled: false,
+      pauseEnabled: false,
+      href: '/thread',
+    })
+
+    const stored = buildProjectActionModel({
+      startReadiness: { canStart: true, code: 'ready_work', focusTaskId: 'task-1' },
+      tasks: [{ id: 'task-1', title: 'Continue current work', status: 'ready' }],
+    })
+    expect(buildFleetAttentionActionModel({
+      stored,
+      items: [{ kind: 'setup_pending', severity: 'medium', title: 'Ignored', detail: 'Ignored', actionHref: '/thread' }],
+    })).toBe(stored)
+  })
+
+  it('uses one owner-input review predicate across task routing and setup state', () => {
+    expect(isFocusedOwnerInputTaskReview({
+      code: 'owner_input_required',
+      focusKind: 'brief_cleanup',
+      focusTaskId: 'task-086',
+    })).toBe(true)
+    expect(isFocusedOwnerInputTaskReview({
+      code: 'owner_input_required',
+      focusKind: 'setup',
+      focusTaskId: 'task-086',
+    })).toBe(false)
+  })
+
+  it('uses the current brief instead of a superseded original description', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{
+        id: 'task-086',
+        title: 'Prove packaged Tauri sidecar',
+        status: 'exploring',
+        description: 'Build this with Vue 3.',
+        productBrief: {
+          userJob: 'Prove the sidecar with a framework-neutral vanilla TypeScript view.',
+          whyItMattersNow: 'Packaging must be proven before the desktop shell.',
+          successMetric: 'The packaged app runs one offline fixture.',
+          nonGoals: ['Do not choose the shell framework.'],
+          antiPatterns: [],
+        },
+      }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-086',
+      detail: 'Current brief: Prove the sidecar with a framework-neutral vanilla TypeScript view.',
+    })
+    expect(model.primaryAction?.detail).not.toContain('Vue')
+  })
+
   it('uses shared ready-work state instead of inferring brief cleanup from a compact task point', () => {
     const model = buildProjectActionModel({
       startReadiness: {
@@ -36,13 +110,237 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Build synopsis expansion',
-      buttonLabel: 'Open Work',
+      label: 'Work ready to start',
+      taskLabel: 'Build synopsis expansion',
+      buttonLabel: 'Start work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
+      operation: 'start_focused',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
+    expect(model.runControl).toMatchObject({ label: 'Start', startEnabled: true })
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('puts a recorded blocked task ahead of a stale resumable-work recommendation', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-ready',
+        focusTaskTitle: 'Unrelated ready work',
+      },
+      tasks: [
+        {
+          id: 'task-ready',
+          title: 'Unrelated ready work',
+          status: 'ready',
+        },
+        {
+          id: 'task-blocked',
+          title: 'Component implementation',
+          status: 'blocked',
+          blockReason: 'human_judgment_required: Worker made no visible progress after 5 passes.',
+        },
+      ],
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-blocked',
+      label: 'Component implementation',
+      buttonLabel: 'Open task',
+      href: '/task/task-blocked',
+      code: 'blocked_work',
+    })
+    expect(model.runControl).toMatchObject({
+      label: 'Needs recovery',
+      startEnabled: false,
+      disabledReason: 'Open the blocked task to choose its recovery action.',
+      href: '/task/task-blocked',
+    })
+    expect(model.secondaryActions).toContainEqual(expect.objectContaining({ taskId: 'task-ready' }))
+  })
+
+  it('keeps a rebuilt blocked-work decision direct and readable', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'blocked_work',
+        focusKind: 'blocked_work',
+        focusTaskId: 'task-blocked',
+        focusTaskTitle: 'Component implementation',
+        message: 'human_judgment_required: Worker made no visible progress after 5 passes.',
+      },
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Component implementation',
+      detail: 'This task stopped and needs its recovery action before it can continue.',
+      buttonLabel: 'Open task',
+      href: '/task/task-blocked',
+      code: 'blocked_work',
+    })
+    expect(model.runControl).toMatchObject({
+      label: 'Needs recovery',
+      disabledReason: 'Open the blocked task to choose its recovery action.',
+      startEnabled: false,
+    })
+  })
+
+  it('keeps a system-owned malformed spec as a typed focused repair operation', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: 'Guildhall will repair the spec for "Component implementation" before asking for your review.',
+        focusTaskId: 'task-component',
+        focusTaskTitle: 'Component implementation',
+        focusKind: 'spec_repair',
+      },
+      tasks: [{ id: 'task-component', title: 'Component implementation', status: 'spec_review' }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      code: 'ready_work',
+      label: 'Repair this spec',
+      taskId: 'task-component',
+      buttonLabel: 'Repair spec',
+      operation: 'repair_spec',
+    })
+  })
+
+  it('keeps paused work actionable when a compact refresh has no task detail', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        message: 'Resume the paused task.',
+        focusTaskId: 'task-paused',
+        focusTaskTitle: 'Paused task',
+        actionHref: '/work?task=task-paused',
+      },
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Work paused',
+      taskLabel: 'Paused task',
+      href: '/work?task=task-paused',
+      taskId: 'task-paused',
+    })
+  })
+
+  it('publishes stable task-summary counts from the full project inventory', () => {
+    const completeBrief = {
+      approvedAt: '2026-05-19T10:00:00.000Z',
+      userJob: 'Run the task.',
+      whyItMattersNow: 'The release needs it.',
+      successMetric: 'The task passes.',
+      nonGoals: ['No extra scope.'],
+      antiPatterns: [],
+    }
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true, code: 'ready_work', focusTaskId: 'ready-task' },
+      tasks: [{ id: 'ready-task', title: 'Ready task', status: 'ready' }],
+      summaryTasks: [
+        {
+          id: 'ready-task',
+          title: 'Ready task',
+          status: 'ready',
+          productBrief: completeBrief,
+          spec: 'Implement it.',
+          acceptanceCriteria: [{}],
+        },
+        { id: 'waiting-task', title: 'Waiting task', status: 'ready', dependsOn: ['dependency'] },
+        { id: 'dependency', title: 'Dependency', status: 'in_progress' },
+        { id: 'done-task', title: 'Done task', status: 'pending_pr' },
+        { id: 'task-meta-intake', title: 'Setup', status: 'done' },
+      ],
+      runStatus: 'stopped',
+    })
+
+    expect(model.workSummary).toEqual({
+      total: 4,
+      agentActive: 0,
+      paused: 1,
+      waiting: 1,
+      reviewWaiting: 0,
+      gatesWaiting: 0,
+      shaping: 0,
+      specRevisionQueued: 0,
+      readyForWorker: 1,
+      needsSpecCleanup: 0,
+      awaitingApproval: 0,
+      done: 1,
+    })
+  })
+
+  it('names brief review explicitly when shared readiness requires it', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: '"Prove packaged Tauri sidecar" has a drafted brief ready for review.',
+        focusTaskId: 'task-086',
+        focusTaskTitle: 'Prove packaged Tauri sidecar',
+        focusKind: 'brief_cleanup',
+        actionHref: '/thread?thread=task%3Atask-086',
+      },
+      tasks: [{ id: 'task-086', title: 'Prove packaged Tauri sidecar', status: 'exploring' }],
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'owner_input',
+      label: 'Prove packaged Tauri sidecar',
+      buttonLabel: 'Review brief',
+      href: '/thread?thread=task%3Atask-086',
+      taskId: 'task-086',
+    })
+    expect(model.ownerInput).toMatchObject({ active: true, label: 'Prove packaged Tauri sidecar' })
+    expect(model.runControl).toMatchObject({ label: 'Waiting on answer', startEnabled: false })
+    expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('keeps focused review routes in Thread across project-scoped summary reads', () => {
+    expect(projectTaskActionHref({
+      code: 'owner_input_required',
+      focusKind: 'brief_cleanup',
+      focusTaskId: 'task-086',
+    }, 'narrative-harness')).toBe(
+      '/projects/narrative-harness/thread?thread=task%3Atask-086',
+    )
+    expect(projectTaskActionHref({
+      code: 'no_unattended_progress',
+      focusKind: 'spec_review',
+      focusTaskId: 'task-087',
+    }, 'narrative-harness')).toBe(
+      '/projects/narrative-harness/thread?thread=task%3Atask-087',
+    )
+    expect(projectTaskActionHref({
+      code: 'owner_review_required',
+      focusKind: 'owner_review',
+      focusTaskId: 'task-089',
+    }, 'narrative-harness')).toBe(
+      '/projects/narrative-harness/task/task-089',
+    )
+    expect(projectTaskActionHref({
+      code: 'ready_work',
+      focusKind: 'ready_work',
+      focusTaskId: 'task-088',
+    }, 'narrative-harness')).toBe(
+      '/projects/narrative-harness/work?task=task-088',
+    )
   })
 
   it('makes a hard setup inbox item the shared action and start blocker', () => {
@@ -77,6 +375,55 @@ describe('buildProjectActionModel', () => {
       pauseEnabled: false,
       disabledReason: 'Verify install and gate commands before agents run.',
     })
+  })
+
+  it('names resumed automated review instead of fresh implementation work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-review',
+        focusTaskTitle: 'Review the desktop adapter',
+        focusKind: 'review_work',
+        message: '"Review the desktop adapter" has saved changes ready for automated review.',
+        actionHref: '/work?task=task-review',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'ready_work',
+      ownerHeading: 'Review ready to continue',
+      taskId: 'task-review',
+      buttonLabel: 'Resume review',
+      detail: 'The implementation is saved. Resume review to have Guildhall check the current change.',
+      operation: 'start_focused',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Resume review', startEnabled: true })
+  })
+
+  it('names a reviewer-contract recovery as a retry instead of ordinary review work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'review_retry',
+        focusTaskId: 'task-review',
+        focusTaskTitle: 'Review the desktop adapter',
+        focusKind: 'review_retry',
+        actionHref: '/work?task=task-review',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'review_retry',
+      ownerHeading: 'Automated review needs retry',
+      taskId: 'task-review',
+      buttonLabel: 'Retry review',
+      detail: 'Guildhall could not complete its automated review. The saved change is intact; retry review starts that check again.',
+      operation: 'start_focused',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Retry review', startEnabled: true })
   })
 
   it('retains setup state without reopening setup urgency after a release shipped', () => {
@@ -176,14 +523,53 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Build synopsis expansion',
-      buttonLabel: 'Open Work',
+      label: 'Work ready to start',
+      taskLabel: 'Build synopsis expansion',
+      buttonLabel: 'Start work',
       href: '/work?task=task-synopsis',
       tone: 'accent',
       taskId: 'task-synopsis',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
     expect(model.setup).toMatchObject({ state: 'ready', freshIntakeNeeded: false })
+  })
+
+  it('drops a persisted same-task secondary action when current readiness owns the task', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: null,
+        secondaryActions: [{
+          source: 'task',
+          label: 'Prove packaged Tauri sidecar',
+          detail: 'Needs brief.',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-086',
+          tone: 'warn',
+          taskId: 'task-086',
+        }],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: {
+          state: 'blocked',
+          freshIntakeNeeded: false,
+          href: '/thread',
+          detail: 'Finish setup before starting.',
+        },
+      },
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        focusTaskId: 'task-086',
+        focusTaskTitle: 'Prove packaged Tauri sidecar',
+        focusKind: 'brief_cleanup',
+        actionHref: '/projects/narrative-harness/thread?thread=task%3Atask-086',
+      },
+    })
+
+    expect(model.primaryAction?.taskId).toBe('task-086')
+    expect(model.secondaryActions).toEqual([])
+    expect(model.runControl).toMatchObject({ label: 'Waiting on answer', startEnabled: false })
+    expect(model.setup).toEqual({ state: 'ready', freshIntakeNeeded: false })
   })
 
   it('drops persisted release-review actions after the release shipped', () => {
@@ -235,6 +621,51 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('replaces stale persisted task actions when current readiness is terminal', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: {
+          source: 'task',
+          label: 'Old task action',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-old',
+          tone: 'warn',
+          taskId: 'task-old',
+        },
+        secondaryActions: [{
+          source: 'task',
+          label: 'Another stale task action',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-other',
+          tone: 'accent',
+          taskId: 'task-other',
+        }],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'All selected release work is complete.',
+        executionScope: {
+          id: 'release-current',
+          label: 'Current release',
+          kind: 'release',
+        },
+      },
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      code: 'release_ready',
+      buttonLabel: 'Open Release',
+      href: '/release',
+    })
+    expect(model.secondaryActions).toEqual([])
+    expect(model.runControl).toMatchObject({ startEnabled: false })
+  })
+
   it('does not let a contradictory ready-work hint override the shared readiness authority', () => {
     const model = buildProjectActionModel({
       startReadiness: {
@@ -261,8 +692,9 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Build story context',
-      buttonLabel: 'Open Work',
+      label: 'Work ready to start',
+      taskLabel: 'Build story context',
+      buttonLabel: 'Start work',
     })
     expect(model.primaryAction?.detail).toBeUndefined()
   })
@@ -389,7 +821,30 @@ describe('buildProjectActionModel', () => {
     expect(repositoryFollowup.runControl).toMatchObject({
       label: 'Repo follow-up',
       startEnabled: false,
-      pauseEnabled: true,
+      pauseEnabled: false,
+    })
+
+    const branchReadyToShare = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: 'Release blocked: the branch has no upstream.',
+        actionHref: '/release',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        focusKind: 'repository_followup',
+        repositoryOperation: 'push_branch',
+      },
+      tasks: [{ id: 'task-current', title: 'Open supported documents as TypeScript', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(branchReadyToShare.primaryAction).toMatchObject({
+      label: 'Branch is ready to share',
+      ownerHeading: 'Branch is ready to share',
+      taskId: 'task-current',
+      buttonLabel: 'Push branch',
+      operation: 'push_branch',
     })
 
     const sourceConflict = buildProjectActionModel({
@@ -447,12 +902,7 @@ describe('buildProjectActionModel', () => {
       href: '/work?task=task-brief',
       tone: 'warn',
     })
-    expect(briefCleanup.secondaryActions[0]).toMatchObject({
-      source: 'task',
-      label: 'Clean up the brief',
-      buttonLabel: 'Open Work',
-      href: '/work?task=task-brief',
-    })
+    expect(briefCleanup.secondaryActions).toEqual([])
 
     const specReview = buildProjectActionModel({
       startReadiness: {
@@ -474,13 +924,44 @@ describe('buildProjectActionModel', () => {
       label: 'Continue drafted spec work',
       detail: '2 specs are waiting for review before work can start. Start with "Continue drafted spec work".',
       buttonLabel: 'Review next spec',
-      href: '/thread?thread=task%3Atask-spec-a',
+      href: '/task/task-spec-a',
       tone: 'warn',
     })
     expect(specReview.runControl).toMatchObject({
       label: 'Review needed',
       startEnabled: false,
     })
+
+    const ownerReview = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_review_required',
+        message: '10 specs are ready for your review before work can continue.',
+        actionHref: '/work?task=task-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Continue drafted spec work',
+        focusKind: 'owner_review',
+        count: 10,
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(ownerReview.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Review a spec',
+      taskLabel: 'Continue drafted spec work',
+      buttonLabel: 'Review next spec',
+      href: '/task/task-spec-a',
+      tone: 'warn',
+      code: 'owner_review_required',
+      taskId: 'task-spec-a',
+    })
+    expect(ownerReview.runControl).toMatchObject({
+      label: 'Review needed',
+      startEnabled: false,
+    })
+    expect(ownerReview.primaryAction?.detail).toBeUndefined()
 
     const pausedSpecReview = buildProjectActionModel({
       startReadiness: {
@@ -543,7 +1024,7 @@ describe('buildProjectActionModel', () => {
       source: 'start_readiness',
       label: 'Required migration',
       detail: 'Run the required Guildhall migration before starting this project.',
-      buttonLabel: 'Migrate project',
+      buttonLabel: 'Review project update',
       href: '/migrations',
       tone: 'danger',
     })
@@ -553,6 +1034,11 @@ describe('buildProjectActionModel', () => {
         canStart: false,
         code: 'all_terminal',
         message: 'All tasks are already finished.',
+        executionScope: {
+          id: 'release-1',
+          label: 'Current release',
+          kind: 'release',
+        },
       },
       tasks: [{ id: 'task-done', title: 'Done task', status: 'done' }],
       thread: { turns: [], activeTurnId: null },
@@ -571,6 +1057,18 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
       disabledReason: 'All tasks are already finished.',
     })
+
+    const unscopedTerminal = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Current work has no runnable work remaining.',
+      },
+      tasks: [{ id: 'task-done', title: 'Done task', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(unscopedTerminal.primaryAction).toBeNull()
   })
 
   it('does not surface a decomposed containing parent as the primary task action', () => {
@@ -675,9 +1173,9 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction).toMatchObject({
       source: 'task',
       label: 'Implement a no-UI runner that builds a packet from fixture records.',
-      detail: "decision_required: Cannot transition task to 'review' -- guard keeps blocking despite self-critique note being persisted",
-      buttonLabel: 'Open Work',
-      href: '/work?task=runner-proof',
+      detail: 'This task stopped before it could make visible progress. Choose its recovery action to continue.',
+      buttonLabel: 'Open task',
+      href: '/task/runner-proof',
       tone: 'warn',
       taskId: 'runner-proof',
     })
@@ -837,9 +1335,25 @@ describe('buildProjectActionModel', () => {
       startEnabled: true,
     })
 
+    const stoppingTask = {
+      id: 'task-stopping',
+      title: 'Stopping task',
+      status: 'in_progress',
+      assignedTo: 'worker-1',
+    }
     const stopping = buildProjectActionModel({
       startReadiness: { canStart: true },
-      tasks: [{ id: 'task-ready', title: 'Ready task', status: 'ready' }],
+      inbox: {
+        items: [{
+          kind: 'bootstrap_missing',
+          severity: 'high',
+          title: 'Bootstrap incomplete',
+          detail: 'A stopped project must address this before the next run.',
+          actionHref: '/settings/ready',
+        }],
+      },
+      tasks: [stoppingTask],
+      summaryTasks: [stoppingTask],
       thread: { turns: [], activeTurnId: null },
       runStatus: 'stopping',
     })
@@ -848,6 +1362,16 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
       disabledReason: 'Pause requested. Guildhall is waiting for active work to stop.',
     })
+    expect(stopping.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-stopping',
+      tone: 'running',
+      code: 'running',
+    })
+    expect(stopping.secondaryActions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ inboxKind: 'bootstrap_missing' }),
+    ]))
+    expect(stopping.workSummary).toMatchObject({ agentActive: 1, paused: 0 })
   })
 
   it('keeps the current running task actionable when compact activity has no task inventory', () => {
@@ -870,6 +1394,7 @@ describe('buildProjectActionModel', () => {
       buttonLabel: 'Open Work',
       href: '/work?task=task-proof',
       tone: 'running',
+      code: 'running',
       taskId: 'task-proof',
     })
   })
@@ -1021,8 +1546,8 @@ describe('buildProjectActionModel', () => {
     expect(model.ownerInput.active).toBe(false)
     expect(model.primaryAction).toMatchObject({
       source: 'task',
-      buttonLabel: 'Review in Thread',
-      href: '/thread?thread=task%3Atask-import-9s8tkc',
+      buttonLabel: 'Review spec',
+      href: '/task/task-import-9s8tkc',
     })
     expect(model.secondaryActions.some(action => /answer in thread/i.test(action.label))).toBe(false)
   })
@@ -1136,7 +1661,7 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction?.label).not.toMatch(/answer/i)
   })
 
-  it('links spec-review task actions to the specific Thread chain', () => {
+  it('links spec-review task actions to the focused task decision', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },
       inbox: { items: [] },
@@ -1153,8 +1678,8 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       source: 'task',
-      buttonLabel: 'Review in Thread',
-      href: '/thread?thread=task%3Atask-spec-a',
+      buttonLabel: 'Review spec',
+      href: '/task/task-spec-a',
     })
   })
 
@@ -1210,7 +1735,7 @@ describe('buildProjectActionModel', () => {
     })
   })
 
-  it('keeps paused live work resumable and pinned to the active task', () => {
+  it('keeps paused live work resumable through the shared project decision', () => {
     const model = buildProjectActionModel({
       startReadiness: {
         canStart: true,
@@ -1237,9 +1762,10 @@ describe('buildProjectActionModel', () => {
     })
 
     expect(model.primaryAction).toMatchObject({
-      source: 'task',
-      label: 'Define fixture contracts',
-      buttonLabel: 'Open Work',
+      source: 'start_readiness',
+      label: 'Work paused',
+      buttonLabel: 'Resume work',
+      detail: '"Define fixture contracts" is paused in live work. Resume continues from that pinned task.',
       href: '/work?task=contract-task',
       tone: 'accent',
       taskId: 'contract-task',
@@ -1316,12 +1842,165 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction).toMatchObject({
       source: 'start_readiness',
       label: 'Implement Stage 2 reviewer',
-      buttonLabel: 'Open Work',
+      buttonLabel: 'Open task',
       tone: 'warn',
     })
     expect(model.runControl).toMatchObject({
       label: 'Needs recovery',
       startEnabled: false,
     })
+  })
+
+  it('does not count background spec records as owner approvals while paused work is the shared action', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Continue current work',
+        actionHref: '/work?task=task-current',
+      },
+      summaryTasks: [
+        { id: 'task-current', title: 'Continue current work', status: 'in_progress' },
+        { id: 'task-repair', title: 'Repair a malformed spec', status: 'spec_review' },
+      ],
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'paused_live_work',
+      taskId: 'task-current',
+      ownerHeading: 'Work paused',
+      buttonLabel: 'Resume work',
+    })
+    expect(model.ownerInput).toEqual({ active: false })
+    expect(model.workSummary?.awaitingApproval).toBe(0)
+  })
+
+  it('explains when a paused task has saved partial work for its next resume', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Continue current work',
+        actionHref: '/work?task=task-current',
+        progressState: 'partial_work_saved',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'paused_live_work',
+      taskId: 'task-current',
+      buttonLabel: 'Resume work',
+      detail: '"Continue current work" is paused with saved work. Resume continues the same task.',
+    })
+  })
+
+  it('turns repeated typed no-progress into one explicit worker retry', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        actionHref: '/work?task=task-current',
+        progressState: 'worker_retry_recommended',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      ownerHeading: 'Worker needs a fresh pass',
+      taskId: 'task-current',
+      buttonLabel: 'Retry worker',
+      detail: 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.',
+      operation: 'start_focused',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Retry worker', startEnabled: true })
+  })
+
+  it('turns observed worker edit loss into the same one-step retry', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        actionHref: '/work?task=task-current',
+        progressState: 'worker_edit_loss',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      ownerHeading: 'Worker discarded its edits',
+      taskId: 'task-current',
+      buttonLabel: 'Retry worker',
+      detail: 'Guildhall saw this worker\'s edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.',
+      operation: 'start_focused',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Retry worker', startEnabled: true })
+  })
+
+  it('keeps the retry action after the persisted decision code replaces paused work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'worker_recovery',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        actionHref: '/work?task=task-current',
+        progressState: 'worker_retry_recommended',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      taskId: 'task-current',
+      buttonLabel: 'Retry worker',
+      operation: 'start_focused',
+    })
+  })
+
+  it('reconciles a persisted summary when paused work replaces an old approval queue', () => {
+    const model = resolveProjectActionModel({
+      stored: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+        workSummary: {
+          total: 43,
+          agentActive: 0,
+          paused: 16,
+          waiting: 3,
+          reviewWaiting: 0,
+          gatesWaiting: 0,
+          shaping: 0,
+          specRevisionQueued: 0,
+          readyForWorker: 1,
+          needsSpecCleanup: 0,
+          awaitingApproval: 21,
+          done: 0,
+        },
+      },
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Continue current work',
+        actionHref: '/work?task=task-current',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({ code: 'paused_live_work', taskId: 'task-current' })
+    expect(model.workSummary?.awaitingApproval).toBe(0)
   })
 })

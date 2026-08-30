@@ -1,5 +1,8 @@
-import { mkdtemp } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { writeProjectStateJsonAsync, writeProjectStateTextAsync } from '@guildhall/sessions'
@@ -7,11 +10,175 @@ import {
   answerPressureTestQuestion,
   createPressureTestIntake,
   inspectPressureTestEvidence,
+  listPressureTestIntakes,
   loadPressureTestIntake,
   renderPressureTestSpec,
 } from '../pressure-test-intake.js'
 
+interface AllocationWorkerRequest {
+  rawRequest: string
+  targetId: string
+  targetTitle: string
+  postBarrierDelayMs?: number
+}
+
+interface AllocationWorkerResult {
+  id: string
+  rawRequest: string
+  createdAt: string
+  target: { id: string; title: string }
+}
+
+const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
+const allocationWorkerPath = 'src/runtime/__tests__/helpers/pressure-test-intake-process.test.ts'
+const vitestCliPath = createRequire(import.meta.url).resolve('vitest/vitest.mjs')
+
+async function waitForPath(filePath: string, timeoutMs = 20_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      await access(filePath)
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  throw new Error(`Timed out waiting for allocation worker marker: ${filePath}`)
+}
+
+function startAllocationWorker(input: {
+  memoryDir: string
+  request: AllocationWorkerRequest
+  readyPath: string
+  startPath: string
+  resultPath: string
+}): Promise<{ ok: boolean; output: string }> {
+  const child = spawn(process.execPath, [
+    vitestCliPath,
+    'run',
+    allocationWorkerPath,
+    '--maxWorkers=1',
+    '--minWorkers=1',
+    '--reporter=dot',
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      GUILDHALL_MP_MEMORY_DIR: input.memoryDir,
+      GUILDHALL_MP_RAW_REQUEST: input.request.rawRequest,
+      GUILDHALL_MP_TARGET_ID: input.request.targetId,
+      GUILDHALL_MP_TARGET_TITLE: input.request.targetTitle,
+      GUILDHALL_MP_READY_PATH: input.readyPath,
+      GUILDHALL_MP_START_PATH: input.startPath,
+      GUILDHALL_MP_RESULT_PATH: input.resultPath,
+      GUILDHALL_MP_POST_BARRIER_DELAY_MS: String(input.request.postBarrierDelayMs ?? 0),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let output = ''
+  child.stdout.on('data', chunk => { output += String(chunk) })
+  child.stderr.on('data', chunk => { output += String(chunk) })
+  return new Promise(resolve => {
+    child.on('error', error => resolve({ ok: false, output: `${output}\n${error.message}` }))
+    child.on('exit', code => resolve({ ok: code === 0, output }))
+  })
+}
+
+async function runAllocationRace(
+  memoryDir: string,
+  requests: AllocationWorkerRequest[],
+): Promise<AllocationWorkerResult[]> {
+  const coordinationDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-race-'))
+  const startPath = path.join(coordinationDir, 'start')
+  const readyPaths = requests.map((_, index) => path.join(coordinationDir, `ready-${index}`))
+  const resultPaths = requests.map((_, index) => path.join(coordinationDir, `result-${index}.json`))
+  const workers = requests.map((request, index) => startAllocationWorker({
+    memoryDir,
+    request,
+    readyPath: readyPaths[index]!,
+    startPath,
+    resultPath: resultPaths[index]!,
+  }))
+  try {
+    await Promise.all(readyPaths.map(readyPath => waitForPath(readyPath)))
+    await writeFile(startPath, 'start\n', 'utf-8')
+    const outcomes = await Promise.all(workers)
+    const failures = outcomes.filter(outcome => !outcome.ok)
+    if (failures.length > 0) {
+      throw new Error(failures.map(failure => failure.output).join('\n--- worker ---\n'))
+    }
+    return Promise.all(resultPaths.map(async resultPath =>
+      JSON.parse(await readFile(resultPath, 'utf-8')) as AllocationWorkerResult,
+    ))
+  } finally {
+    await writeFile(startPath, 'start\n', 'utf-8').catch(() => undefined)
+    await Promise.all(workers)
+    await rm(coordinationDir, { recursive: true, force: true })
+  }
+}
+
 describe('pressure-test intake state', () => {
+  it('keeps distinct slug-equivalent requests separate across Guildhall processes', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-multiprocess-'))
+    try {
+      const results = await runAllocationRace(memoryDir, [
+        {
+          rawRequest: 'Create the first packaged desktop release.',
+          targetId: 'stage-2-desktop-ui',
+          targetTitle: 'Stage 2: Desktop UI',
+        },
+        {
+          rawRequest: 'Create a separate follow-up desktop release.',
+          targetId: 'stage-2-desktop-ui',
+          targetTitle: 'Stage 2 - Desktop UI',
+          postBarrierDelayMs: 100,
+        },
+      ])
+
+      expect(results.map(result => result.id).sort()).toEqual([
+        'pti-stage-2-desktop-ui',
+        'pti-stage-2-desktop-ui-2',
+      ])
+      expect(listPressureTestIntakes(memoryDir).map(intake => intake.rawRequest).sort()).toEqual([
+        'Create a separate follow-up desktop release.',
+        'Create the first packaged desktop release.',
+      ])
+    } finally {
+      await rm(memoryDir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('converges identical multiprocess retries on the persisted intake', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-multiprocess-'))
+    try {
+      const request = {
+        rawRequest: 'Create the next packaged desktop release.',
+        targetId: 'stage-3-desktop-ui',
+        targetTitle: 'Stage 3: Desktop UI',
+      }
+      const results = await runAllocationRace(memoryDir, [
+        request,
+        { ...request, postBarrierDelayMs: 100 },
+      ])
+      const persisted = await loadPressureTestIntake({
+        memoryDir,
+        intakeId: 'pti-stage-3-desktop-ui',
+      })
+
+      expect(results[0]).toEqual(results[1])
+      expect(results[0]).toMatchObject({
+        id: persisted.id,
+        rawRequest: persisted.rawRequest,
+        createdAt: persisted.createdAt,
+        target: persisted.target,
+      })
+      expect(listPressureTestIntakes(memoryDir)).toHaveLength(1)
+    } finally {
+      await rm(memoryDir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it('creates a release-level intake with seeded domains and one active question', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
     const intake = await createPressureTestIntake({
@@ -160,7 +327,7 @@ describe('pressure-test intake state', () => {
     expect(intake.pendingQuestion?.prompt).not.toContain('Project check-in needed before Guildhall treats this workspace as current')
   })
 
-  it('starts project check-in with a planned question from project evidence', async () => {
+  it('starts project check-in with a typed direction question while retaining project evidence', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
     await writeProjectStateTextAsync(
       memoryDir,
@@ -178,14 +345,16 @@ describe('pressure-test intake state', () => {
     })
 
     expect(intake.pendingQuestion?.prompt).toBe(
-      'For the next few Narrative Harness tasks, should Guildhall bias toward reviewer-lane MVPs, author-facing editor UX, story-memory/schema foundations, or generation/evaluation loops?',
+      'What should Guildhall use as the main direction for Narrative Harness when shaping work?',
     )
-    expect(intake.pendingQuestion?.choices).toEqual([
-      'Reviewer-lane MVPs',
-      'Author-facing editor UX',
-      'Story-memory/schema foundations',
-      'Generation/evaluation loops',
-    ])
+    expect(intake.pendingQuestion?.choices).toBeUndefined()
+    expect(intake.pendingQuestion?.evidence).toEqual([])
+    expect(intake.outputs.projectQuestionPlanner?.inferredFacts.map(fact => fact.text)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('fiction-writing software'),
+        expect.stringContaining('author voice'),
+      ]),
+    )
     expect(intake.pendingQuestion?.prompt).not.toMatch(/workflow|day-to-day|anything else/i)
   })
 
@@ -216,7 +385,7 @@ describe('pressure-test intake state', () => {
     expect(next.pendingQuestion?.prompt ?? '').not.toContain('anything else')
   })
 
-  it('records answers and asks a follow-up before closing vague product goals', async () => {
+  it('moves a feature intake to one optional closeout regardless of answer wording', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
     const intake = await createPressureTestIntake({
       memoryDir,
@@ -232,13 +401,36 @@ describe('pressure-test intake state', () => {
     })
 
     expect(next.activeDomainId).toBe('product-goals')
-    expect(next.pendingQuestion?.prompt).toBe('For "Guildhall 0.8.0", what observable result would show the work succeeded?')
-    expect(next.pendingQuestion?.prompt).not.toContain(next.domains[0]?.askedQuestions[0]?.answer ?? '')
-    expect(next.pendingQuestion?.why).toBe('Guildhall needs one observable example so future work can use this answer.')
+    expect(next.pendingQuestion?.id).toBe('product-goals-closeout')
+    expect(next.pendingQuestion?.prompt).toBe('Is there anything else Guildhall should know about product goals before we move to the next topic?')
     expect(next.domains[0]?.askedQuestions[0]).toMatchObject({
       answered: true,
       answer: 'It should feel rigorous but not annoying.',
     })
+  })
+
+  it('repairs a looping feature intake to its closeout question', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'feature', id: 'open-command', title: 'Open command' },
+      rawRequest: 'Add the command.',
+    })
+    intake.domains[0]!.status = 'follow-up'
+    intake.pendingQuestion = {
+      id: 'product-goals-q-2',
+      domainId: 'product-goals',
+      prompt: 'Repeat the same question.',
+      why: 'Old prose matcher',
+      evidence: [],
+      askedAt: intake.createdAt,
+    }
+    await writeProjectStateJsonAsync(memoryDir, path.join('pressure-test-intake', `${intake.id}.json`), intake)
+
+    const loaded = await loadPressureTestIntake({ memoryDir, intakeId: intake.id })
+
+    expect(loaded.pendingQuestion?.id).toBe('product-goals-closeout')
+    expect(loaded.domains[0]?.status).toBe('closeout')
   })
 
   it('asks project design-quality follow-ups without injecting the previous answer into the prompt', async () => {

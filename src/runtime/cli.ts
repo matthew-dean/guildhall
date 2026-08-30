@@ -60,6 +60,7 @@ import {
   readProjectSavedReleaseState,
   type ProjectSavedReleaseReadModel,
 } from './project-state-boundary.js'
+import { resolveLaunchAgentLifecycleTarget } from './launch-agent.js'
 import type {
   ProjectSummaryProjection,
   ProjectSummaryReleaseSummary,
@@ -740,37 +741,10 @@ export interface CliProjectStatus {
 }
 
 function cliReleaseSummaryFromSavedScope(state: ProjectSavedReleaseReadModel): ProjectSummaryReleaseSummary | null {
-  const summary = state.summary?.releaseSummary
-  if (!summary) return null
-  const scope = state.scope
-  if (!scope || scope.nodeIds.length === 0 || state.scopeRows.length === 0) return summary
-  const releaseTaskIds = new Set(
-    scope.nodeIds
-      .map(nodeId => nodeId.replace(/^work:/, '').trim())
-      .filter(Boolean),
-  )
-  if (releaseTaskIds.size === 0) return summary
-  const releaseRows = state.scopeRows.filter(row => releaseTaskIds.has(row.taskId))
-  const done = releaseRows.filter(row => row.handoffState === 'done').length
-  return {
-    ...summary,
-    counts: {
-      total: releaseTaskIds.size,
-      done,
-      unfinished: Math.max(0, releaseTaskIds.size - done),
-      ready: releaseRows.filter(row => row.handoffState === 'ready').length,
-      active: releaseRows.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
-      blocked: releaseRows.filter(row => row.blocksRelease).length,
-      deferred: scope.deferredNodeIds.length,
-      ownerBlocked: releaseRows.filter(row => row.humanBlocking).length,
-      proofBlocked: releaseRows.filter(row => row.proofBlocked).length,
-    },
-    taskStatusCounts: releaseRows.reduce<Record<string, number>>((counts, row) => {
-      const status = row.handoffState || 'unknown'
-      counts[status] = (counts[status] ?? 0) + 1
-      return counts
-    }, {}),
-  }
+  // Status is an owner-facing compact surface. The shared saved summary has
+  // already decided whether hierarchy containers count toward progress; CLI
+  // must not reopen raw membership and produce a competing total.
+  return state.summary?.releaseSummary ?? null
 }
 
 /**
@@ -983,7 +957,10 @@ function singleModelAssignment(model: string) {
 export async function waitForServiceReady(
   port = DEFAULT_DASHBOARD_PORT,
   home = homedir(),
-  attempts = 40,
+  // launchd may hold the previous process through its termination window, and
+  // a cold registered-project refresh can take another half minute before the
+  // replacement publishes its service state.
+  attempts = 400,
 ): Promise<ServiceRuntimeState> {
   for (let attempt = 0; attempt < attempts; attempt++) {
     const state = await discoverServiceRuntimeState(port, home)
@@ -997,11 +974,76 @@ function cliEntryPath(): string {
   return fileURLToPath(import.meta.url)
 }
 
+async function runLaunchctl(args: string[], allowFailure = false): Promise<boolean> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('launchctl', args, { stdio: 'ignore' })
+    child.once('error', err => {
+      if (allowFailure) resolvePromise(false)
+      else reject(err)
+    })
+    child.once('exit', code => {
+      if (code === 0) resolvePromise(true)
+      else if (allowFailure) resolvePromise(false)
+      else reject(new Error(`launchctl ${args[0]} failed with exit code ${code ?? 'unknown'}.`))
+    })
+  })
+}
+
+function installedLaunchAgentTarget(port: number) {
+  const target = resolveLaunchAgentLifecycleTarget({ port })
+  return target && existsSync(target.plistPath) ? target : null
+}
+
+interface InstalledLaunchAgentCommandOptions {
+  resolveTarget?: typeof installedLaunchAgentTarget
+  runLaunchctl?: typeof runLaunchctl
+}
+
+export async function startInstalledLaunchAgent(
+  port: number,
+  options: InstalledLaunchAgentCommandOptions = {},
+): Promise<boolean> {
+  const target = (options.resolveTarget ?? installedLaunchAgentTarget)(port)
+  if (!target) return false
+  const launchctl = options.runLaunchctl ?? runLaunchctl
+
+  // bootstrap fails when the service is already loaded; kickstart is authoritative in either case.
+  await launchctl(['bootstrap', target.domainTarget, target.plistPath], true)
+  return launchctl(['kickstart', '-k', target.serviceTarget], true)
+}
+
+export async function stopInstalledLaunchAgent(
+  port: number,
+  options: InstalledLaunchAgentCommandOptions = {},
+): Promise<boolean> {
+  const target = (options.resolveTarget ?? installedLaunchAgentTarget)(port)
+  if (!target) return false
+  return (options.runLaunchctl ?? runLaunchctl)(['bootout', target.domainTarget, target.plistPath], true)
+}
+
+export async function startInstalledLaunchAgentIfReady(
+  port: number,
+  options: {
+    start?: typeof startInstalledLaunchAgent
+    waitUntilReady?: typeof waitForServiceReady
+  } = {},
+): Promise<ServiceRuntimeState | null> {
+  try {
+    if (!await (options.start ?? startInstalledLaunchAgent)(port)) return null
+    return await (options.waitUntilReady ?? waitForServiceReady)(port)
+  } catch {
+    return null
+  }
+}
+
 async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<ServiceRuntimeState> {
   const existing = await discoverServiceRuntimeState(intent.port)
   if (existing) return existing
 
   mkdirSync(join(homedir(), '.guildhall'), { recursive: true })
+
+  const installedAgent = await startInstalledLaunchAgentIfReady(intent.port)
+  if (installedAgent) return installedAgent
 
   const childArgs = [
     cliEntryPath(),
@@ -1073,11 +1115,20 @@ async function cmdOpen() {
 
 async function cmdStop() {
   const state = await discoverServiceRuntimeState()
+  const stoppedLaunchAgent = await stopInstalledLaunchAgent(DEFAULT_DASHBOARD_PORT)
   if (!state) {
-    console.log('[guildhall] No running service found.')
+    console.log(stoppedLaunchAgent
+      ? '[guildhall] Service stopped.'
+      : '[guildhall] No running service found.')
     return
   }
-  process.kill(state.pid, 'SIGTERM')
+  if (isPidAlive(state.pid)) {
+    try {
+      process.kill(state.pid, 'SIGTERM')
+    } catch {
+      // launchctl may already have reaped the supervised process.
+    }
+  }
   for (let attempt = 0; attempt < 40; attempt++) {
     if (!isPidAlive(state.pid)) break
     await new Promise(resolve => setTimeout(resolve, 150))

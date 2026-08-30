@@ -1,8 +1,8 @@
 <!--
   Release readiness view. Primary/secondary/overflow IA:
     · Primary: single verdict band — shared status treatment + one-line reason.
-    · Secondary: criteria list, one row per check, expandable into task links.
-    · Overflow: compact release counts and task-state tally.
+    · Secondary: only unresolved release exceptions, each with its task route.
+    · Overflow: no success ledger or task-state tally; the Work route owns inventory.
 -->
 <script lang="ts">
   import FrameCard from '../../../../packages/ui/src/components/FrameCard.svelte'
@@ -10,10 +10,11 @@
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import Button from '../../lib/Button.svelte'
+  import { taskDisplayKey } from '../../lib/identifier-labels.js'
   import { nav } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { releaseVerdictSummary } from '../../lib/release-readiness.js'
-  import type { ProjectOrientationSpine, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
+  import type { ProjectActionOperation, ProjectDetail, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
 
   interface ReleaseItem {
     id?: string
@@ -100,24 +101,33 @@
     subView?: string | null
     activeProjectId?: string | null
     projectSummary?: ProjectSummaryRelease | null
+    projectDetail?: ProjectDetail | null
+    onRunTask?: (taskId: string) => void | Promise<void>
+    onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
+    busy?: boolean
   }
-  let { subView = null, activeProjectId = null, projectSummary = null }: Props = $props()
+  let { subView = null, activeProjectId = null, projectSummary = null, projectDetail = null, onRunTask, onRunRepositoryAction, busy = false }: Props = $props()
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
-  let spine = $state<ProjectOrientationSpine | null>(null)
   let error = $state<string | null>(null)
   let initNeeded = $state(false)
   let closeBusy = $state(false)
   let closeError = $state<string | null>(null)
+  let ownerActionBusy = $state(false)
 
   $effect(() => {
+    let disposed = false
     const endpoint = section === 'criteria'
-      ? '/api/project/release-readiness'
+      ? '/api/project/release-readiness?live=true'
       : '/api/project/release-readiness/summary'
+    data = null
+    error = null
+    initNeeded = false
     projectFetch(endpoint, undefined, activeProjectId)
       .then(r => r.json())
       .then(j => {
+        if (disposed) return
         if (j?.initializationNeeded) {
           initNeeded = true
           return
@@ -161,19 +171,12 @@
         } as ReleasePayload
       })
       .catch(err => {
+        if (disposed) return
         error = err instanceof Error ? err.message : String(err)
       })
-  })
-
-  $effect(() => {
-    projectFetch('/api/project/spine?compact=true', { cache: 'no-store' }, activeProjectId)
-      .then(r => r.json())
-      .then(j => {
-        spine = (j?.spine ?? null) as ProjectOrientationSpine | null
-      })
-      .catch(() => {
-        spine = null
-      })
+    return () => {
+      disposed = true
+    }
   })
 
   function idOf(it: ReleaseItem): string {
@@ -200,6 +203,38 @@
     if (id) nav(currentTaskHref(id, activeProjectId))
   }
 
+  async function openOwnerAction() {
+    if (
+      (ownerAction?.operation === 'push_branch' || ownerAction?.operation === 'open_pull_request') &&
+      ownerAction.taskId &&
+      onRunRepositoryAction
+    ) {
+      if (ownerActionBusy) return
+      ownerActionBusy = true
+      try {
+        await onRunRepositoryAction(ownerAction.taskId, ownerAction.operation)
+      } finally {
+        ownerActionBusy = false
+      }
+      return
+    }
+    if (ownerAction?.operation && ownerAction.taskId && onRunTask) {
+      if (ownerActionBusy) return
+      ownerActionBusy = true
+      try {
+        await onRunTask(ownerAction.taskId)
+      } finally {
+        ownerActionBusy = false
+      }
+      return
+    }
+    if (ownerAction?.href) nav(projectActionHref(ownerAction.href, activeProjectId))
+  }
+
+  function openGitDecision(taskId: string) {
+    if (taskId) nav(`${currentTaskHref(taskId, activeProjectId)}?detail=full&tab=provenance`)
+  }
+
   async function shipRelease() {
     const releaseId = data?.release?.id
     if (!releaseId || closeBusy) return
@@ -216,14 +251,9 @@
       if (payload.release && typeof payload.release === 'object' && !Array.isArray(payload.release)) {
         data = { ...data, release: payload.release as ReleasePayload['release'] }
       }
-      const [summaryResponse, spineResponse] = await Promise.all([
-        projectFetch('/api/project/release-readiness/summary', { cache: 'no-store' }, activeProjectId),
-        projectFetch('/api/project/spine?compact=true', { cache: 'no-store' }, activeProjectId),
-      ])
+      const summaryResponse = await projectFetch('/api/project/release-readiness/summary', { cache: 'no-store' }, activeProjectId)
       const summary = await summaryResponse.json().catch(() => null) as Partial<ReleasePayload> | null
       if (summary && !summary.error) data = { ...data, ...summary }
-      const spinePayload = await spineResponse.json().catch(() => null) as { spine?: ProjectOrientationSpine | null } | null
-      spine = spinePayload?.spine ?? spine
     } catch (err) {
       closeError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -231,111 +261,54 @@
     }
   }
 
-  function isWorkReleaseBlocker(item: ReleaseItem): boolean {
-    const id = idOf(item)
-    return !(
-      id.startsWith('repository-followup:') ||
-      id === 'dirty-checkout' ||
-      id === 'design-system'
-    )
-  }
-
   interface Criterion {
     key: string
     label: string
     items: ReleaseItem[]
-    clearLabel: string
   }
 
   const criteria = $derived<Criterion[]>(
     data
       ? [
           {
-            key: 'release-blockers',
-            label: hasNamedRelease ? 'Release blockers' : 'Scope blockers',
-            items: (data.releaseBlockers ?? []).filter(isWorkReleaseBlocker),
-            clearLabel: `No open ${blockerNoun}s.`,
-          },
-          {
             key: 'escalations',
             label: 'Open escalations',
             items: data.openEscalations,
-            clearLabel: 'No open escalations.',
           },
           {
             key: 'incomplete-briefs',
             label: 'Incomplete briefs',
             items: data.incompleteBriefs ?? [],
-            clearLabel: 'No incomplete briefs.',
           },
           {
             key: 'briefs',
             label: 'Unapproved briefs',
             items: data.unapprovedBriefs,
-            clearLabel: 'All briefs approved.',
           },
           {
             key: 'specs',
             label: 'Specs awaiting approval',
             items: data.unapprovedSpecs,
-            clearLabel: 'No specs awaiting approval.',
           },
           {
             key: 'proof',
             label: 'Proof evidence',
             items: data.proofMissingDoneTasks ?? [],
-            clearLabel: 'Completed work has proof evidence.',
           },
           {
             key: 'shelved',
             label: 'Shelved tasks',
             items: data.shelvedUnclaimed,
-            clearLabel: 'No shelved tasks.',
           },
           {
             key: 'blocked',
             label: 'Agent-blocked tasks',
             items: data.blockedByAgent,
-            clearLabel: 'No agent-blocked tasks.',
           },
         ]
       : [],
   )
 
-  const dsLabel = $derived(() => {
-    if (!data?.checksLoaded) return { label: 'details not loaded', tone: 'neutral' as const, clear: true }
-    const ds = data?.designSystem
-    if (!ds) return { label: 'not captured', tone: 'warn' as const, clear: false }
-    if (!ds.drafted) return { label: ds.label ?? 'not captured', tone: 'warn' as const, clear: false }
-    if (ds.source === 'repo') {
-      return { label: ds.label ?? 'detected in repo', tone: 'ok' as const, clear: true }
-    }
-    if (ds.approved) {
-      return { label: ds.label ?? `approved · rev ${ds.revision ?? 0}`, tone: 'ok' as const, clear: true }
-    }
-    return { label: ds.label ?? `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
-  })
-
-  const unfinishedCount = $derived.by(() => {
-    if (!data) return 0
-    const terminal = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
-    return Object.entries(data.statusCounts).reduce((total, [status, count]) => {
-      return terminal.has(status) ? total : total + count
-    }, 0)
-  })
-  const dirtyCheckoutCount = $derived(data?.dirtyCheckout?.ownedCount ?? 0)
-  const dirtyCheckoutError = $derived(data?.dirtyCheckout?.error ?? '')
-  const checkoutInspectionError = $derived(
-    dirtyCheckoutError
-      ? /git status|fatal: not a git repository|spawn git enoent/i.test(dirtyCheckoutError)
-        ? 'Guildhall could not inspect the configured repository boundary with git. Check that git is available and that any workspace child repos are reachable.'
-        : dirtyCheckoutError
-      : '',
-  )
-  const managedCheckoutFilesLabel = (count: number): string =>
-    `${count} Guildhall-managed checkout ${count === 1 ? 'file' : 'files'}`
-  const managedCheckoutNeedsVerb = (count: number): string =>
-    count === 1 ? 'needs' : 'need'
   function normalizedGitStoryState(state: string | undefined): string {
     return String(state ?? '').trim().toLowerCase()
   }
@@ -404,130 +377,37 @@
     return out
   }
 
-  function statusLabel(status: string): string {
-    switch (status) {
-      case 'exploring': return 'Being shaped'
-      case 'import_draft': return 'Imported drafts'
-      case 'gate_check': return 'Gate checks'
-      case 'spec_review': return 'Spec review'
-      case 'in_progress': return 'In progress'
-      case 'pending_pr': return 'Pending PR'
-      case 'ready': return 'Ready'
-      case 'blocked': return 'Blocked'
-      case 'done': return 'Done'
-      case 'shelved': return 'Shelved'
-      default: return status.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-    }
-  }
-
   const gitStoryBlockers = $derived(dedupeGitBlockers(data?.gitStory?.blockers ?? []))
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
-  const designSystemBlockingCount = $derived(data?.totals.designSystemBlockingCount ?? (dsLabel().clear ? 0 : 1))
+  const openCriteria = $derived(criteria.filter(criterion => criterion.items.length > 0))
   const hasNamedRelease = $derived(Boolean(data?.release?.label ?? projectSummary?.release?.label))
-  const readinessNoun = $derived(hasNamedRelease ? 'release' : 'scope')
-  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
-  const blockerNoun = $derived(hasNamedRelease ? 'release blocker' : 'scope blocker')
-  const openCheckNoun = $derived(hasNamedRelease ? 'release check' : 'scope check')
-  const openCheckCount = $derived(Math.max(data?.totals.blockingCount ?? 0, unfinishedCount))
+  // A project with no selected release is showing its active work scope. Do
+  // not make that temporary scope look like a named release.
+  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Current work')
 
   const verdict = $derived(data ? releaseVerdictSummary(data) ?? { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' } : { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' })
+  const verdictTitle = $derived(data?.verdict?.title ?? verdict.label)
   const releaseShipped = $derived(data?.release?.state === 'shipped')
   const canShipRelease = $derived(Boolean(data?.release?.id) && !releaseShipped && verdict.state === 'ready')
+  const ownerAction = $derived(projectDetail?.actionModel?.primaryAction ?? null)
+  const ownerActionTaskKey = $derived(ownerAction?.taskId ? taskDisplayKey(ownerAction.taskId, [], activeProjectId) : null)
+  const hasOwnerAction = $derived(Boolean(ownerAction?.href && ownerAction?.buttonLabel))
+  const ownerActionHeading = $derived(ownerAction?.ownerHeading ?? 'What needs your attention')
+  const ownerActionLabelRepeatsHeading = $derived(ownerAction?.label === ownerActionHeading)
 
   const sectionCopy = $derived(
     section === 'criteria'
-        ? {
+      ? {
           title: hasNamedRelease ? 'Release checks' : 'Scope checks',
-          description: hasNamedRelease
-            ? 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current release.'
-            : 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current project scope.',
+          description: '',
         }
       : {
           title: releaseShipped ? 'Release shipped' : readinessTitle,
-          description: releaseShipped
-            ? `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} scoped work items complete.`
-            : data?.release?.description ?? data?.scope?.description
-              ?? (hasNamedRelease
-                ? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.'
-                : 'A quick read on whether the current project scope is ready to hand off, ship, or deliberately defer.'),
+          description: '',
           },
   )
-  const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? projectSummary?.release?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Unreleased work')
-  const spineReleaseLabel = $derived(spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? projectSummary?.release?.label ?? 'Unreleased work')
-
-  const statusRows = $derived(
-    data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],
-  )
-  const releaseBlockerLabel = $derived(
-    data
-      ? `${openCheckCount} open ${openCheckNoun}${openCheckCount === 1 ? '' : 's'}`
-      : `0 open ${openCheckNoun}s`,
-  )
-  const blockerStack = $derived.by(() => {
-    if (!data) return []
-    const rows: Array<{ key: string; label: string; count: number; detail: string }> = []
-    const add = (key: string, label: string, count: number, detail: string) => {
-      if (count > 0) rows.push({ key, label, count, detail })
-    }
-    add(
-      'shaping',
-      'Needs shaping',
-      data.incompleteBriefs?.length ?? 0,
-      extraOf(data.incompleteBriefs?.[0] ?? {}) || titleOf(data.incompleteBriefs?.[0] ?? {}) || 'Imported work needs source-backed briefs before unattended execution.',
-    )
-    add(
-      'escalations',
-      'Open escalations',
-      data.openEscalations.length,
-      escalationDetailOf(data.openEscalations[0] ?? {}) || 'A task is waiting on a recovery decision.',
-    )
-    const approvalCount = data.unapprovedBriefs.length + data.unapprovedSpecs.length
-    add(
-      'approval',
-      'Approval waiting',
-      approvalCount,
-      `${approvalCount} ${approvalCount === 1 ? 'brief or spec is' : 'briefs or specs are'} waiting for review.`,
-    )
-    add(
-      'proof',
-      'Proof missing',
-      data.proofMissingDoneTasks?.length ?? 0,
-      titleOf(data.proofMissingDoneTasks?.[0] ?? {}) || 'Completed work still needs proof evidence.',
-    )
-    add(
-      'blocked',
-      'Agent-blocked tasks',
-      data.blockedByAgent.length,
-      extraOf(data.blockedByAgent[0] ?? {}) || titleOf(data.blockedByAgent[0] ?? {}) || 'A task is blocked in automation.',
-    )
-    add(
-      'checkout',
-      'Project checkout',
-      dirtyCheckoutError ? 1 : dirtyCheckoutCount,
-      dirtyCheckoutError ? checkoutInspectionError : `${managedCheckoutFilesLabel(dirtyCheckoutCount)} ${managedCheckoutNeedsVerb(dirtyCheckoutCount)} cleanup.`,
-    )
-    add(
-      'repository',
-      'Repository follow-up',
-      gitStoryBlockers.length,
-      gitStoryBlockers[0] ? gitBlockerCopy(gitStoryBlockers[0]).label : 'Branches or checkouts need landing decisions.',
-    )
-    return rows
-  })
+  const releaseLabel = $derived(data?.release?.label ?? projectSummary?.release?.label ?? '')
   const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
-  const spineReleaseBlocker = $derived(spine?.release?.blockers?.[0] ?? null)
-  const spineBlockerNode = $derived(spineReleaseBlocker?.owningNodeId ? spine?.nodes?.[spineReleaseBlocker.owningNodeId] ?? null : null)
-  const spineTopBlockerLabel = $derived.by(() => {
-    const blocker = spine?.summary?.topBlocker
-    if (!blocker) return spineReleaseBlocker?.label ?? null
-    return typeof blocker === 'string' ? blocker : blocker.label ?? spineReleaseBlocker?.label ?? null
-  })
-  const spineScopeCounts = $derived.by(() => {
-    if (!spine?.summary) return ''
-    const included = spine.summary.includedWorkCount ?? spine.summary.includedCount ?? 0
-    const deferred = spine.summary.deferredWorkCount ?? spine.summary.deferredCount ?? 0
-    return `${included} included · ${deferred} later`
-  })
 </script>
 
 {#if initNeeded}
@@ -548,7 +428,7 @@
 {:else}
   <div class="release-shell">
     <SectionHeader
-      eyebrow={releaseLabel}
+      eyebrow={releaseLabel || undefined}
       title={sectionCopy.title}
       description={sectionCopy.description}
       headingTag="h2"
@@ -558,13 +438,7 @@
         {#if releaseShipped}
           <StatusPill label="Shipped" tone="ok" />
         {:else}
-          <StatusPill label={verdict.label} tone={verdict.tone} emphasis="default" />
           <StatusPill label={taskDoneLabel} tone="neutral" />
-          {#if canShipRelease}
-            <Button variant="primary" size="sm" disabled={closeBusy} onclick={() => void shipRelease()}>
-              {closeBusy ? 'Shipping…' : 'Ship release'}
-            </Button>
-          {/if}
         {/if}
       {/snippet}
     </SectionHeader>
@@ -575,225 +449,133 @@
       </NoticeBand>
     {/if}
 
-    {#if spine?.summary?.headline && (section === 'criteria' || !releaseShipped)}
-      <FrameCard
-        tone={spineTopBlockerLabel ? 'warn' : 'neutral'}
-        padding="compact"
-        class="release-spine-card"
-      >
-        <div class="release-spine">
-          <div>
-            <span class="release-spine-label">{spineReleaseLabel}</span>
-            <strong>{spine.summary.headline}</strong>
-            <p>{spine.summary.purpose ?? spine.charter?.goal ?? 'Project purpose has not been pinned yet.'}</p>
-          </div>
-          <div class="release-spine-side">
-            {#if spineScopeCounts}
-              <StatusPill label={spineScopeCounts} tone="neutral" />
-            {/if}
-            {#if spineTopBlockerLabel}
-              <span>Top blocker: {spineTopBlockerLabel}</span>
-            {/if}
-            {#if spineBlockerNode}
-              <button type="button" onclick={() => openTask(spineBlockerNode.refs?.taskIds?.[0] ?? '')}>{spineBlockerNode.title}</button>
-            {/if}
-          </div>
-        </div>
-      </FrameCard>
-    {/if}
-
     {#if section === 'verdict'}
       {#if releaseShipped}
-        <div class="release-receipt-actions">
-          <Button
-            variant="secondary"
-            size="sm"
-            onclick={() => nav(currentProjectHref('/release/criteria', activeProjectId))}
-          >
-            View release checks
-          </Button>
-        </div>
-      {:else}
-        <NoticeBand
-          tone={verdict.tone === 'ok' ? 'ok' : 'warn'}
-          role="status"
-          label="Verdict"
-          title={verdict.label}
-        >
-          <p>{verdict.detail}</p>
+        <NoticeBand tone="ok" role="status" label="Release" title="This release is complete">
+          <p>There is nothing you need to do here.</p>
         </NoticeBand>
+      {:else}
         <FrameCard
-          tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'}
+          tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : verdict.tone === 'ok' ? 'ok' : 'neutral'}
           padding="compact"
-          class="summary-card"
+          class="release-action-card"
         >
-        {#snippet header()}
-          <SectionHeader
-            title="Current counts"
-            description={`A compact view of the signals feeding the ${readinessNoun} verdict.`}
-            headingTag="h3"
-            density="dense"
-          >
-            {#snippet meta()}
-              <StatusPill label={releaseBlockerLabel} tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'} />
-            {/snippet}
-          </SectionHeader>
-        {/snippet}
-
-        <div class="summary-grid" aria-label={`${readinessTitle} summary counts`}>
-          <div class="summary-stat">
-            <span class="summary-label">Tasks done</span>
-            <strong>{data.totals.tasks === 0 ? 'No tracked work' : `${data.totals.done}/${data.totals.tasks}`}</strong>
-          </div>
-          <div class="summary-stat">
-            <span class="summary-label">Open {hasNamedRelease ? 'release checks' : 'checks'}</span>
-            <strong>{openCheckCount}</strong>
-          </div>
-          <div class="summary-stat">
-            <span class="summary-label">Unfinished tasks</span>
-            <strong>{data.totals.unfinishedCount ?? unfinishedCount}</strong>
-          </div>
-          <div class="summary-stat">
-            <span class="summary-label">Design system</span>
-            <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
-          </div>
-          {#if data.dirtyCheckout}
-            <div class="summary-stat">
-              <span class="summary-label">Project checkout</span>
-          <StatusPill
-                label={dirtyCheckoutError ? 'inspection failed' : dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} managed ${dirtyCheckoutCount === 1 ? 'file' : 'files'} dirty` : 'clean'}
-                tone={dirtyCheckoutError || dirtyCheckoutCount > 0 ? 'warn' : 'ok'}
-              />
+          <div class="release-action">
+            <div>
+              <p class="release-action-label">{hasOwnerAction ? ownerActionHeading : 'Release status'}</p>
+              {#if !hasOwnerAction || !ownerActionLabelRepeatsHeading}
+                <h3>{hasOwnerAction ? ownerAction?.label : verdictTitle}</h3>
+              {/if}
+              {#if ownerAction?.taskLabel}
+                <p class="release-action-task" title={ownerAction.taskLabel}>
+                  {#if ownerActionTaskKey}<span>{ownerActionTaskKey}</span>{/if}
+                  {ownerAction.taskLabel}
+                </p>
+              {/if}
+              <p>{hasOwnerAction ? ownerAction?.detail : verdict.detail}</p>
             </div>
-          {/if}
-          {#if data.gitStory}
-            <div class="summary-stat">
-              <span class="summary-label">Repository follow-up</span>
-              <StatusPill
-                label={gitStoryBlockers.length > 0 ? `${gitStoryBlockers.length} open` : 'clear'}
-                tone={gitStoryBlockers.length > 0 ? 'warn' : 'ok'}
-              />
+            <div class="release-action-controls">
+              {#if hasOwnerAction}
+                <Button
+                  variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'}
+                  disabled={busy || ownerActionBusy}
+                  onclick={openOwnerAction}
+                >
+                  {ownerAction?.buttonLabel}
+                </Button>
+              {:else if canShipRelease}
+                <Button variant="primary" disabled={closeBusy} onclick={() => void shipRelease()}>
+                  {closeBusy ? 'Shipping…' : 'Ship release'}
+                </Button>
+              {/if}
+              {#if !hasOwnerAction}
+                <Button variant="ghost" size="sm" onclick={() => nav(currentProjectHref('/release/criteria', activeProjectId))}>
+                  Inspect release details
+                </Button>
+              {/if}
             </div>
-          {/if}
-        </div>
-        {#if blockerStack.length > 0}
-          <div class="blocker-stack" aria-label="Current blocker stack">
-            <strong>What blocks this</strong>
-            <ul>
-              {#each blockerStack as row (row.key)}
-                <li>
-                  <span>
-                    <b>{row.label}</b>
-                    <small>{row.detail}</small>
-                  </span>
-                  <StatusPill label={`${row.count} open`} tone="warn" />
-                </li>
-              {/each}
-            </ul>
           </div>
-        {/if}
-        {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
-          <p class="dirty-detail">
-            {managedCheckoutFilesLabel(dirtyCheckoutCount)} {managedCheckoutNeedsVerb(dirtyCheckoutCount)} cleanup before {data.release?.label ? 'the current release' : 'current work'} can be ready.
-            Open diagnostics if you need the exact file list.
-          </p>
-        {:else if dirtyCheckoutError}
-          <p class="dirty-detail">
-            <strong>Could not inspect checkout</strong>. {checkoutInspectionError}
-          </p>
-        {/if}
-        {#if gitStoryBlockers.length > 0}
-          <div class="git-story-detail">
-            <strong>Repository follow-up</strong>
-            {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
-              <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} repository follow-ups.</p>
-            {/if}
-            <ul>
-              {#each visibleGitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
-                {@const copy = gitBlockerCopy(blocker)}
-                <li>
-                  <span>{copy.label}</span>
-                  {#if copy.detail}
-                    <small>{copy.detail}</small>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
         </FrameCard>
       {/if}
     {/if}
 
-    {#if section === 'criteria'}
+    {#if section === 'criteria' && hasOwnerAction}
+      <FrameCard
+        tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : 'neutral'}
+        padding="compact"
+        class="release-action-card"
+      >
+        <div class="release-action">
+          <div>
+            <p class="release-action-label">Release is waiting on this</p>
+            <h3>{ownerAction?.label}</h3>
+            {#if ownerAction?.taskLabel}
+              <p class="release-action-task" title={ownerAction.taskLabel}>
+                {#if ownerActionTaskKey}<span>{ownerActionTaskKey}</span>{/if}
+                {ownerAction.taskLabel}
+              </p>
+            {/if}
+            <p>{ownerAction?.detail ?? 'Resolve this decision before reviewing other release checks.'}</p>
+          </div>
+          <div class="release-action-controls">
+            <Button
+              variant={ownerAction?.tone === 'warn' || ownerAction?.tone === 'danger' ? 'human' : 'primary'}
+              disabled={busy || ownerActionBusy}
+              onclick={openOwnerAction}
+            >
+              {ownerAction?.buttonLabel}
+            </Button>
+          </div>
+        </div>
+      </FrameCard>
+    {:else if section === 'criteria'}
       <FrameCard class="criteria-card">
         {#snippet header()}
           <SectionHeader
-            title="Criteria"
-            description="Each row stays compact until you need the task-level detail."
+            title="Release exceptions"
+            description="Only checks with work left are shown here."
             headingTag="h3"
             density="dense"
           />
         {/snippet}
 
-        <ul class="criteria">
-          {#each criteria as c (c.key)}
-            {@const clear = c.items.length === 0}
-            <li class="crit-row">
-              <details class="crit-det" open={false}>
-                <summary class="crit-summary" aria-disabled={clear}>
+        {#if openCriteria.length === 0 && gitStoryBlockers.length === 0}
+          <p class="muted">No release exceptions.</p>
+        {:else}
+          <ul class="criteria">
+            {#each openCriteria as c (c.key)}
+              <li class="crit-row">
+                <div class="crit-summary">
                   <span class="crit-copy">
                     <span class="crit-label">{c.label}</span>
-                    <span class="crit-detail">{clear ? c.clearLabel : `${c.items.length} task${c.items.length === 1 ? '' : 's'} still open.`}</span>
+                    <span class="crit-detail">{c.items.length} task{c.items.length === 1 ? '' : 's'} still open.</span>
                   </span>
-                  <StatusPill
-                    label={clear ? 'clear' : `${c.items.length} open`}
-                    tone={clear ? 'ok' : 'warn'}
-                  />
-                </summary>
+                  <StatusPill label={`${c.items.length} open`} tone="warn" />
+                </div>
+                <ul class="crit-items">
+                  {#each c.items as it, i (i)}
+                    <li>
+                      <button type="button" class="link" onclick={() => openTask(idOf(it))}>
+                        {titleOf(it)}
+                      </button>
+                      {#if extraOf(it)}
+                        <span class="muted">{extraOf(it)}</span>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </li>
+            {/each}
 
-                {#if !clear}
-                  <ul class="crit-items">
-                    {#each c.items as it, i (i)}
-                      <li>
-                        <button type="button" class="link" onclick={() => openTask(idOf(it))}>
-                          {titleOf(it)}
-                        </button>
-                        {#if extraOf(it)}
-                          <span class="muted">{extraOf(it)}</span>
-                        {/if}
-                      </li>
-                    {/each}
-                  </ul>
-                {/if}
-              </details>
-            </li>
-          {/each}
-
-          <li class="crit-row">
-            <div class="crit-summary crit-static">
-              <span class="crit-copy">
-                <span class="crit-label">Design system</span>
-                <span class="crit-detail">How the applicable design rules are chosen.</span>
-              </span>
-              <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
-            </div>
-          </li>
-          <li class="crit-row">
-            <details class="crit-det" open={false}>
-              <summary class="crit-summary" aria-disabled={gitStoryBlockers.length === 0}>
-                <span class="crit-copy">
-                  <span class="crit-label">Repository follow-up</span>
-                  <span class="crit-detail">
-                    {gitStoryBlockers.length === 0 ? 'No repository follow-ups.' : `${gitStoryBlockers.length} repository follow-up${gitStoryBlockers.length === 1 ? '' : 's'}.`}
+            {#if gitStoryBlockers.length > 0}
+              <li class="crit-row">
+                <div class="crit-summary">
+                  <span class="crit-copy">
+                    <span class="crit-label">Repository follow-up</span>
+                    <span class="crit-detail">{gitStoryBlockers.length} repository follow-up{gitStoryBlockers.length === 1 ? '' : 's'}.</span>
                   </span>
-                </span>
-                <StatusPill
-                  label={gitStoryBlockers.length === 0 ? 'clear' : `${gitStoryBlockers.length} open`}
-                  tone={gitStoryBlockers.length === 0 ? 'ok' : 'warn'}
-                />
-              </summary>
-              {#if gitStoryBlockers.length > 0}
+                  <StatusPill label={`${gitStoryBlockers.length} open`} tone="warn" />
+                </div>
                 {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
                   <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} repository follow-ups.</p>
                 {/if}
@@ -802,7 +584,7 @@
                     {@const copy = gitBlockerCopy(blocker)}
                     <li>
                       {#if blocker.taskId}
-                        <button type="button" class="link" onclick={() => openTask(blocker.taskId ?? '')}>
+                        <button type="button" class="link" onclick={() => openGitDecision(blocker.taskId ?? '')}>
                           {copy.label}
                         </button>
                       {:else}
@@ -812,39 +594,9 @@
                     </li>
                   {/each}
                 </ul>
-              {/if}
-            </details>
-          </li>
-        </ul>
-      </FrameCard>
-
-      <FrameCard padding="compact" class="tally-card">
-        {#snippet header()}
-          <SectionHeader
-            title="Task-state tally"
-            description="Status distribution across the current project backlog."
-            headingTag="h3"
-            density="dense"
-          >
-            {#snippet meta()}
-              <StatusPill label={taskDoneLabel} tone="neutral" />
-            {/snippet}
-          </SectionHeader>
-        {/snippet}
-
-        {#if statusRows.length === 0}
-          <p class="muted">No tasks yet.</p>
-        {:else}
-          <table class="tally">
-            <tbody>
-              {#each statusRows as [k, v] (k)}
-                <tr>
-                  <td>{statusLabel(k)}</td>
-                  <td>{v}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+              </li>
+            {/if}
+          </ul>
         {/if}
       </FrameCard>
     {/if}
@@ -858,145 +610,68 @@
     container-type: inline-size;
   }
 
-  :global(.summary-card),
-  :global(.criteria-card),
-  :global(.tally-card) {
+  :global(.criteria-card) {
     min-inline-size: 0;
   }
 
-  .summary-grid {
-    display: grid;
-    gap: var(--gh-space-3);
-  }
-
-  .summary-stat {
-    display: grid;
-    gap: var(--gh-space-1);
-  }
-
-  .summary-label,
   .muted {
     color: var(--text-muted);
     font-size: var(--gh-type-size-body);
     line-height: var(--gh-type-line-height-body);
   }
 
-  .summary-stat strong {
-    font-size: var(--gh-type-size-section-title);
-    line-height: var(--gh-type-line-height-tight);
-  }
-
-  .dirty-detail {
-    margin: var(--gh-space-3) 0 0;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-body);
-    line-height: var(--gh-type-line-height-body);
-  }
-
-  .blocker-stack {
-    display: grid;
-    gap: var(--gh-space-2);
-    margin-top: var(--gh-space-3);
-  }
-
-  .blocker-stack ul {
-    display: grid;
-    gap: var(--gh-space-2);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .blocker-stack li {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--gh-space-3);
-    align-items: start;
-    padding-top: var(--gh-space-2);
-    border-top: 1px solid var(--gh-color-border-subtle);
-  }
-
-  .blocker-stack span {
-    min-width: 0;
-    display: grid;
-    gap: var(--gh-space-1);
-  }
-
-  .blocker-stack small {
-    color: var(--text-muted);
-  }
-
-  .git-story-detail {
-    display: grid;
-    gap: var(--gh-space-2);
-    margin: var(--gh-space-3) 0 0;
-    color: var(--text);
-    font-size: var(--gh-type-size-body);
-  }
-
-  .git-story-detail ul {
-    display: grid;
-    gap: var(--gh-space-1);
-    margin: 0;
-    padding-inline-start: 1.1rem;
-  }
-
-  .git-story-detail li {
-    display: grid;
-    gap: 0.1rem;
-  }
-
-  .git-story-detail small {
-    color: var(--text-muted);
-  }
-
-  .release-spine {
-    display: grid;
-    grid-template-columns: minmax(18rem, 1fr) minmax(16rem, 0.75fr);
+  .release-action {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
     gap: var(--gh-space-4);
-    align-items: start;
   }
 
-  .release-spine div {
-    display: grid;
-    gap: var(--gh-space-1);
-    min-width: 0;
+  .release-action > div:first-child {
+    min-inline-size: 0;
   }
 
-  .release-spine-label,
-  .release-spine p,
-  .release-spine-side span {
+  .release-action-label,
+  .release-action p {
+    margin: 0;
     color: var(--text-muted);
     font-size: var(--gh-type-size-body);
     line-height: var(--gh-type-line-height-body);
-    overflow-wrap: anywhere;
   }
 
-  .release-spine strong {
+  .release-action-label {
+    margin-bottom: var(--gh-space-1) !important;
+    font-weight: var(--gh-type-weight-strong);
+    text-transform: uppercase;
+  }
+
+  .release-action h3 {
+    margin: 0;
     color: var(--text);
     font-size: var(--gh-type-size-panel-title);
     line-height: var(--gh-type-line-height-tight);
-    overflow-wrap: anywhere;
   }
 
-  .release-spine p {
-    margin: 0;
+  .release-action-task {
+    display: flex;
+    gap: var(--gh-space-2);
+    margin-top: var(--gh-space-1) !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .release-spine-side {
-    justify-items: start;
-    max-inline-size: 36rem;
+  .release-action-task span {
+    flex: none;
+    font-family: var(--gh-font-mono, ui-monospace, monospace);
   }
 
-  .release-spine-side button {
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--accent);
-    cursor: pointer;
-    font: inherit;
-    font-weight: var(--gh-type-weight-strong);
-    text-align: left;
+  .release-action-controls {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    justify-content: flex-end;
   }
 
   .criteria {
@@ -1014,30 +689,12 @@
     border-top: none;
   }
 
-  .crit-det {
-    width: 100%;
-  }
-
-  .release-receipt-actions {
-    display: flex;
-  }
-
   .crit-summary {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--gh-space-3);
     align-items: center;
-    list-style: none;
-    cursor: pointer;
     padding: var(--gh-space-3) 0;
-  }
-
-  .crit-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .crit-static {
-    cursor: default;
   }
 
   .crit-copy {
@@ -1085,16 +742,6 @@
     text-decoration: underline;
   }
 
-  @container (max-width: 760px) {
-    .release-spine {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .release-spine-side {
-      max-inline-size: none;
-    }
-  }
-
   .notice-link {
     min-height: var(--gh-control-height-default);
     padding: var(--gh-control-padding-block) var(--gh-control-padding-inline);
@@ -1108,30 +755,18 @@
     background: color-mix(in srgb, var(--gh-color-feedback-warn) 14%, transparent);
   }
 
-  .tally {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: var(--gh-type-size-body);
-  }
-
-  .tally td {
-    padding: var(--gh-space-2) 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .tally tbody tr:first-child td {
-    border-top: none;
-  }
-
-  @container (min-width: 42rem) {
-    .summary-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-  }
-
   @media (max-width: 720px) {
-    .release-spine {
+    .release-action {
       grid-template-columns: 1fr;
+    }
+
+    .release-action {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .release-action-controls {
+      justify-content: flex-start;
     }
   }
 </style>

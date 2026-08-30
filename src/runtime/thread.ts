@@ -41,7 +41,7 @@ import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessio
 import { projectTaskStateExistsSync, readProjectTaskQueueSync } from './project-state-boundary.js'
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
-import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { specReviewIsReadyForOwnerApproval } from './spec-review-ownership.js'
 import { taskShapingBlockers, type TaskShapingBlocker } from '@guildhall/shared'
 
 // ---------------------------------------------------------------------------
@@ -237,9 +237,14 @@ export interface InFlightTurn extends TurnBase {
   taskDescription?: string | undefined
   sourceNote?: TaskSourceNote | undefined
   taskStatus?: string | undefined
+  briefApproved?: boolean | undefined
+  specDraftPresent?: boolean | undefined
   summary: string
   importedDraft?: boolean | undefined
   shapingBlockers?: TaskShapingBlocker[] | undefined
+  dependencyBlockers?: Array<{ taskId: string; title: string }> | undefined
+  dependencyState?: 'waiting' | 'clear' | undefined
+  canStart?: boolean | undefined
   liveAgent?: {
     name: string
     startedAt?: string | undefined
@@ -293,6 +298,7 @@ export interface PressureTestQuestionTurn extends TurnBase {
     evidence: string[]
   }
   answerEndpoint: string
+  directTaskEndpoint: string
 }
 
 export interface BoundedChatTurn extends TurnBase {
@@ -353,6 +359,10 @@ export interface BuildThreadOptions {
   projectCheckInSummary?: ProjectCheckInSummary
   /** Current coordinator run status; when stopped, stale task activity should not project as live work. */
   runStatus?: string | undefined
+  /** Typed supervisor focus. A live Thread must use this exact task instead of guessing from turn order. */
+  activeTaskId?: string | undefined
+  /** Typed persisted focus for interrupted work, retained after a restart. */
+  pausedTaskId?: string | undefined
   /** Recent supervisor events, used only for live "agent is currently busy" hints. */
   recentEvents?: Array<{
     at?: string | undefined
@@ -511,7 +521,7 @@ function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'pro
 function isQueuedSpecRevision(task: Task): boolean {
   if (taskShapingBlockers(task).length > 0) return false
   return (
-    (task.status === 'exploring' || task.status === 'spec_review') &&
+    task.status === 'exploring' &&
     hasSpecDraftContent(task)
   )
 }
@@ -1103,6 +1113,7 @@ function pressureTestTurns(projectPath: string, intakes: PressureTestIntake[]): 
       kind: 'request',
       id: `request:${intake.id}`,
       requestId: intake.id,
+      ...(intake.handoff?.taskId ? { taskId: intake.handoff.taskId } : {}),
       rawRequest: intake.rawRequest,
       title: intake.target.title,
       requestStage: 'new_request',
@@ -1133,6 +1144,7 @@ function pressureTestTurns(projectPath: string, intakes: PressureTestIntake[]): 
           evidence: intake.pendingQuestion.evidence,
         },
         answerEndpoint: `/api/project/pressure-test/${encodeURIComponent(intake.id)}/answer`,
+        directTaskEndpoint: `/api/project/pressure-test/${encodeURIComponent(intake.id)}/use-request`,
         at: intake.pendingQuestion.askedAt,
         persona: 'intake',
         status: 'active',
@@ -1766,6 +1778,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     return taskStatus === 'import_draft' || shouldUseImportDraftState(task)
   })
   const leadingImportDraftId = typeof importDraftTasks[0]?.id === 'string' ? importDraftTasks[0].id : null
+  const tasksById = new Map(tasks.map(task => [task.id, task] as const))
   for (const t of tasks) {
     const taskId = typeof t.id === 'string' ? t.id : ''
     const taskTitle = displayTaskTitle(t)
@@ -1952,10 +1965,28 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       | undefined
     const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
     const liveAgent = liveAgents.get(taskId)
+    const effectiveLiveAgent = runIsActive ? liveAgent : undefined
     const hasSpecDraft = hasSpecDraftContent(t)
-    if (hasReviewableProductBrief(brief) && unansweredQuestions.length === 0) {
-      const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
-      const status: TurnStatus = !briefStillNeedsHuman
+    const briefApproved = hasApprovedProductBrief(t)
+    const approvedBriefNeedsSpec = briefApproved && !hasSpecDraft
+    const briefRequiresOwnerApproval = !approvedAt &&
+      brief?.authoredBy !== 'coordinator-recovery' &&
+      t.taskReadiness?.recommendation !== 'needs_research_spike' &&
+      taskStatus === 'exploring' &&
+      !hasSpecDraft
+    const dependencyBlockers = (t.dependsOn ?? []).flatMap(dependencyId => {
+      const dependency = tasksById.get(dependencyId)
+      if (dependency?.status === 'done') return []
+      return [{ taskId: dependencyId, title: dependency ? displayTaskTitle(dependency) : dependencyId }]
+    })
+    const taskStatusCanStart = ['ready', 'import_draft', 'exploring', 'in_progress', 'review', 'gate_check']
+      .includes(taskStatus)
+    const runBlocksTaskStart = !effectiveLiveAgent && taskStatus !== 'import_draft' &&
+      (opts.runStatus === 'running' || opts.runStatus === 'stopping') &&
+      ['ready', 'exploring', 'in_progress', 'review', 'gate_check'].includes(taskStatus)
+    const canStart = dependencyBlockers.length === 0 && !effectiveLiveAgent && taskStatusCanStart && !runBlocksTaskStart
+    if (hasReviewableProductBrief(brief) && unansweredQuestions.length === 0 && dependencyBlockers.length === 0) {
+      const status: TurnStatus = !briefRequiresOwnerApproval
         ? 'done'
         : !activeAssigned
           ? 'active'
@@ -2077,7 +2108,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
 
     const hasUnansweredQuestions = openQs.some(q => !q.answeredAt)
-    const hasActiveBriefTurn = hasReviewableProductBrief(brief) && !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
+    const hasActiveBriefTurn = hasReviewableProductBrief(brief) &&
+      briefRequiresOwnerApproval &&
+      dependencyBlockers.length === 0
     const importedDraft = taskStatus === 'import_draft' || shouldUseImportDraftState(t)
     const shapingBlockers = taskShapingBlockers(t)
     if (importedDraft && taskId !== leadingImportDraftId) {
@@ -2087,8 +2120,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     // Spec review
     const shouldSurfaceSpecReview =
       (taskStatus === 'spec_review' || (taskStatus === 'exploring' && hasSpecDraft)) &&
-      specReviewRequiresOwnerApproval(t) &&
-      shapingBlockers.length === 0
+      (taskId === META_INTAKE_TASK_ID || specReviewIsReadyForOwnerApproval(t)) &&
+      shapingBlockers.length === 0 &&
+      dependencyBlockers.length === 0
     if (shouldSurfaceSpecReview && !hasUnansweredQuestions) {
       const status: TurnStatus = hasUnansweredQuestions
         ? 'pending'
@@ -2131,18 +2165,21 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       !hasUnansweredQuestions &&
       !hasActiveBriefTurn
     ) {
-      const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
+      const status: TurnStatus = dependencyBlockers.length > 0
+        ? 'pending'
+        : !activeAssigned
+          ? 'active'
+          : 'pending'
       if (status === 'active') activeAssigned = true
-      const effectiveLiveAgent = runIsActive ? liveAgent : undefined
       const livePersona = personaForAgent(effectiveLiveAgent?.name)
-      const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' ? 'spec' : 'worker')
+      const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' || taskStatus === 'spec_review' ? 'spec' : 'worker')
       const queuedSpecRevision = isQueuedSpecRevision(t)
       const needsSpecFill = taskStatus === 'ready' && taskNeedsSpecFill(t)
       const phase = taskStatus === 'ready'
         ? 'ready'
         : taskId === META_INTAKE_TASK_ID && setupStillBlockingMetaIntake && !liveAgent
           ? 'setup'
-        : queuedSpecRevision
+        : queuedSpecRevision || approvedBriefNeedsSpec
           ? 'spec'
         : taskStatus === 'exploring' || taskStatus === 'import_draft' || livePersona === 'spec'
           ? 'intake'
@@ -2154,6 +2191,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             : taskId === META_INTAKE_TASK_ID
               ? 'Guildhall is inspecting the repo and drafting starter tasks now.'
             : `${friendlyAgentName(effectiveLiveAgent.name)} is working on this now.`
+          : dependencyBlockers.length > 0
+            ? `Waiting for ${dependencyBlockers.map(blocker => blocker.title).join(', ')}.`
           : taskId === META_INTAKE_TASK_ID
             ? providerSetupPending
               ? 'Setup is waiting on provider configuration before the repo can be inspected.'
@@ -2175,6 +2214,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
                 ? 'This can be answered from project context without turning it into implementation work.'
               : queuedSpecRevision
                 ? 'Your answers and a spec draft are saved. Coordinator review is next.'
+              : approvedBriefNeedsSpec
+                ? 'The brief is approved. Guildhall is shaping the spec now.'
               : 'The spec author is shaping this task.'
             : queuedSpecRevision
               ? 'Your answers and a spec draft are saved. Coordinator review is next.'
@@ -2186,6 +2227,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
                 ? 'Gate checks are next.'
                 : taskStatus === 'review'
                   ? 'Review is next.'
+                  : taskStatus === 'spec_review'
+                    ? 'The spec is ready for your review.'
                   : 'Waiting for worker activity.'
       turns.push({
         kind: 'inflight',
@@ -2203,13 +2246,19 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskDescription,
         sourceNote,
         taskStatus,
+        briefApproved,
+        specDraftPresent: hasSpecDraft,
         summary,
         importedDraft,
         shapingBlockers: shapingBlockers.length > 0 ? shapingBlockers : undefined,
+        dependencyBlockers: dependencyBlockers.length > 0 ? dependencyBlockers : undefined,
+        dependencyState: dependencyBlockers.length > 0 ? 'waiting' : 'clear',
+        canStart,
         liveAgent: effectiveLiveAgent,
         activity: liveActivity.get(taskId),
         checklist:
           (taskStatus === 'exploring' || needsSpecFill) &&
+          !approvedBriefNeedsSpec &&
           !queuedSpecRevision &&
           requestKind !== 'project_question' &&
           taskId !== META_INTAKE_TASK_ID &&
@@ -2333,11 +2382,53 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
   }
   if (setupCanYieldToTaskTurns && hadOnlySetupActive && hasPendingNonSetupTurnBeyondSetup) {
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const turn = turns[index]
-      if (!turn || turn.kind === 'setup_step' || turn.status !== 'pending') continue
-      turn.status = 'active'
-      break
+    const pendingRunnableTurn = [...turns].reverse().find(turn =>
+      turn.status === 'pending' &&
+      turn.kind !== 'setup_step' &&
+      !(turn.kind === 'inflight' && turn.dependencyState === 'waiting'),
+    )
+    if (pendingRunnableTurn) pendingRunnableTurn.status = 'active'
+  }
+
+  // A pending brief/spec review is already the shared project's next owner
+  // decision. Let it displace leftover setup chrome, but never a real current
+  // question: the latter still has stronger decision priority.
+  const pendingTaskReview = [...turns].reverse().find(turn =>
+    turn.status === 'pending' &&
+    (turn.kind === 'brief_approval' || turn.kind === 'spec_review'),
+  )
+  const activeOwnerQuestion = turns.some(turn =>
+    turn.status === 'active' &&
+    (turn.kind === 'agent_question' || turn.kind === 'pressure_test_question' || turn.kind === 'bounded_chat' || turn.kind === 'escalation'),
+  )
+  if (pendingTaskReview && !activeOwnerQuestion) {
+    for (const turn of turns) {
+      if (turn.kind === 'setup_step' && turn.status === 'active') turn.status = 'pending'
+    }
+    pendingTaskReview.status = 'active'
+    pendingTaskReview.phase = pendingTaskReview.kind === 'spec_review' ? 'spec' : 'intake'
+  }
+
+  // The shared execution decision is the focus authority. A live supervisor
+  // takes precedence, while a persisted paused decision keeps interrupted work
+  // visible after restart instead of falling back to setup.
+  const activeTaskId = opts.activeTaskId?.trim()
+  const pausedTaskId = opts.pausedTaskId?.trim()
+  const focusTaskId = activeTaskId || pausedTaskId
+  const focusedExecutionTurn = focusTaskId && (runIsActive || pausedTaskId)
+    ? turns.find(turn => turn.kind === 'inflight' && turn.taskId === focusTaskId)
+    : undefined
+  const hasCurrentOwnerDecision = turns.some(turn =>
+    turn.status === 'active' && turn.kind !== 'setup_step' && isHumanOwnedActiveTurn(turn),
+  )
+  if (focusedExecutionTurn && !hasCurrentOwnerDecision) {
+    for (const turn of turns) {
+      if (turn.kind === 'setup_step' && turn.status === 'active') turn.status = 'pending'
+    }
+    focusedExecutionTurn.status = 'active'
+    focusedExecutionTurn.phase = pausedTaskId ? 'ready' : 'inflight'
+    if (pausedTaskId && focusedExecutionTurn.kind === 'inflight') {
+      focusedExecutionTurn.summary = 'Work is paused. Resume work when you are ready.'
     }
   }
 

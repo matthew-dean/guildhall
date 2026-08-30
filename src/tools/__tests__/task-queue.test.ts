@@ -20,17 +20,19 @@ import {
   promoteProjectStateDatabaseAuthority,
   readProjectStateDatabaseQueueRevision,
   readProjectStateDatabaseTask,
+  readProjectStateDatabaseTaskPointWithRevision,
   readProjectTaskQueueSync as readProjectTaskQueueSyncRaw,
   readTaskEvidence,
-  upsertTaskRuntimeState,
-  appendTaskEvidence,
+  TASK_EVIDENCE_RETENTION,
 } from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
 import {
   writeProjectTaskQueue,
   writeProjectTaskQueueWithSummary,
+  writePromotedTaskDetailMutation,
 } from '../../runtime/project-state-boundary.js'
-import { buildEffectiveTask } from '../../runtime/effective-task.js'
+import { buildEffectiveTaskFromDatabaseOverlay } from '../../runtime/effective-task.js'
+import { getProjectMigrationStatus } from '../../runtime/migrations.js'
 
 // ---------------------------------------------------------------------------
 // Tests for task queue tools — these are safety-critical (gate logic depends
@@ -88,6 +90,40 @@ type TestTaskQueue = Omit<TaskQueue, 'tasks' | 'executionPlanActions'> & {
 
 function readProjectTaskQueueSync(statePath: string): TestTaskQueue {
   return TaskQueue.parse(readProjectTaskQueueSyncRaw(statePath)) as TestTaskQueue
+}
+
+function readEffectiveTaskFromHandle(statePath: string, taskId: string) {
+  const task = TaskQueue.parse(readProjectTaskQueueSyncRaw(statePath)).tasks.find(candidate => candidate.id === taskId)
+  const point = readProjectStateDatabaseTaskPointWithRevision(statePath, taskId)
+  if (!task || !point) throw new Error(`Missing promoted task point ${taskId}`)
+  return buildEffectiveTaskFromDatabaseOverlay(task, point.overlay)
+}
+
+function readCurrentEvidenceFromHandle(statePath: string, taskId: string, kind: string) {
+  return readProjectStateDatabaseTaskPointWithRevision(statePath, taskId)?.overlay?.evidenceCurrent?.byKind[kind] ?? []
+}
+
+function appendEvidenceToHandle(
+  statePath: string,
+  event: { id: string; taskId?: string; kind: keyof typeof TASK_EVIDENCE_RETENTION; recordedAt: string; payload: Record<string, unknown> },
+) {
+  const durable = { ...event, taskId: event.taskId ?? 'task-001' }
+  const result = writePromotedTaskDetailMutation(statePath, durable.taskId, {
+    projectRoot: tmpDir,
+    mutate: current => current,
+    evidence: [{ event: durable, retention: TASK_EVIDENCE_RETENTION[durable.kind] }],
+  })
+  if (!result) throw new Error(`Could not append evidence for ${durable.taskId}`)
+  return durable
+}
+
+function patchRuntimeAtHandle(statePath: string, taskId: string, patch: Record<string, unknown>) {
+  const result = writePromotedTaskDetailMutation(statePath, taskId, {
+    projectRoot: tmpDir,
+    mutate: current => current,
+    mutateRuntime: current => ({ ...current, ...patch, taskId, updatedAt: new Date().toISOString() }),
+  })
+  if (!result) throw new Error(`Could not patch runtime for ${taskId}`)
 }
 
 beforeEach(async () => {
@@ -179,6 +215,7 @@ describe('updateTask', () => {
       }],
       tasks: [{
         ...seedQueue.tasks[0],
+        projectPath: path.join(tmpDir, 'docs', 'harness'),
         releaseIds: ['release-1'],
       }],
     })
@@ -192,13 +229,154 @@ describe('updateTask', () => {
         verifiedBy: 'automated',
         command: 'pnpm test',
       }],
-    }, { current_agent_id: 'spec-agent' })
+    }, {
+      current_agent_id: 'spec-agent',
+      current_task_workspace_project_path: tmpDir,
+    })
 
     expect(result).toMatchObject({
       success: false,
       error: expect.stringContaining('Bare workspace test/build commands'),
     })
     expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.acceptanceCriteria).toEqual([])
+  })
+
+  it('creates current proof paths for broad commands in mixed releases without requiring reconciliation', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'ac-typecheck',
+        description: 'The desktop spike typechecks.',
+        verifiedBy: 'automated',
+        command: 'pnpm typecheck',
+      }],
+    }, {
+      current_agent_id: 'spec-agent',
+      current_task_workspace_project_path: tmpDir,
+    })
+
+    expect(result.success, result.error).toBe(true)
+    const task = readProjectTaskQueueSync(tasksPath).tasks[0]!
+    expect(task.proofPaths).toEqual([
+      expect.objectContaining({
+        kind: 'command',
+        command: 'pnpm typecheck',
+        expectedEvidence: [expect.objectContaining({ id: 'ac-typecheck' })],
+        createdBy: 'spec-agent',
+      }),
+    ])
+
+    const reconciliationId = '0.13.27/acceptance-command-proof-path-reconciliation'
+    const migrations = await getProjectMigrationStatus({
+      projectRoot: tmpDir,
+      only: [reconciliationId],
+    })
+    expect(migrations.pending.some(migration => migration.id === reconciliationId)).toBe(false)
+    expect(migrations.blocked.some(migration => migration.id === reconciliationId)).toBe(false)
+  })
+
+  it('grounds a new acceptance command in a typed owner spec revision', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      tasks: [{
+        ...seedQueue.tasks[0],
+        sourceClaims: [{
+          source: 'workspace-importer',
+          title: 'Desktop harness release plan',
+          evidence: 'Build a minimal packaged desktop harness.',
+          references: ['docs/desktop-release.md'],
+          confidence: 'high',
+          linkedTaskHints: [],
+        }],
+        references: ['docs/desktop-release.md'],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+    appendEvidenceToHandle(tasksPath, {
+      id: 'owner-spec-revision',
+      kind: 'note',
+      recordedAt: '2026-08-08T21:00:00.000Z',
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: 'Add the exact command pnpm test:desktop-sidecar.',
+        structured: {
+          event: 'document_revision_requested',
+          target: 'spec',
+          requiredAcceptanceCommands: ['pnpm test:desktop-sidecar'],
+        },
+      },
+    })
+
+    const omitted = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A bounded desktop sidecar proof.',
+        problemContext: 'The imported release needs a packaged desktop architecture gate.',
+        goals: ['Prove the desktop sidecar contract.'],
+        nonGoals: ['Do not build the full desktop UI.'],
+        proposedDesign: 'Add the focused proof entry requested by the owner.',
+        keyDecisions: ['Keep executable proof typed.'],
+        acceptanceCriteria: [{
+          scenario: 'Given the desktop sidecar',
+          expectation: 'Then its typed contract passes.',
+          verificationMode: 'review',
+        }],
+        verification: ['Run the typed acceptance command.'],
+        completionBoundary: {
+          productOutcome: 'The sidecar contract is proven.',
+          whatGuildhallCanCompleteInCode: 'Add and run the focused proof.',
+          externalDependencies: 'None known.',
+          ownerOnlySetup: 'None known.',
+          verificationEnvironment: 'The registered project.',
+          whatCountsAsDone: 'The focused proof passes.',
+          whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+        },
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(omitted.success).toBe(false)
+    expect(omitted.error).toContain('omits owner-required acceptance commands: pnpm test:desktop-sidecar')
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      structuredSpec: {
+        whatThisIs: 'A bounded desktop sidecar proof.',
+        problemContext: 'The owner requested an exact executable contract.',
+        goals: ['Prove the desktop sidecar contract.'],
+        nonGoals: ['Do not build the full desktop UI.'],
+        proposedDesign: 'Add the focused proof entry requested by the owner.',
+        keyDecisions: ['Keep executable proof typed.'],
+        acceptanceCriteria: [{
+          scenario: 'Given the desktop sidecar',
+          expectation: 'Then its typed contract passes.',
+          verificationMode: 'automated',
+          command: 'pnpm test:desktop-sidecar',
+        }],
+        verification: ['Run the typed acceptance command.'],
+        completionBoundary: {
+          productOutcome: 'The sidecar contract is proven.',
+          whatGuildhallCanCompleteInCode: 'Add and run the focused proof.',
+          externalDependencies: 'None known.',
+          ownerOnlySetup: 'None known.',
+          verificationEnvironment: 'The registered project.',
+          whatCountsAsDone: 'The focused proof passes.',
+          whatMustBeSplitOrBlocked: 'Split only independent outcomes.',
+        },
+      },
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result.success, result.error).toBe(true)
+    const task = readProjectTaskQueueSync(tasksPath).tasks[0]!
+    expect(task.acceptanceCriteria[0]).toMatchObject({ command: 'pnpm test:desktop-sidecar' })
+    expect(task.proofPaths).toContainEqual(expect.objectContaining({
+      kind: 'command',
+      command: 'pnpm test:desktop-sidecar',
+      createdBy: 'spec-agent',
+    }))
   })
 
   it('updates task status', async () => {
@@ -271,7 +449,7 @@ describe('updateTask', () => {
       title: 'Point-written title',
     })
     expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).not.toHaveProperty('assignedTo')
-    expect((await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' }))[0]?.payload).toMatchObject({
+    expect(readCurrentEvidenceFromHandle(promotedTasksPath, 'task-001', 'note')[0]?.payload).toMatchObject({
       content: 'Updated the definition.',
     })
   })
@@ -284,7 +462,7 @@ describe('updateTask', () => {
     await fs.writeFile(promotedTasksPath, '{}', 'utf-8')
     writeProjectTaskQueue(promotedTasksPath, seedQueue, { projectRoot: tmpDir })
     promoteProjectStateDatabaseAuthority(tmpDir)
-    await upsertTaskRuntimeState(tmpDir, 'task-001', {
+    patchRuntimeAtHandle(promotedTasksPath, 'task-001', {
       assignedTo: 'worker-agent',
       revisionCount: 2,
       remediationAttempts: 1,
@@ -308,10 +486,7 @@ describe('updateTask', () => {
     }, { current_task_project_path: tmpDir })
 
     expect(result.success).toBe(true)
-    const effective = await buildEffectiveTask(
-      tmpDir,
-      TaskQueue.parse(readProjectTaskQueueSync(promotedTasksPath)).tasks[0]!,
-    )
+    const effective = readEffectiveTaskFromHandle(promotedTasksPath, 'task-001')
     expect(effective.status).toBe('review')
     expect(effective.revisionCount).toBe(2)
     expect(effective.remediationAttempts).toBe(1)
@@ -324,7 +499,7 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
     const raw = readProjectTaskQueueSync(tasksPath)
-    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effective = readEffectiveTaskFromHandle(tasksPath, 'task-001')
     expect(raw.tasks[0].status).toBe('review')
     expect(effective.assignedTo).toBe('reviewer-agent')
   })
@@ -686,7 +861,7 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'gate_check' })
     const raw = readProjectTaskQueueSync(tasksPath)
-    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effective = readEffectiveTaskFromHandle(tasksPath, 'task-001')
     expect(raw.tasks[0].status).toBe('gate_check')
     expect(effective.assignedTo).toBe('gate-checker-agent')
   })
@@ -702,7 +877,7 @@ describe('updateTask', () => {
       assignedTo: 'custom-review-owner',
     })
     const raw = readProjectTaskQueueSync(tasksPath)
-    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effective = readEffectiveTaskFromHandle(tasksPath, 'task-001')
     expect(effective.assignedTo).toBe('custom-review-owner')
   })
 
@@ -728,7 +903,7 @@ describe('updateTask', () => {
       taskId: 'task-001',
       note: { agentId: 'spec-agent', role: 'spec', content: 'Spec complete.' },
     })
-    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    const evidence = readCurrentEvidenceFromHandle(tasksPath, 'task-001', 'note')
     expect(evidence).toHaveLength(1)
     expect(evidence[0]?.payload).toMatchObject({
       agentId: 'spec-agent',
@@ -757,7 +932,7 @@ describe('updateTask', () => {
     })
     expect(result.success).toBe(true)
 
-    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    const evidence = readCurrentEvidenceFromHandle(stateTasksPath, 'task-001', 'note')
     expect(evidence.at(-1)?.payload).toMatchObject({
       agentId: 'worker-agent',
       role: 'self-critique',
@@ -790,7 +965,7 @@ describe('updateTask', () => {
     expect(result.success).toBe(true)
 
     const raw = readProjectTaskQueueSync(stateTasksPath)
-    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effective = readEffectiveTaskFromHandle(stateTasksPath, 'task-001')
     expect(Array.isArray(effective.notes)).toBe(true)
     const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }>
     expect(effectiveNotes.at(-1)).toMatchObject({
@@ -828,7 +1003,7 @@ describe('updateTask', () => {
     expect(result.success).toBe(true)
 
     const raw = readProjectTaskQueueSync(stateTasksPath)
-    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effective = readEffectiveTaskFromHandle(stateTasksPath, 'task-001')
     const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }> | undefined
     expect(effectiveNotes?.at(-1)).toMatchObject({
       agentId: 'worker-agent',
@@ -858,7 +1033,7 @@ describe('updateTask', () => {
 
     expect(result.success).toBe(true)
     const raw = readProjectTaskQueueSync(stateTasksPath)
-    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effective = readEffectiveTaskFromHandle(stateTasksPath, 'task-001')
     const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }>
     expect(effectiveNotes.at(-1)).toMatchObject({
       agentId: 'worker-agent',
@@ -878,7 +1053,7 @@ describe('updateTask', () => {
       }),
     }, ctx)
 
-    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    const evidence = readCurrentEvidenceFromHandle(tasksPath, 'task-001', 'note')
     expect(evidence.at(-1)?.payload).toMatchObject({
       agentId: 'worker-agent',
       role: 'self-critique',
@@ -935,7 +1110,7 @@ describe('updateTask', () => {
       },
     }, ctx)
 
-    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    const evidence = readCurrentEvidenceFromHandle(tasksPath, 'task-001', 'note')
     expect(evidence.at(-1)?.payload).toMatchObject({
       agentId: 'worker-agent',
       role: 'self-critique',
@@ -2052,7 +2227,7 @@ describe('updateTask', () => {
       }],
     })
     writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
-    await appendTaskEvidence(tmpDir, 'task-001', {
+    appendEvidenceToHandle(tasksPath, {
       id: 'gate-proof-focused',
       kind: 'gate_result',
       recordedAt: '2026-07-22T00:00:00.000Z',
@@ -2114,7 +2289,7 @@ describe('updateTask', () => {
       }],
     })
     writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
-    await appendTaskEvidence(tmpDir, 'task-001', {
+    appendEvidenceToHandle(tasksPath, {
       id: 'gate-proof-focused',
       kind: 'gate_result',
       recordedAt: '2026-07-22T00:00:00.000Z',
@@ -2263,7 +2438,7 @@ describe('updateTask', () => {
       ],
     }
     writeProjectTaskQueue(tasksPath, importedQueue, { projectRoot: tmpDir })
-    await appendTaskEvidence(tmpDir, 'task-001', {
+    appendEvidenceToHandle(tasksPath, {
       id: 'imported-note-001',
       kind: 'note',
       recordedAt: importedQueue.tasks[0]!.notes[0]!.timestamp,
@@ -2334,7 +2509,6 @@ describe('updateTask', () => {
       spec: 'Existing spec',
       blockReason: 'Existing block reason',
       humanJudgment: 'Existing human note',
-      completedAt: '2026-04-29T00:00:00.000Z',
       assignedTo: 'worker-agent',
     })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
@@ -2356,7 +2530,7 @@ describe('updateTask', () => {
     expect(raw.tasks[0].spec).toBe('Existing spec')
     expect(raw.tasks[0].blockReason).toBe('Existing block reason')
     expect(raw.tasks[0].humanJudgment).toBe('Existing human note')
-    expect(raw.tasks[0].completedAt).toBe('2026-04-29T00:00:00.000Z')
+    expect(raw.tasks[0].completedAt).toBeUndefined()
     expect(raw.tasks[0].assignedTo).toBeUndefined()
   })
 
@@ -2392,8 +2566,8 @@ describe('updateTask', () => {
     expect(raw.tasks[0].blockReason).toBe('Spec ambiguous — awaiting human input')
   })
 
-  it('records gate results for review packets and gate audit', async () => {
-    await updateTask({
+  it('rejects caller-authored promoted gate results', async () => {
+    const result = await updateTask({
       tasksPath,
       taskId: 'task-001',
       gateResults: [
@@ -2406,17 +2580,10 @@ describe('updateTask', () => {
         },
       ],
     })
-
-    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
-    expect(evidence.map((event) => event.payload)).toEqual([
-      {
-        gateId: 'test',
-        type: 'hard',
-        passed: true,
-        output: 'ok',
-        checkedAt: '2026-04-29T00:00:00.000Z',
-      },
-    ])
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Run them through run-gates')
+    const evidence = readCurrentEvidenceFromHandle(tasksPath, 'task-001', 'gate_result')
+    expect(evidence).toEqual([])
   })
 
   it('ignores empty array fields so broad model calls do not erase existing review state', async () => {
@@ -2428,15 +2595,6 @@ describe('updateTask', () => {
           id: 'ac-1',
           description: 'Build passes',
           verifiedBy: 'pnpm test',
-        },
-      ],
-      gateResults: [
-        {
-          gateId: 'test',
-          type: 'hard',
-          passed: true,
-          output: 'ok',
-          checkedAt: '2026-04-29T00:00:00.000Z',
         },
       ],
     })
@@ -2464,16 +2622,8 @@ describe('updateTask', () => {
         source: 'documented',
       },
     ])
-    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
-    expect(evidence.map((event) => event.payload)).toEqual([
-      {
-        gateId: 'test',
-        type: 'hard',
-        passed: true,
-        output: 'ok',
-        checkedAt: '2026-04-29T00:00:00.000Z',
-      },
-    ])
+    const evidence = readCurrentEvidenceFromHandle(tasksPath, 'task-001', 'gate_result')
+    expect(evidence).toEqual([])
   })
 
   it('infers taskId from runtime metadata when a single active task cannot be inferred', async () => {
@@ -2869,7 +3019,7 @@ describe('engine tool wrappers', () => {
     await expect(readTasks({ tasksPath })).resolves.toMatchObject({
       queue: { tasks: [expect.objectContaining({ status: 'review' })] },
     })
-    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    const evidence = readCurrentEvidenceFromHandle(tasksPath, 'task-001', 'note')
     expect(evidence[0]?.payload).toMatchObject({
       agentId: 'worker-agent',
       role: 'worker',

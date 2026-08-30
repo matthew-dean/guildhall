@@ -1,5 +1,4 @@
-import type { Task } from '@guildhall/core'
-import { validateSpecCompletionBoundary } from './spec-quality.js'
+import { assessSpecCompletionBoundary, type Task } from '@guildhall/core'
 
 export type SpecReviewAuthority = NonNullable<Task['specReviewGate']>['authority']
 
@@ -14,6 +13,21 @@ export function specReviewAuthority(task: Pick<Task, 'id'> & Partial<Pick<Task, 
 
 export function specReviewRequiresOwnerApproval(task: Pick<Task, 'id'> & Partial<Pick<Task, 'specReviewGate'>>): boolean {
   return specReviewAuthority(task) === 'owner'
+}
+
+/**
+ * Owner authority alone is not enough to present an approval. A review gate
+ * can survive from legacy state while its durable planning contract still
+ * needs Guildhall to repair it.
+ */
+type SpecReviewTask = Pick<Task, 'id'> & Partial<Pick<Task, 'specReviewGate' | 'spec' | 'structuredSpec' | 'acceptanceCriteria' | 'productBrief'>> & {
+  currentSummary?: { specReviewReadyForOwnerApproval?: unknown }
+}
+
+export function specReviewIsReadyForOwnerApproval(
+  task: SpecReviewTask,
+): boolean {
+  return specReviewRequiresOwnerApproval(task) && !specReviewNeedsRepair(task)
 }
 
 export function requestSpecReview(
@@ -34,7 +48,10 @@ export function requestSpecReview(
   }
 }
 
-export function specReviewNeedsRepair(task: Pick<Task, 'id'> & Partial<Pick<Task, 'spec' | 'structuredSpec' | 'acceptanceCriteria' | 'productBrief'>>): boolean {
+export function specReviewNeedsRepair(task: SpecReviewTask): boolean {
+  if (typeof task.currentSummary?.specReviewReadyForOwnerApproval === 'boolean') {
+    return !task.currentSummary.specReviewReadyForOwnerApproval
+  }
   if (!task.structuredSpec && !task.spec) return true
-  return !validateSpecCompletionBoundary(task as Task).ok
+  return !assessSpecCompletionBoundary(task).ok
 }

@@ -98,10 +98,12 @@ function installBrowserFakes() {
   vi.stubGlobal('confirm', vi.fn(() => true))
 }
 
-function openDrawerOn(tab: 'overview' | 'current' | 'spec') {
-  window.history.replaceState({}, '', `/projects/looma-knit/task/task-link-editor?tab=${tab}`)
-  path.value = `/projects/looma-knit/task/task-link-editor?tab=${tab}`
-  path.href = `/projects/looma-knit/task/task-link-editor?tab=${tab}`
+function openDrawerOn(tab: 'overview' | 'current' | 'spec', options: { fullRecord?: boolean } = {}) {
+  const detail = options.fullRecord ? '&detail=full' : ''
+  const href = `/projects/looma-knit/task/task-link-editor?tab=${tab}${detail}`
+  window.history.replaceState({}, '', href)
+  path.value = href
+  path.href = href
 }
 
 describe('TaskDrawer', () => {
@@ -194,7 +196,378 @@ describe('TaskDrawer', () => {
     })
   })
 
-  it('opens on an overview with review plan details when one is recorded', async () => {
+  it('does not render an inert Action tab when the task has no current action content', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-repair/start')) {
+        expect(init?.method).toBe('POST')
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Overview' })
+    expect(screen.queryByRole('tab', { name: 'Action' })).not.toBeInTheDocument()
+  })
+
+  it('keeps normal task detail navigation to owner jobs instead of diagnostic tabs', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Overview' })
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Overview', 'Spec'])
+    for (const label of ['Journey', 'Transcript', 'Experts', 'History', 'Origin']) {
+      expect(screen.queryByRole('tab', { name: label })).not.toBeInTheDocument()
+    }
+  })
+
+  it('leads with one resume command when this runnable task is the project action', async () => {
+    const user = userEvent.setup()
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Resume the link editor work',
+          detail: 'Progress is saved. Resume continues this task from its current workspace.',
+          buttonLabel: 'Resume work',
+          href: '/work?task=task-link-editor',
+          tone: 'accent',
+          taskId: 'task-link-editor',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'review',
+        openQuestions: [],
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('button', { name: 'Resume work' })
+    expect(screen.getByText('Progress is saved. Resume continues this task from its current workspace.')).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByText('Task size')).not.toBeInTheDocument()
+    expect(screen.queryByText('Add the link editing controls to the selected text menu.')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'View checkpoint' }))
+    await waitFor(() => {
+      expect(path.href).toBe('/projects/looma-knit/task/task-link-editor?detail=checkpoint')
+    })
+  })
+
+  it('keeps the shared resume action visible when an owner opens a saved checkpoint', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?detail=checkpoint')
+    path.value = '/projects/looma-knit/task/task-link-editor?detail=checkpoint'
+    path.href = '/projects/looma-knit/task/task-link-editor?detail=checkpoint'
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Work paused',
+          detail: 'The task is paused. Resume continues from its pinned checkpoint.',
+          buttonLabel: 'Resume work',
+          href: '/work?task=task-link-editor',
+          tone: 'accent',
+          taskId: 'task-link-editor',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'review',
+        openQuestions: [],
+        latestCheckpoint: {
+          nextPlannedAction: 'Rerun the focused extension tests, then continue from the saved verification evidence.',
+        },
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    }))
+
+    render(TaskDrawer, { taskId: 'task-link-editor', projectId: 'looma-knit', onClose: vi.fn() })
+
+    expect(await screen.findByRole('button', { name: 'Resume work' })).toBeInTheDocument()
+    expect(screen.getByText('Checkpoint saved')).toBeInTheDocument()
+    expect(screen.getByText('Rerun the focused extension tests, then continue from the saved verification evidence.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open full task record' })).toBeInTheDocument()
+    expect(screen.queryByText('Task links')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delivery steps')).not.toBeInTheDocument()
+    expect(screen.queryByText('Add the link editing controls to the selected text menu.')).not.toBeInTheDocument()
+  })
+
+  it('confirms focused work is underway without dumping the task record', async () => {
+    project.detail = {
+      ...projectDetail(),
+      run: { status: 'running', mode: 'one_task' },
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Resume the link editor work',
+          detail: 'This is the next runnable work item.',
+          buttonLabel: 'Resume work',
+          href: '/work?task=task-link-editor',
+          tone: 'accent',
+          taskId: 'task-link-editor',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Pause', startEnabled: false },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      runStatus: 'running',
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'in_progress',
+        openQuestions: [],
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Guildhall is working on Knit: add link editor controls.')
+    expect(screen.getByText('Nothing is waiting on you right now. Guildhall will return when it needs a decision or reaches a result.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View task details' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByText('Task links')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delivery steps')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume only this work item' })).not.toBeInTheDocument()
+  })
+
+  it('routes an unrelated task to the project decision instead of dumping its full record', async () => {
+    const user = userEvent.setup()
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Review the release spec',
+          taskLabel: 'Approve the documented release boundary for the current milestone.',
+          detail: 'A spec needs approval before work can continue.',
+          buttonLabel: 'Review next spec',
+          href: '/work?task=task-review',
+          tone: 'warn',
+          taskId: 'task-review',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: false },
+        ownerInput: { active: true },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({ threadTurns: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Next action')
+    expect(screen.getByText('Approve the documented release boundary for the current milestone.')).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByText('Task size')).not.toBeInTheDocument()
+    expect(screen.queryByText('Checkpoint saved')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Review next spec' }))
+    expect(path.value).toBe('/projects/looma-knit/task/task-review')
+  })
+
+  it('hands a stopped task to the shared next project action', async () => {
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Work ready to resume',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-review',
+          tone: 'accent',
+          taskId: 'task-review',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'blocked',
+        blockReason: 'human_judgment_required: Worker made no visible progress after 5 passes.',
+        escalations: [{
+          id: 'esc-worker-stalled',
+          raisedAt: now,
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          recoveryCode: 'worker_no_progress',
+          summary: 'Worker made no visible progress after 5 passes.',
+          status: 'open',
+        }],
+      },
+      threadTurns: [{
+        id: 'turn-worker-stalled',
+        kind: 'escalation',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'blocked',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        escalationId: 'esc-worker-stalled',
+        escalationAgentId: 'worker-agent',
+        escalationReason: 'human_judgment_required',
+        escalationRecoveryCode: 'worker_no_progress',
+        summary: 'Worker made no visible progress after 5 passes.',
+      }],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Next action')
+    expect(screen.getByText('The task you opened stopped. Guildhall has selected the next work item that can move forward.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry worker' })).not.toBeInTheDocument()
+  })
+
+  it('explains a system-repaired gate blocker while preserving the shared next action', async () => {
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Work ready to resume',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-review',
+          tone: 'accent',
+          taskId: 'task-review',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'ready',
+        escalations: [{
+          id: 'esc-unsupported-gate',
+          taskId: 'task-link-editor',
+          agentId: 'worker-agent',
+          reason: 'gate_hard_failure',
+          summary: 'A previous run claimed an unsupported gate failure.',
+          raisedAt: now,
+          resolvedAt: '2026-05-20T09:00:00.000Z',
+          resolvedBy: 'system',
+        }],
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Next action')
+    expect(screen.getByText('Guildhall cleared a blocker that was not tied to this task. This task is ready again after the current work item.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+  })
+
+  it('keeps reviewer planning metadata out of the normal task overview', async () => {
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -244,12 +617,9 @@ describe('TaskDrawer', () => {
       '/projects/looma-knit/overview',
     )
     expect(screen.getByText(taskDisplayKey('task-link-editor', [], 'looma-knit'))).toBeInTheDocument()
-    await screen.findByText('Review plan')
-    expect(screen.getByText('Balanced review')).toBeInTheDocument()
-    expect(screen.getByText('1 reviewer group')).toBeInTheDocument()
-    expect(screen.getByText('5 lanes')).toBeInTheDocument()
-    expect(screen.getByText('UX Comprehension')).toBeInTheDocument()
-    expect(screen.getByText(/visual-evidence/)).toBeInTheDocument()
+    expect(screen.queryByText('Review plan')).not.toBeInTheDocument()
+    expect(screen.queryByText('Balanced review')).not.toBeInTheDocument()
+    expect(screen.queryByText('UX Comprehension')).not.toBeInTheDocument()
   })
 
   it('shows delivery-step progress in the drawer header from shared work progress', async () => {
@@ -313,6 +683,7 @@ describe('TaskDrawer', () => {
   })
 
   it('makes decomposition sizing visible as work to create, not owner recommendations', async () => {
+    openDrawerOn('overview', { fullRecord: true })
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -381,6 +752,7 @@ describe('TaskDrawer', () => {
   })
 
   it('offers a split action for decomposition child work scoped to the current task', async () => {
+    openDrawerOn('overview', { fullRecord: true })
     const user = userEvent.setup()
     const payload = drawerPayload({
       threadTurns: [],
@@ -450,6 +822,7 @@ describe('TaskDrawer', () => {
   })
 
   it('offers a clear action when split-required child tasks have not been created yet', async () => {
+    openDrawerOn('overview', { fullRecord: true })
     const user = userEvent.setup()
     const payload = drawerPayload({
       threadTurns: [],
@@ -1085,6 +1458,9 @@ describe('TaskDrawer', () => {
   })
 
   it('shows a readable task journey for completed work', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=journey'
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -1156,7 +1532,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await userEvent.click(await screen.findByRole('tab', { name: 'Journey' }))
+    await screen.findByRole('tab', { name: 'Journey', selected: true })
 
     expect(screen.getByText('Task journey')).toBeInTheDocument()
     expect(screen.queryByText('Checkpoint saved')).not.toBeInTheDocument()
@@ -1170,6 +1546,9 @@ describe('TaskDrawer', () => {
   })
 
   it('shows task sizing and done summary without making transcript the primary completed-task artifact', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=journey'
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -1238,7 +1617,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await userEvent.click(await screen.findByRole('tab', { name: 'Journey' }))
+    await screen.findByRole('tab', { name: 'Journey', selected: true })
 
     expect(screen.getByText('Large task')).toBeInTheDocument()
     expect(screen.getByText('Decompose before execution')).toBeInTheDocument()
@@ -1248,13 +1627,19 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('Transcript compacted')).toBeInTheDocument()
     expect(screen.queryByText('Please build it.')).not.toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('tab', { name: 'Transcript' }))
-    expect(screen.getByText('Source conversation')).toBeInTheDocument()
+    window.history.pushState({}, '', '/projects/looma-knit/task/task-link-editor?tab=transcript')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=transcript'
+    await screen.findByRole('tab', { name: 'Transcript', selected: true })
+    expect(await screen.findByText('Source conversation')).toBeInTheDocument()
     expect(screen.getByText(/This task is done, so Journey is the friendly summary/)).toBeInTheDocument()
     expect(screen.getByText('Please build it.')).toBeInTheDocument()
   })
 
   it('loads the transcript only after its tab is opened', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=transcript')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=transcript'
     const { exploringTranscript: _transcript, contextDebug: _context, recentEvents: _events, ...detail } = drawerPayload()
     const transcript = {
       content: '# Exploring Transcript\n\n## user\n\nPlease build it.\n',
@@ -1276,10 +1661,6 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByRole('tab', { name: 'Overview' })
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('extras?include=transcript'))).toBe(false)
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Transcript' }))
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('extras?include=transcript'))).toBe(true))
   })
 
@@ -1384,6 +1765,8 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
+    await screen.findByRole('button', { name: 'View task details' })
+    await userEvent.click(screen.getByRole('button', { name: 'View task details' }))
     await screen.findByRole('tab', { name: 'Overview', selected: true })
     window.history.pushState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
     path.value = '/projects/looma-knit/task/task-link-editor?tab=journey'
@@ -1474,9 +1857,18 @@ describe('TaskDrawer', () => {
   })
 
   it('runs and manages the task from drawer controls without losing project scope', async () => {
+    openDrawerOn('overview', { fullRecord: true })
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'spec_review'
     payload.task.openQuestions = []
+    payload.task.latestCheckpoint = {
+      step: 1,
+      agentId: 'worker-agent',
+      intent: 'Reconcile the spec with the recorded requirements.',
+      nextPlannedAction: 'Resume from the recorded verification evidence.',
+      filesTouched: [],
+      writtenAt: '2026-08-29T00:00:00.000Z',
+    }
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.startsWith('/api/project/task/task-link-editor/hold')) {
@@ -1649,7 +2041,7 @@ describe('TaskDrawer', () => {
     })
   })
 
-  it('does not offer a generic resume button while a held task still has an open human-owned escalation', async () => {
+  it('keeps the escalation recovery action visible while a held task has an open owner decision', async () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'blocked'
     payload.task.blockReason = 'human_judgment_required: Stripe dashboard setup is required.'
@@ -1691,12 +2083,13 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('This task is out of the active queue for now.')
-    expect(screen.getByRole('button', { name: /^i handled this\.\.\.$/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^mark blocker resolved/i })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /resume task/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /^resume task$/i }))
+    expect(await screen.findByRole('dialog', { name: 'Resume task' })).toBeTruthy()
   })
 
-  it('does not expose run controls for a completed task but keeps copy link available', async () => {
+  it('keeps a completed task focused until the owner explicitly requests details', async () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'done'
     payload.task.terminalSummary = {
@@ -1717,12 +2110,13 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Task completed.')
+    await screen.findByText('This task is complete.')
 
     expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /put on hold/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /put aside/i })).toBeNull()
-    expect(screen.getByRole('button', { name: /copy link/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /view task details/i })).toBeTruthy()
+    expect(screen.queryByText('Task links')).toBeNull()
   })
 
   it('warns when a completed task still carries unresolved escalations', async () => {
@@ -1765,7 +2159,7 @@ describe('TaskDrawer', () => {
   })
 
   it('approves a task spec with an optional note from the drawer footer flow', async () => {
-    openDrawerOn('spec')
+    openDrawerOn('spec', { fullRecord: true })
     const payload = drawerPayload({
       threadTurns: [
         {
@@ -1814,6 +2208,109 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('does not expose approval for a selected review row absent from shared owner readiness', async () => {
+    openDrawerOn('spec')
+    project.detail = {
+      ...projectDetail(),
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-other',
+        focusKind: 'paused_work',
+      },
+    }
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    }))
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Add link editor controls inside the existing editor toolbar.')
+    expect(screen.queryByRole('button', { name: /approve spec/i })).toBeNull()
+    expect(screen.queryByText('Review spec')).toBeNull()
+  })
+
+  it('switches from an approved spec to the shared next action', async () => {
+    openDrawerOn('overview')
+    const reviewPayload = drawerPayload({ threadTurns: [] })
+    reviewPayload.task.status = 'spec_review'
+    const readyPayload = drawerPayload({ threadTurns: [] })
+    readyPayload.task.status = 'ready'
+    readyPayload.task.openQuestions = []
+    const afterApprovalProject = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          label: 'Continue ContextMenu work',
+          buttonLabel: 'Resume',
+          href: '/projects/looma-knit/work?task=task-link-editor',
+          tone: 'accent',
+          taskId: 'task-link-editor',
+        },
+      },
+    }
+    let taskReads = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) return json({ ok: true })
+      if (url.startsWith('/api/project/task/task-link-editor')) {
+        taskReads += 1
+        return json(taskReads === 1 ? reviewPayload : readyPayload)
+      }
+      if (url.startsWith('/api/project')) return json(afterApprovalProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Approve this spec?')
+    await userEvent.click(screen.getByRole('button', { name: 'Approve spec' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Approve', exact: true }))
+
+    expect(await screen.findByText('Ready to continue')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument()
+    expect(screen.queryByText('Approve this spec?')).toBeNull()
+  })
+
+  it('keeps the approval modal open when spec approval fails', async () => {
+    openDrawerOn('spec', { fullRecord: true })
+    const payload = drawerPayload()
+    payload.task.status = 'spec_review'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) {
+        return json({ error: 'Project update required before approval.' }, { status: 409 })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, { taskId: 'task-link-editor', projectId: 'looma-knit', onClose: vi.fn() })
+
+    await screen.findByRole('button', { name: /approve spec/i })
+    await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
+
+    expect(await screen.findByRole('dialog', { name: /approve spec/i })).toBeInTheDocument()
+    expect(await screen.findByText('Project update required before approval.')).toBeInTheDocument()
+  })
+
   it('surfaces spec approval on the Spec tab beside the draft', async () => {
     openDrawerOn('spec')
     const payload = drawerPayload()
@@ -1838,8 +2335,10 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Spec draft awaiting approval')
+    await screen.findByText('Approve this spec?')
     expect(screen.queryByText(/waiting in Thread/i)).toBeNull()
+    expect(screen.queryByRole('tab')).toBeNull()
+    expect(screen.queryByText('Acceptance criteria')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
     await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
 
@@ -1848,8 +2347,380 @@ describe('TaskDrawer', () => {
     })
   })
 
-  it('shows stale acceptance proof state on the Spec tab', async () => {
+  it('keeps a pending spec to one executable review decision and sends requested changes to the spec', async () => {
     openDrawerOn('spec')
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/resume')) {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          message: 'Keep the scope focused on the selected-text menu.',
+          revisionTarget: 'spec',
+        })
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Approve this spec?')
+    expect(screen.queryByRole('tab')).toBeNull()
+    expect(screen.queryByText('Latest handoff packet')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'What will change' })).toBeNull()
+    expect(screen.queryByText(/finish conditions are recorded/i)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Read full task record' })).toBeInTheDocument()
+    expect(screen.queryByText('Checkpoint saved')).toBeNull()
+    expect(screen.queryByText('Resume point saved.')).toBeNull()
+    expect(screen.queryByText('0/1 delivery steps')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Request changes' }))
+    await userEvent.type(
+      screen.getByPlaceholderText('Describe the correction Guildhall should make.'),
+      'Keep the scope focused on the selected-text menu.',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Send changes' }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/resume'))).toBe(true)
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Read full task record' }))
+    await waitFor(() => expect(path.href).toContain('?detail=full&tab=overview'))
+  })
+
+  it('does not present a coordinator-owned review as an owner approval', async () => {
+    openDrawerOn('overview')
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    payload.task.specReviewGate = {
+      authority: 'coordinator',
+      requestedAt: now,
+      requestedBy: 'coordinator-recovery',
+      reason: 'recovery',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Spec' })
+    expect(screen.queryByText('Approve this spec?')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+  })
+
+  it('does not expose approval from the full Spec tab for a coordinator-owned recovery', async () => {
+    openDrawerOn('spec', { fullRecord: true })
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    payload.task.specReviewGate = {
+      authority: 'coordinator',
+      requestedAt: now,
+      requestedBy: 'coordinator-recovery',
+      reason: 'recovery',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, { taskId: 'task-link-editor', projectId: 'looma-knit', onClose: vi.fn() })
+
+    await screen.findByRole('heading', { name: 'Spec' })
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+  })
+
+  it('keeps an owner review to its two decision outcomes even when stale recovery evidence exists', async () => {
+    openDrawerOn('spec')
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    payload.task.specReviewGate = {
+      authority: 'owner',
+      requestedAt: now,
+      requestedBy: 'coordinator',
+    }
+    payload.task.escalations = [{
+      id: 'esc-stale-worker',
+      taskId: 'task-link-editor',
+      agentId: 'worker',
+      reason: 'decision_required',
+      summary: 'A prior worker command failed.',
+      raisedAt: now,
+    }]
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, { taskId: 'task-link-editor', projectId: 'looma-knit', onClose: vi.fn() })
+
+    await screen.findByText('Approve this spec?')
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve spec' })).toBeInTheDocument()
+    expect(screen.queryByText('Why is this stuck?')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Task brief' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Acceptance criteria' })).toBeNull()
+  })
+
+  it('uses the detail revision action instead of a stale project cache action', async () => {
+    openDrawerOn('overview')
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          label: 'Old action',
+          buttonLabel: 'Open old action',
+          href: '/projects/looma-knit/work?task=task-stale',
+          taskId: 'task-stale',
+        },
+      },
+    }
+    const payload = drawerPayload({
+      threadTurns: [],
+      actionModel: {
+        primaryAction: {
+          label: 'Continue current work',
+          buttonLabel: 'Open current work',
+          href: '/projects/looma-knit/work?task=task-current',
+          taskId: 'task-current',
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Continue current work')
+    await userEvent.click(screen.getByRole('button', { name: 'Open current work' }))
+    expect(path.href).toBe('/projects/looma-knit/task/task-current')
+  })
+
+  it('does not call an automatic spec repair an owner decision', async () => {
+    openDrawerOn('overview')
+    const payload = drawerPayload({
+      threadTurns: [],
+      actionModel: {
+        primaryAction: {
+          label: 'Repair this spec',
+          taskLabel: 'Keep the component roadmap synchronized.',
+          buttonLabel: 'Repair spec',
+          href: '/projects/looma-knit/work?task=task-repair',
+          taskId: 'task-repair',
+          operation: 'repair_spec',
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('One repair is ready')
+    expect(screen.getByText('Keep the component roadmap synchronized.')).toBeInTheDocument()
+    expect(screen.queryByText('Project needs your decision first')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Repair spec' }))
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/task/task-repair/start'))).toBe(true)
+    })
+    expect(path.href).not.toBe('/projects/looma-knit/task/task-repair')
+  })
+
+  it('keeps a shared spec-repair task out of approval in focused and full detail', async () => {
+    const repairedProject = {
+      ...projectDetail(),
+      orientationSpine: {
+        scopeRows: [{ taskId: 'task-link-editor', scope: 'included', handoffState: 'spec_shaping' }],
+      },
+    }
+    project.detail = repairedProject
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    payload.task.openQuestions = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(repairedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const rendered = render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    expect(await screen.findByText('Guildhall is repairing this spec')).toBeInTheDocument()
+    expect(screen.getByText('Run one repair pass.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Repair spec' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Read full task record' })).toBeInTheDocument()
+    expect(screen.queryByText('Approve this spec?')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull()
+
+    openDrawerOn('spec', { fullRecord: true })
+    await rendered.rerender({
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      routeHref: path.href,
+      onClose: vi.fn(),
+    })
+
+    expect(await screen.findByText('Guildhall is repairing this spec')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Repair spec' })).toBeInTheDocument()
+    expect(screen.queryByText('Approve this spec?')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+  })
+
+  it('shows a spec-repair start failure beside the action instead of failing silently', async () => {
+    const repairedProject = {
+      ...projectDetail(),
+      orientationSpine: {
+        scopeRows: [{ taskId: 'task-link-editor', scope: 'included', handoffState: 'spec_shaping' }],
+      },
+    }
+    project.detail = repairedProject
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/start')) {
+        return json({ error: 'The configured provider is unavailable. Open Providers to fix it.' }, { status: 400 })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(repairedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('button', { name: 'Repair spec' })
+    await userEvent.click(screen.getByRole('button', { name: 'Repair spec' }))
+
+    expect(await screen.findByText('The configured provider is unavailable. Open Providers to fix it.')).toBeInTheDocument()
+  })
+
+  it('preempts focused spec approval when a required project update is already known', async () => {
+    openDrawerOn('spec')
+    const onMigrationRequired = vi.fn()
+    const blockedProject = {
+      ...projectDetail(),
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Guildhall needs to update this project before work can continue.',
+        reviewTaskIds: ['task-link-editor'],
+      },
+    }
+    project.detail = blockedProject
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(blockedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+      onMigrationRequired,
+    })
+
+    await waitFor(() => expect(onMigrationRequired).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('button', { name: 'Approve spec' })).toBeNull()
+    expect(screen.getByText('Opening project update...')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/approve-spec'))).toBe(false)
+  })
+
+  it('hands a required migration to the shared project repair flow instead of rendering the raw error', async () => {
+    openDrawerOn('spec')
+    const onMigrationRequired = vi.fn()
+    const payload = drawerPayload()
+    payload.task.status = 'spec_review'
+    payload.threadTurns = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) {
+        return json(
+          { error: 'Run required Guildhall migration 0.13.27/acceptance-command-proof-path-reconciliation before starting this project.' },
+          { status: 409 },
+        )
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+      onMigrationRequired,
+    })
+
+    await screen.findByText('Approve this spec?')
+    await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
+
+    await waitFor(() => expect(onMigrationRequired).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText(/Run required Guildhall migration/i)).toBeNull()
+  })
+
+  it('shows stale acceptance proof state on the Spec tab', async () => {
+    openDrawerOn('spec', { fullRecord: true })
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -1894,7 +2765,7 @@ describe('TaskDrawer', () => {
   })
 
   it('does not offer unqualified spec approval when the structured brief is incomplete', async () => {
-    openDrawerOn('spec')
+    openDrawerOn('spec', { fullRecord: true })
     const payload = drawerPayload()
     payload.task.status = 'spec_review'
     payload.task.spec = '## Summary\nReview the Font Something variable-font specimen flow.'
@@ -2299,7 +3170,7 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: /retry blocker/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /resolve blocker/i })).toBeNull()
 
-    await userEvent.click(screen.getByRole('button', { name: /^i handled this\.\.\.$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^mark blocker resolved/i }))
     await screen.findByText('Use this when you handled the blocker yourself or want to say exactly where to continue.')
     await userEvent.type(
       screen.getByLabelText(/resolution note/i),
@@ -2380,7 +3251,7 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('Add the client ID and secret to Supabase.')).toBeTruthy()
     expect(screen.getByText('Create Apple OAuth credentials')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^retry worker$/i })).toBeNull()
-    expect(screen.getByRole('button', { name: /^i handled this\.\.\.$/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^mark blocker resolved/i })).toBeTruthy()
   })
 
   it('lets the user ask Guildhall to split an active task from the actions menu', async () => {
@@ -2669,8 +3540,8 @@ describe('TaskDrawer', () => {
     await screen.findByText('Knit: add link editor controls')
     expect(screen.getByText('This task is out of the active queue.')).toBeTruthy()
     expect(screen.getAllByText('Duplicate of the existing link editor task.').length).toBeGreaterThan(0)
-    expect(screen.getByText('Latest checkpoint')).toBeTruthy()
-    expect(screen.getByText(/Rerun the focused toolbar test/)).toBeTruthy()
+    expect(screen.queryByText('Latest checkpoint')).toBeNull()
+    expect(screen.queryByText(/Rerun the focused toolbar test/)).toBeNull()
     expect(screen.queryByRole('button', { name: /put on hold/i })).toBeNull()
     expect(screen.getAllByRole('button', { name: /^unshelve$/i }).length).toBeGreaterThan(0)
   })

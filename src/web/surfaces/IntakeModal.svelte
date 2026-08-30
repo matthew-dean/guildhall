@@ -7,6 +7,7 @@
   import Stack from '../lib/Stack.svelte'
   import Row from '../lib/Row.svelte'
   import Input from '../lib/Input.svelte'
+  import SegmentedControl from '../lib/SegmentedControl.svelte'
   import Select from '../lib/Select.svelte'
   import Textarea from '../lib/Textarea.svelte'
   import { nav } from '../lib/nav.svelte.js'
@@ -22,7 +23,9 @@
   let closeTimer: ReturnType<typeof setTimeout> | null = null
 
   type IntakeMode = 'request' | 'bug'
+  type RequestStartMode = 'direct' | 'guided'
   let mode = $state<IntakeMode>('request')
+  let requestStartMode = $state<RequestStartMode>('direct')
   let ask = $state('')
   let title = $state('')
 
@@ -91,7 +94,7 @@
       }
 
       if (!ask.trim()) return (error = 'Please describe the request.')
-      const body: Record<string, unknown> = { ask: ask.trim() }
+      const body: Record<string, unknown> = { ask: ask.trim(), startMode: requestStartMode }
       if (title.trim()) body.title = title.trim()
       const res = await projectFetch('/api/project/request', {
         method: 'POST',
@@ -117,6 +120,10 @@
     { value: 'critical', label: 'Critical (outage)' },
     { value: 'normal', label: 'Normal' },
     { value: 'low', label: 'Low' },
+  ] as const
+  const requestStartOptions = [
+    { value: 'direct', label: 'Create task' },
+    { value: 'guided', label: 'Help shape' },
   ] as const
 
 </script>
@@ -165,13 +172,20 @@
           <Textarea
             bind:value={ask}
             rows={5}
-            placeholder="Describe the request in plain language. Follow-up questions may come before work starts."
+            placeholder="Describe the outcome, constraints, and proof that matter."
           />
         </label>
         <label class="field">
           <span>Title (optional — auto-generated from the ask)</span>
           <Input bind:value={title} placeholder="Short descriptive title" />
         </label>
+        <SegmentedControl
+          label="Start"
+          ariaLabel="Request start mode"
+          value={requestStartMode}
+          options={requestStartOptions}
+          onChange={(value) => (requestStartMode = value as RequestStartMode)}
+        />
       {/if}
 
       {#if error}
@@ -186,7 +200,7 @@
         {/if}
         <Button variant="secondary" disabled={busy} onclick={requestClose}>Cancel</Button>
         <Button variant="primary" disabled={busy} onclick={submit}>
-          {mode === 'bug' ? (busy ? 'Filing...' : 'File bug') : busy ? 'Creating...' : 'Start thread'}
+          {mode === 'bug' ? (busy ? 'Filing...' : 'File bug') : busy ? 'Creating...' : requestStartMode === 'direct' ? 'Create task' : 'Help shape'}
         </Button>
       </Row>
     </Stack>

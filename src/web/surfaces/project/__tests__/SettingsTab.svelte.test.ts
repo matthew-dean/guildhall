@@ -311,14 +311,26 @@ describe('SettingsTab', () => {
     project.error = null
   })
 
-  it('keeps Settings as a small shell and routes obsolete graph subviews to Structure', async () => {
+  it('keeps Settings as a small shell and routes obsolete graph subviews to Map', async () => {
     installFetch()
     render(SettingsTab, { subView: 'graph' })
 
-    expect(await screen.findByText('Graph review moved out of Settings')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Open Structure' }))
+    expect(await screen.findByText('Map review moved out of Settings')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Open Map' }))
 
-    expect(path.value).toBe('/projects/looma-knit/structure')
+    expect(path.value).toBe('/projects/looma-knit/map')
+  })
+
+  it('opens Settings as a chooser instead of a readiness report', async () => {
+    installFetch()
+    render(SettingsTab)
+
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ready' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Providers' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Ready to start?' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Local runtime' })).not.toBeInTheDocument()
   })
 
   it('shows initialization guidance before project setup is complete', async () => {

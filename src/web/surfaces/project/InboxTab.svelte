@@ -12,6 +12,7 @@
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
+  import type { ProjectAction, ProjectActionOperation } from '../../lib/types.js'
 
   interface Props {
     items?: InboxItem[]
@@ -19,18 +20,24 @@
     loaded?: boolean
     error?: string | null
     refresh?: (() => Promise<void>) | null
+    primaryAction?: ProjectAction | null
+    onRunTask?: (taskId: string) => void | Promise<void>
+    onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
+    busy?: boolean
   }
 
   let {
     items: suppliedItems = undefined,
-    history: suppliedHistory = undefined,
     loaded: suppliedLoaded = false,
     error: suppliedError = null,
     refresh = null,
+    primaryAction = null,
+    onRunTask,
+    onRunRepositoryAction,
+    busy = false,
   }: Props = $props()
 
   let localItems = $state<InboxItem[]>([])
-  let localHistory = $state<InboxItem[]>([])
   let localLoaded = $state(false)
   let localError = $state<string | null>(null)
   // Which item (by list index) is currently being handled by an agent action.
@@ -39,7 +46,6 @@
   let handlingMessage = $state<string | null>(null)
 
   const items = $derived(suppliedItems ?? localItems)
-  const history = $derived(suppliedHistory ?? localHistory)
   const loaded = $derived(suppliedItems ? suppliedLoaded : localLoaded)
   const error = $derived(suppliedItems ? suppliedError : localError)
 
@@ -51,9 +57,8 @@
     try {
       const r = await projectFetch('/api/project/inbox')
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = (await r.json()) as { items?: InboxItem[]; history?: InboxItem[] }
+      const j = (await r.json()) as { items?: InboxItem[] }
       localItems = j.items ?? []
-      localHistory = j.history ?? j.items ?? []
       localError = null
     } catch (e) {
       localError = e instanceof Error ? e.message : String(e)
@@ -211,15 +216,7 @@
     }
   }
 
-  const priorityItems = $derived(items.filter(item => item.severity !== 'low'))
-  const housekeepingItems = $derived(items.filter(item => item.severity === 'low'))
-  const historyItems = $derived.by(() => {
-    return [...history]
-      .filter(item => !isOpen(item))
-      .sort((left, right) => ((right.updatedAt ?? right.createdAt ?? '')).localeCompare(left.updatedAt ?? left.createdAt ?? ''))
-      .slice(0, 50)
-  })
-  const displayCount = $derived((history.length > 0 ? history : items).length)
+  const priorityItems = $derived(items.filter(item => item.severity !== 'low' && isOpen(item)))
 
   function toneFor(item: InboxItem): 'danger' | 'warn' | 'neutral' | 'ok' {
     if (!isOpen(item) && item.status === 'resolved') return 'ok'
@@ -262,16 +259,41 @@
   function isOpen(item: InboxItem): boolean {
     return !item.status || item.status === 'open'
   }
+
+  function repositoryOperation(action: ProjectAction | null): Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'> | null {
+    if (action?.operation === 'push_branch' || action?.operation === 'open_pull_request') return action.operation
+    return null
+  }
+
+  function taskOperation(action: ProjectAction | null): Extract<ProjectActionOperation, 'start_focused' | 'repair_spec'> | null {
+    if (action?.operation === 'start_focused' || action?.operation === 'repair_spec') return action.operation
+    return null
+  }
+
+  function runPrimaryRepositoryAction(): void {
+    const operation = repositoryOperation(primaryAction)
+    if (!operation || !primaryAction?.taskId || !onRunRepositoryAction) return
+    void onRunRepositoryAction(primaryAction.taskId, operation)
+  }
+
+  function runPrimaryTaskAction(): void {
+    const operation = taskOperation(primaryAction)
+    if (!operation || !primaryAction?.taskId || !onRunTask) return
+    void onRunTask(primaryAction.taskId)
+  }
 </script>
 
 <div class="wrap">
   <header class="head">
     <h2>Needs you</h2>
-    {#if loaded}
-      <span class="count">({displayCount} item{displayCount === 1 ? '' : 's'})</span>
-    {/if}
   </header>
-  <p class="summary">Project alerts and durable follow-ups live here. Active conversations and approvals now happen in Threads.</p>
+  <p class="summary">
+    {#if priorityItems.length === 0 && primaryAction}
+      No separate Inbox decisions are waiting.
+    {:else}
+      Only decisions that need you appear here.
+    {/if}
+  </p>
 
   {#if error}
     <UtilityPanel tone="warn">
@@ -279,31 +301,53 @@
     </UtilityPanel>
   {:else if !loaded}
     <p class="muted">Loading...</p>
-  {:else if items.length === 0 && historyItems.length === 0}
-    <UtilityPanel className="empty" tone="ok">
+  {:else if priorityItems.length === 0}
+    <UtilityPanel className="empty" tone={primaryAction ? 'accent' : 'ok'}>
       <Icon name="check-circle-2" size={24} />
-      <p>All caught up — nothing is waiting on you right now.</p>
+      <div>
+        {#if primaryAction}
+          <strong>{primaryAction.ownerHeading ?? primaryAction.label ?? 'Current project action'}</strong>
+          {#if primaryAction.detail}
+            <p>{primaryAction.detail}</p>
+          {/if}
+          {#if repositoryOperation(primaryAction) && primaryAction.taskId && onRunRepositoryAction}
+            <button
+              type="button"
+              class="threads-link threads-action"
+              disabled={busy}
+              onclick={runPrimaryRepositoryAction}
+            >
+              {primaryAction.buttonLabel ?? 'Continue'}
+            </button>
+          {:else if taskOperation(primaryAction) && primaryAction.taskId && onRunTask}
+            <button
+              type="button"
+              class="threads-link threads-action"
+              disabled={busy}
+              onclick={runPrimaryTaskAction}
+            >
+              {primaryAction.buttonLabel ?? 'Continue'}
+            </button>
+          {:else if primaryAction.href}
+            <a class="threads-link" href={projectActionHref(primaryAction.href)}>{primaryAction.buttonLabel ?? 'Open current work'}</a>
+          {/if}
+        {:else}
+          <strong>Nothing needs your decision</strong>
+          <p>Guildhall has no action waiting on you.</p>
+        {/if}
+      </div>
     </UtilityPanel>
   {:else}
-    <UtilityPanel tone="neutral" className="threads-note">
-      <div class="threads-note-copy">
-        <strong>Active conversations now live in Threads.</strong>
-        <p>Use this view for project alerts, setup checks, optional nudges, and recent alert history.</p>
+    <section class="group" aria-labelledby="needs-you-alerts">
+      <div class="group-head">
+        <h3 id="needs-you-alerts">Your decisions</h3>
+        <span>{priorityItems.length}</span>
       </div>
-      <a class="threads-link" href={projectActionHref('/thread')}>Open Threads</a>
-    </UtilityPanel>
-
-    {#if priorityItems.length > 0}
-      <section class="group" aria-labelledby="needs-you-alerts">
-        <div class="group-head">
-          <h3 id="needs-you-alerts">Project alerts</h3>
-          <span>{priorityItems.length}</span>
-        </div>
-        <CardList className="item-list">
-          {#each priorityItems as item, i (inboxItemKey(item))}
-            {@const handling = handlingIndex === items.indexOf(item)}
-            {@const handler = AGENT_HANDLERS[item.kind]}
-            <CardListItem className="inbox-row" dense tone={toneFor(item)} railTone={toneFor(item)}>
+      <CardList className="item-list">
+        {#each priorityItems as item, i (inboxItemKey(item))}
+          {@const handling = handlingIndex === items.indexOf(item)}
+          {@const handler = AGENT_HANDLERS[item.kind]}
+          <CardListItem className="inbox-row" dense tone={toneFor(item)} railTone={toneFor(item)}>
               <div class="item-head">
                 <span class="signal" aria-hidden="true">
                   <span class="dot dot-{item.severity}"></span>
@@ -379,107 +423,10 @@
                   </button>
                 {/if}
               </div>
-            </CardListItem>
-          {/each}
-        </CardList>
-      </section>
-    {:else}
-      <UtilityPanel tone="ok">
-        <p class="muted">No project alerts are waiting here. The remaining items are optional cleanup or recent history.</p>
-      </UtilityPanel>
-    {/if}
-
-    {#if housekeepingItems.length > 0}
-      <section class="group" aria-labelledby="needs-you-nudges">
-        <div class="group-head">
-          <h3 id="needs-you-nudges">Optional nudges</h3>
-          <span>{housekeepingItems.length}</span>
-        </div>
-        <CardList className="item-list">
-          {#each housekeepingItems as item (inboxItemKey(item))}
-            <CardListItem className="inbox-row" dense tone="neutral">
-              <div class="item-head">
-                <span class="signal" aria-hidden="true">
-                  <span class="dot dot-{item.severity}"></span>
-                  <span class="kind-ic">
-                    <Icon name={ICONS[item.kind]} size={16} />
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  class="item-main"
-                  onclick={() => goTo(item)}
-                  aria-label={item.title}
-                >
-                  <span class="body">
-                    <span class="title" title={item.title}>{item.title}</span>
-                    <span class="detail" title={item.detail}>{item.detail}</span>
-                    {#if itemDigest(item)}
-                      <span class="digest">{itemDigest(item)}</span>
-                    {/if}
-                  </span>
-                </button>
-                <div class="meta">
-                  <Chip label={statusLabel(item)} tone={statusTone(item)} />
-                  <span class="time">{itemTime(item) || '—'}</span>
-                </div>
-              </div>
-              <div class="actions">
-                <button type="button" class="verb" onclick={() => goTo(item)}>
-                  {actionVerb(item)} →
-                </button>
-              </div>
-            </CardListItem>
-          {/each}
-        </CardList>
-      </section>
-    {/if}
-
-    {#if historyItems.length > 0}
-      <section class="group" aria-labelledby="needs-you-history">
-        <div class="group-head">
-          <h3 id="needs-you-history">Recent history</h3>
-          <span>{historyItems.length}</span>
-        </div>
-        <CardList className="item-list">
-          {#each historyItems as item (inboxItemKey(item))}
-            <CardListItem className="inbox-row" dense tone={toneFor(item)} railTone={toneFor(item)}>
-              <div class="item-head">
-                <span class="signal" aria-hidden="true">
-                  <span class="dot dot-{item.severity}"></span>
-                  <span class="kind-ic">
-                    <Icon name={ICONS[item.kind]} size={16} />
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  class="item-main"
-                  onclick={() => goTo(item)}
-                  aria-label={item.title}
-                >
-                  <span class="body">
-                    <span class="title" title={item.title}>{item.title}</span>
-                    <span class="detail" title={item.detail}>{item.detail}</span>
-                    {#if item.resolutionDetail}
-                      <span class="digest">{item.resolutionDetail}</span>
-                    {/if}
-                  </span>
-                </button>
-                <div class="meta">
-                  <Chip label={statusLabel(item)} tone={statusTone(item)} />
-                  <span class="time">{itemTime(item) || '—'}</span>
-                </div>
-              </div>
-              <div class="actions">
-                <button type="button" class="verb" onclick={() => goTo(item)}>
-                  {actionVerb(item)} →
-                </button>
-              </div>
-            </CardListItem>
-          {/each}
-        </CardList>
-      </section>
-    {/if}
+          </CardListItem>
+        {/each}
+      </CardList>
+    </section>
 
     {#if handlingMessage}
       <div class="handling-msg">{handlingMessage}</div>
@@ -525,19 +472,6 @@
     color: var(--text-muted);
   }
   .empty :global(p) { margin: 0; }
-  .threads-note {
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    gap: var(--s-3);
-  }
-  .threads-note-copy {
-    display: grid;
-    gap: var(--s-1);
-  }
-  .threads-note-copy p {
-    margin: 0;
-    color: var(--text-muted);
-  }
   .threads-link {
     color: var(--accent);
     font-weight: var(--gh-type-weight-strong);
@@ -546,6 +480,17 @@
   }
   .threads-link:hover {
     color: var(--text);
+  }
+  .threads-action {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+  }
+  .threads-action:disabled {
+    cursor: default;
+    opacity: 0.5;
   }
   .group {
     display: grid;

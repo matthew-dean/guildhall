@@ -48,6 +48,10 @@ describe('release artifact contract', () => {
     expect(installer).toContain('guildhall-macos.tar.gz.sha256')
     expect(installer).toContain('shasum -a 256')
     expect(installer).toContain('Checksum mismatch')
+    expect(installer).toContain('stop_existing_launch_agent')
+    expect(installer).toContain('launchctl bootout')
+    expect(installer).toContain('Existing Guildhall service did not stop; leaving the prior install intact.')
+    expect(installer.lastIndexOf('stop_existing_launch_agent')).toBeLessThan(installer.indexOf('rm -f "$CURRENT_DIR"'))
     expect(readme).toContain(curlCommand)
     expect(quickStart).toContain(curlCommand)
     expect(readme).toContain('Node.js 22 or newer')
@@ -122,7 +126,7 @@ describe('release artifact contract', () => {
       'TimelineTab',
       'ReleaseTab',
       'SettingsTab',
-      'ProjectStructurePanel',
+      'ProjectMapTab',
     ]) {
       expect(projectView).not.toContain(`import ${tab} from`)
     }
@@ -130,7 +134,7 @@ describe('release artifact contract', () => {
     expect(projectView).toContain("import('./project/ThreadTab.svelte')")
     expect(projectView).toContain("import('./project/WorkTab.svelte')")
     expect(projectView).toContain("import('./project/ProjectAttachFlow.svelte')")
-    expect(projectView).toContain("import('./project/structure/ProjectStructurePanel.svelte')")
+    expect(projectView).toContain("import('./project/ProjectMapTab.svelte')")
   })
 
   it('publishes the current runtime image to GHCR with immutable and minor-line tags', () => {

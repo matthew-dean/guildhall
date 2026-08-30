@@ -1,0 +1,41 @@
+id: local-breakdown-overrides-dependency-waiting
+title: Local breakdown heuristic hides dependency waiting
+domain: ux
+productType: project-management
+surfaceType: web-app
+userGoal: Understand why approved work cannot start and what must finish first.
+scenario: A ready task has several acceptance criteria and an unmet dependency. The work list replaces the authoritative Waiting state with a locally inferred Review breakdown label.
+artifacts:
+  - id: work-row-copy
+    kind: copy_snippet
+    description: Visible task-row status and detail.
+    content: "Review breakdown. 7 requirements; no contained work or decomposition proposal yet."
+reviewLanes:
+  - ux_comprehension
+  - data_integrity
+knownFindings:
+  - id: dependency-state-overridden
+    lane: data_integrity
+    severity: high
+    summary: A view-local heuristic replaces the shared dependency state and points the user at the wrong action.
+    impact: The user reviews an already-approved breakdown instead of finishing the prerequisite that actually blocks execution.
+    minimumUsefulFix: Render the shared task presentation and show Waiting with the unmet dependency; keep flat-work detail informational only.
+    matchHints:
+      - dependency waiting
+      - review breakdown
+      - shared task presentation
+falsePositiveTraps:
+  - id: broad-task-detail
+    summary: Do not fail merely because a broad task mentions missing contained work; fail when that detail replaces authoritative readiness or next-action state.
+source:
+  kind: production_miss
+  citation: Narrative Harness Stage 2 installed flow audit, 2026-08-08.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-08-09T06:32:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2027-02-09
+  reason: Task-presentation ownership may evolve.

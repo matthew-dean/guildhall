@@ -62,9 +62,10 @@ describe('IntakeModal', () => {
         expect(body).toEqual({
           ask: 'Add inline link controls.',
           title: 'Knit link controls',
+          startMode: 'direct',
           projectId: 'looma-knit',
         })
-        return json({ boundedChat: { id: 'bc-new-thread-1' } })
+        return json({ taskId: 'task-inline-links' })
       }
       if (url.startsWith('/api/project')) {
         return json({
@@ -80,16 +81,16 @@ describe('IntakeModal', () => {
     render(IntakeModal, { onClose })
     expect(screen.getByRole('heading', { name: /new thread/i })).toBeInTheDocument()
     expect(screen.queryByLabelText('Type')).not.toBeInTheDocument()
-    await userEvent.type(screen.getByPlaceholderText(/Describe the request in plain language/i), 'Add inline link controls.')
+    await userEvent.type(screen.getByPlaceholderText(/Describe the outcome, constraints, and proof/i), 'Add inline link controls.')
     await userEvent.type(screen.getByPlaceholderText(/Short descriptive title/i), 'Knit link controls')
-    await userEvent.click(screen.getByRole('button', { name: /start thread/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Create task' })[1]!)
 
     await waitFor(() => expect(onClose).toHaveBeenCalled())
     expect(created).toHaveBeenCalledTimes(1)
     expect(created.mock.calls[0]?.[0]).toMatchObject({
-      detail: { boundedChatId: 'bc-new-thread-1' },
+      detail: { boundedChatId: null },
     })
-    expect(path.href).toBe('/projects/looma-knit/thread?thread=bc-new-thread-1')
+    expect(path.href).toBe('/projects/looma-knit/thread')
     expect(path.value).toBe('/projects/looma-knit/thread')
     window.removeEventListener('guildhall:request-created', created)
     expect(fetchMock).toHaveBeenCalledWith(
@@ -104,7 +105,7 @@ describe('IntakeModal', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(IntakeModal, { onClose: vi.fn() })
-    await userEvent.click(screen.getByRole('button', { name: /start thread/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Create task' })[1]!)
 
     expect(screen.getByText('Please describe the request.')).toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()

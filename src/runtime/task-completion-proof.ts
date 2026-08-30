@@ -82,38 +82,10 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
         .filter((id): id is string => id !== null)
       : []),
   )
-  const currentPathIds = new Set(
-    proofPaths
-      .map(path => stringValue(path.id))
-      .filter((id): id is string => id !== null),
-  )
-  const currentCommands = proofPaths
-    .map(path => stringValue(path.command))
-    .filter((command): command is string => command !== null)
-    .map(command => command.replace(/\s+/g, ' ').trim().toLowerCase())
-  const currentVerifiedEvidenceIds = new Set(
-    proofPaths.flatMap(path => Array.isArray(path.verificationRecords)
-      ? path.verificationRecords
-        .map(recordValue)
-        .filter((verification): verification is Record<string, unknown> =>
-          verification !== null && verification.status === 'passed',
-        )
-        .map(verification => stringValue(verification.evidenceId))
-        .filter((id): id is string => id !== null)
-      : []),
-  )
   const hasProofContract = proofPaths.length > 0
   const gateIsCurrent = (gate: Record<string, unknown>): boolean => {
     if (!hasProofContract) return true
-    const gateId = stringValue(gate.gateId)
-    if (gateId && currentPathIds.has(gateId)) return true
-    if (gateId && currentEvidenceIds.has(gateId)) return currentVerifiedEvidenceIds.has(gateId)
-    const command = stringValue(gate.command)?.replace(/\s+/g, ' ').trim().toLowerCase()
-    if (command && currentCommands.includes(command)) return true
-    // A legacy gate may carry only the criterion id. It counts as current
-    // only when the current proof path also recorded a passed evidence row;
-    // the id alone cannot resurrect an old run after the path was refreshed.
-    return Boolean(gateId && currentVerifiedEvidenceIds.has(gateId))
+    return proofPaths.some(path => commandProofGateMatches(path, gate))
   }
   const reviewEvidenceIsCurrent = (verdict: Record<string, unknown>): boolean => {
     if (!hasProofContract) return true
@@ -206,3 +178,4 @@ export function recordedCompletionProofCanSettleTaskStatus(task: unknown): boole
 export function latestRecordedCompletionProofAt(task: unknown): string | null {
   return recordedCompletionProofForTask(task).latestAt
 }
+import { commandProofGateMatches } from '@guildhall/shared'

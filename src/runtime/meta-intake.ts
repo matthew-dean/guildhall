@@ -86,11 +86,9 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
   const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
-  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
   await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
     projectId: path.basename(inferProjectRootFromMemoryDir(memoryDir)),
     projectRoot: inferProjectRootFromMemoryDir(memoryDir),
-    ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
   })
 }
 

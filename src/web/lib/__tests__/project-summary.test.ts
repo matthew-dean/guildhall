@@ -232,6 +232,7 @@ describe('summarizeProjects', () => {
           message: 'Restructure project service shell',
         },
         actionLabel: 'Open project',
+        openHref: null,
         runActionLabel: 'Pause',
         canOpen: true,
         canStart: false,
@@ -240,6 +241,77 @@ describe('summarizeProjects', () => {
         needsAttention: true,
       },
     ])
+  })
+
+  it('names the focused spec review instead of repeating its readiness count', () => {
+    const service: ServiceDetail = {
+      projects: [{
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/work/looma-knit',
+        taskCounts: { total: 16, active: 0, draftReview: 0, blocked: 0, done: 6, shelved: 0 },
+        run: { status: 'stopped' },
+        startReadiness: {
+          canStart: false,
+          code: 'owner_review_required',
+          message: '10 specs are ready for your review before work can continue.',
+          focusTaskId: 'task-review-menu',
+          focusKind: 'spec_review',
+          count: 10,
+        },
+        actionModel: {
+          primaryAction: {
+            label: 'Review a spec',
+            taskId: 'task-review-menu',
+            taskLabel: 'LOO-EBUYE7 Shape the focused review flow',
+            buttonLabel: 'Review spec',
+            href: '/task/task-review-menu',
+            tone: 'warn',
+            code: 'owner_review_required',
+          },
+          secondaryActions: [],
+          ownerInput: { active: false },
+          runControl: null,
+        },
+      }],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      activityLabel: 'LOO-EBUYE7 Shape the focused review flow',
+      actionLabel: 'Review spec',
+      openHref: '/task/task-review-menu',
+    })
+  })
+
+  it('does not repeat a generic ready-work action as a task title', () => {
+    const service: ServiceDetail = {
+      projects: [{
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/work/narrative-harness',
+        taskCounts: { total: 9, active: 0, draftReview: 0, blocked: 0, done: 5, shelved: 0 },
+        run: { status: 'stopped' },
+        actionModel: {
+          primaryAction: {
+            label: 'Work ready to resume',
+            taskLabel: 'Work ready to resume',
+            buttonLabel: 'Open Work',
+            href: '/work?task=task-091',
+            tone: 'accent',
+            code: 'ready_work',
+          },
+          secondaryActions: [],
+          ownerInput: { active: false },
+          runControl: { label: 'Resume', startEnabled: true, pauseEnabled: true },
+        },
+      }],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      activityLabel: 'Work is ready to resume.',
+      actionLabel: 'Open Work',
+      openHref: '/work?task=task-091',
+    })
   })
 
   it('uses visible work progress for project-card counts when available', () => {
@@ -342,6 +414,38 @@ describe('summarizeProjects', () => {
       max: 0,
     })
     expect(summarizeProjects(service)[0]?.taskActivity.bars).toHaveLength(18)
+  })
+
+  it('shows a saved owner-attention action as needs-you instead of ready', () => {
+    const service: ServiceDetail = {
+      projects: [{
+        id: 'commerce',
+        name: 'Commerce',
+        path: '/work/commerce',
+        taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+        actionModel: {
+          primaryAction: {
+            source: 'inbox',
+            label: 'Give the project direction',
+            buttonLabel: 'Start setup',
+            href: '/thread',
+            tone: 'warn',
+          },
+          secondaryActions: [],
+          runControl: { label: 'Start', startEnabled: true },
+          ownerInput: { active: false },
+          setup: { state: 'fresh_intake_needed', freshIntakeNeeded: true },
+        },
+      }],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      statusLabel: 'Needs you',
+      activityLabel: 'Give the project direction',
+      actionLabel: 'Start setup',
+      openHref: '/thread',
+      needsAttention: true,
+    })
   })
 
   it('prioritizes project questions in card summaries without saying deep intake', () => {

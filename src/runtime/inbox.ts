@@ -60,6 +60,8 @@ export interface BuildInboxOptions {
   projectStateDir?: string
   snapshotOptions?: Omit<BuildSnapshotOptions, 'projectPath'>
   taskStateOverride?: unknown
+  /** Effective status from the persisted task authority when it differs from a compact queue copy. */
+  workspaceImportTaskStatus?: string | null
   /** Promoted projects must use persisted scope rows, never membership fallback. */
   selectedScope?: OrientationScope | null
   allowMembershipScopeFallback?: boolean
@@ -89,7 +91,6 @@ export const ATTENTION_OWNED_INBOX_KINDS = [
   'proof_reconciliation',
   'import_draft_queue',
   'contract_result_review',
-  'lever_questions',
   'spec_fill_pending',
 ] as const satisfies readonly InboxItem['kind'][]
 
@@ -452,10 +453,11 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     allowMembershipScopeFallback: opts.allowMembershipScopeFallback,
   }))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
-  const workspaceImportTaskStatus =
+  const rawWorkspaceImportTaskStatus =
     workspaceImportTask && typeof workspaceImportTask.status === 'string'
       ? workspaceImportTask.status
       : ''
+  const workspaceImportTaskStatus = opts.workspaceImportTaskStatus ?? rawWorkspaceImportTaskStatus
   const workspaceImportTaskOpen =
     workspaceImportTask != null &&
     !['done', 'cancelled', 'archived'].includes(workspaceImportTaskStatus)
@@ -484,7 +486,12 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     anchors.includes('packages') ||
     anchors.includes('skills') ||
     anchors.includes('ROADMAP.md')
-  if (workspaceImportTaskOpen || (!hasGoals && hasReadme && hasAnchor)) {
+  // Repository anchors can seed an import only before an importer task exists.
+  // Once the persisted authority says it is terminal, anchors must not
+  // resurrect a reminder that the owner already resolved.
+  const workspaceImportAnchorReviewNeeded =
+    !workspaceImportTaskStatus && !hasGoals && hasReadme && hasAnchor
+  if (workspaceImportTaskOpen || workspaceImportAnchorReviewNeeded) {
     const signals = anchors.length > 0 ? anchors : ['workspace import']
     items.push({
       kind: 'workspace_import_pending',
@@ -511,7 +518,11 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       taskId: first.id,
       title: 'Review stale proof records',
       detail: `${countLabel}. Start with "${first.title}" and reconcile the task evidence or reopen the work.`,
-      actionHref: '/task/' + encodeURIComponent(first.id) + '?tab=spec',
+      // Completed proof debt is actionable only through Work, where the
+      // selected proof task is reopened before its verification is run. A
+      // terminal task record has no owner action and must never be the target
+      // of an inbox decision.
+      actionHref: '/work?task=' + encodeURIComponent(first.id),
       count: proofMissing.length,
       signals: proofMissing.map(task => `task:${task.id}`),
       dismissEndpoint: '/api/project/attention/dismiss?id=proof-reconciliation%3Adone-with-unmet-proof',
