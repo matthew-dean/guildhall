@@ -60754,6 +60754,11 @@ authoritative; this removes a client-side cache state that could outlive it.
 
 - [x] Regression and installed proof, 2026-08-30: ProjectView coverage proves
   a one-task start whose first refresh is already stopped returns chrome to
-  `Resume`. In the rebuilt installed app, the focused Release repair stopped in
-  608ms; the next settled Release frame and the current project API both
-  omitted `Pause` and named the same next repair action.
+  `Resume`, and the explicit running-to-stopped regression keeps reconciling a
+  focused run rather than leaving the stale state until the old 1.5-second
+  check. Installed Overview replay showed that parallel timed refreshes can be
+  coalesced into one stale request, so focused runs now use a bounded serial
+  refresh loop. After rebuild, install, restart, and `stale:false`, the real
+  Overview repair disabled at once and, 1.25 seconds later, had replaced its
+  task and removed false `Pause` chrome. The project and activity APIs both
+  agreed on the resulting next repair task.
