@@ -620,6 +620,26 @@ describe('repairStaleBlockersInQueue', () => {
   })
 })
 
+describe('repairStaleBlockersForProjectWithRuntime', () => {
+  it('leaves a top-level legacy task array for the explicit project migration', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'guildhall-stale-legacy-array-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    try {
+      mkdirSync(dirname(tasksPath), { recursive: true })
+      const legacyTasks = [task({ id: 'legacy-array-task' })]
+      writeFileSync(tasksPath, JSON.stringify(legacyTasks, null, 2))
+
+      await expect(repairStaleBlockersForProjectWithRuntime(projectRoot)).resolves.toEqual({
+        changed: false,
+        repairs: [],
+      })
+      expect(JSON.parse(readFileSync(tasksPath, 'utf8'))).toEqual(legacyTasks)
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('repairCompletionProofCriteriaInQueue', () => {
   it('reconciles done acceptance criteria when later approving review says all criteria are met', () => {
     const q = queue([task({

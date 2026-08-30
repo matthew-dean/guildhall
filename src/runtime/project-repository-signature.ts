@@ -53,6 +53,7 @@ function readGitOutput(root: string, args: string[], deadline: number): string {
   return execFileSync('git', args, {
     cwd: root,
     encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
     timeout: remainingObservationTime(deadline),
     maxBuffer: GIT_OBSERVATION_MAX_BUFFER,
     env: gitObservationEnvironment(),
