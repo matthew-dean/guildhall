@@ -309,9 +309,6 @@ export async function answerPressureTestQuestion(input: {
       intake.activeDomainId = null
       intake.pendingQuestion = null
     }
-  } else if (needsConcreteFollowUp(input.answer)) {
-    domain.status = 'follow-up'
-    intake.pendingQuestion = followUpQuestion(domain, intake.target, now, domain.askedQuestions.length + 1)
   } else {
     domain.status = 'closeout'
     domain.closeoutAsked = true
@@ -809,22 +806,6 @@ function firstQuestionPrompt(domainTitle: string, target: PressureTestIntake['ta
   }
 }
 
-function followUpQuestion(
-  domain: z.infer<typeof PressureTestDomain>,
-  target: PressureTestIntake['target'],
-  askedAt: string,
-  index: number,
-): PressureTestQuestion {
-  return {
-    id: `${domain.id}-q-${index}`,
-    domainId: domain.id,
-    prompt: followUpQuestionPrompt(domain.id, target),
-    why: followUpQuestionWhy(domain.id),
-    evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
-    askedAt,
-  }
-}
-
 function followUpQuestionPrompt(domainId: string, target: PressureTestIntake['target']): string {
   if (target.type === 'project') {
     switch (domainId) {
@@ -909,6 +890,29 @@ function projectCheckInQuestionPrompt(domainTitle: string): string {
 }
 
 function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIntake {
+  // Older feature/release intakes could re-ask a domain forever based on words
+  // in an owner's prose. Feature intake is deliberately bounded to one answer
+  // and one optional closeout; project check-ins use their own typed planner.
+  if (intake.target.type !== 'project') {
+    const activeDomain = intake.domains.find(domain => domain.id === intake.activeDomainId)
+    if (activeDomain?.status === 'follow-up') {
+      const askedAt = intake.pendingQuestion?.askedAt ?? intake.updatedAt
+      intake = {
+        ...intake,
+        pendingQuestion: {
+          id: `${activeDomain.id}-closeout`,
+          domainId: activeDomain.id,
+          prompt: `Is there anything else Guildhall should know about ${activeDomain.title.toLowerCase()} before we move to the next topic?`,
+          why: 'Guildhall asks this before leaving a topic so hidden constraints do not vanish.',
+          evidence: activeDomain.knownFacts.map(fact => `${fact.source}: ${fact.fact}`),
+          askedAt,
+        },
+        domains: intake.domains.map(domain => domain.id === activeDomain.id
+          ? { ...domain, status: 'closeout', closeoutAsked: true }
+          : domain),
+      }
+    }
+  }
   const active = intake.domains.find(domain => domain.id === intake.activeDomainId)
   if (active && intake.pendingQuestion?.id === `${active.id}-q-1`) {
     const replacement = firstQuestion(active, intake.target, intake.pendingQuestion.askedAt)
@@ -1006,10 +1010,6 @@ function normalizeQuestionCopy<T extends { prompt: string; why?: string }>(
     prompt,
     ...(why === undefined ? {} : { why }),
   }
-}
-
-function needsConcreteFollowUp(answer: string): boolean {
-  return /\b(rigorous|annoying|fast|safe|simple|good|strict|polished|clear|friendly|better|worse)\b/i.test(answer)
 }
 
 function isConfusedProjectSummary(summary: string): boolean {

@@ -385,7 +385,7 @@ describe('pressure-test intake state', () => {
     expect(next.pendingQuestion?.prompt ?? '').not.toContain('anything else')
   })
 
-  it('records answers and asks a follow-up before closing vague product goals', async () => {
+  it('moves a feature intake to one optional closeout regardless of answer wording', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
     const intake = await createPressureTestIntake({
       memoryDir,
@@ -401,13 +401,36 @@ describe('pressure-test intake state', () => {
     })
 
     expect(next.activeDomainId).toBe('product-goals')
-    expect(next.pendingQuestion?.prompt).toBe('For "Guildhall 0.8.0", what observable result would show the work succeeded?')
-    expect(next.pendingQuestion?.prompt).not.toContain(next.domains[0]?.askedQuestions[0]?.answer ?? '')
-    expect(next.pendingQuestion?.why).toBe('Guildhall needs one observable example so future work can use this answer.')
+    expect(next.pendingQuestion?.id).toBe('product-goals-closeout')
+    expect(next.pendingQuestion?.prompt).toBe('Is there anything else Guildhall should know about product goals before we move to the next topic?')
     expect(next.domains[0]?.askedQuestions[0]).toMatchObject({
       answered: true,
       answer: 'It should feel rigorous but not annoying.',
     })
+  })
+
+  it('repairs a looping feature intake to its closeout question', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'feature', id: 'open-command', title: 'Open command' },
+      rawRequest: 'Add the command.',
+    })
+    intake.domains[0]!.status = 'follow-up'
+    intake.pendingQuestion = {
+      id: 'product-goals-q-2',
+      domainId: 'product-goals',
+      prompt: 'Repeat the same question.',
+      why: 'Old prose matcher',
+      evidence: [],
+      askedAt: intake.createdAt,
+    }
+    await writeProjectStateJsonAsync(memoryDir, path.join('pressure-test-intake', `${intake.id}.json`), intake)
+
+    const loaded = await loadPressureTestIntake({ memoryDir, intakeId: intake.id })
+
+    expect(loaded.pendingQuestion?.id).toBe('product-goals-closeout')
+    expect(loaded.domains[0]?.status).toBe('closeout')
   })
 
   it('asks project design-quality follow-ups without injecting the previous answer into the prompt', async () => {

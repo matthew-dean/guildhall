@@ -61764,3 +61764,61 @@ record is migrated.
   `origin/main`; its shared release-readiness reports `gitStory.state: clean`
   with no blockers, and the shared action model no longer tells the owner to
   perform repository follow-up.
+
+### Finding: Feature intake must be bounded and prose-independent
+
+- [x] User job: when an owner submits a concrete small feature request, the
+  intake either uses the supplied scope or asks one meaningful missing
+  question per topic. It never asks the same question again because a prior
+  answer happened to contain a pleasant adjective.
+- Finding, 2026-08-30: t-minus-t's concrete Open as TypeScript request was
+  asked to restate its goal, then its workflow answer triggered twenty
+  identical follow-up questions. `needsConcreteFollowUp` searched arbitrary
+  owner prose for words such as `clear`, `safe`, and `better`; each matching
+  answer re-entered the same `follow-up` state. This made human wording an
+  operational state-machine input and created an unbounded owner interview.
+
+#### Contract Touch Decision
+
+Work id: `bounded-prose-independent-feature-intake-2026-08-30`. Touched
+contracts: feature and release pressure-test intake state transitions, plus
+the compatibility reader for persisted `follow-up` intake records. A
+non-project topic now has one substantive owner answer and one explicit
+closeout; project check-ins retain their separate typed planner. Existing
+looping feature/release records read as their topic closeout so their evidence
+is preserved and the owner can continue without data surgery. Considered but
+not touched: model prompts, request routing, task materialization, project
+check-ins, task state, and release state. Required proof: arbitrary prose
+with formerly matched terms reaches closeout, and a persisted looping record
+repairs to that closeout. Apply/revert: the compatibility reader preserves
+all historical answers; no answer data is deleted.
+
+#### Schema Migration Decision
+
+Persisted schema touched: existing pressure-test intake records are read with
+a backward-compatible state normalization only. No file format changes and no
+mandatory migration are required before run. The compatibility reader converts
+the obsolete `follow-up` presentation into a closeout question on read; saving
+the next valid answer persists the normalized state. Rollback restores the
+old reader but leaves records and answers intact.
+
+#### Validation
+
+- Focused intake coverage: `pnpm exec vitest run
+  src/runtime/__tests__/pressure-test-intake.test.ts --reporter=dot` passed 21
+  tests. It includes the former prose-triggering answer, a persisted looping
+  feature intake, and the compatibility closeout repair.
+- Model-independence proof: `pnpm model:independence` passed 127 tests after
+  the prose matcher was removed.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`,
+  `/api/stale-server` returned `stale:false`. The active Open as TypeScript
+  intake, which had recorded 20 repeated workflow answers, now returned one
+  `workflows-closeout` question. Completing the remaining bounded topics
+  materialized exactly one task: `task-003`.
+- Known unrelated suite blocker: `pnpm exec vitest run
+  src/runtime/__tests__/serve-intake.test.ts --reporter=dot` currently returns
+  `409` from the existing project migration gate for 19 API tests, including
+  the same release-intake test when run alone. The focused intake suite and
+  installed route above are green; this harness baseline needs a separate
+  migration-gate investigation.
