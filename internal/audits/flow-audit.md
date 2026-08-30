@@ -61004,6 +61004,17 @@ reconciliation; existing task and run records remain unchanged.
 - [ ] Remaining surface proof: compare the authoritative execution state with
   Work, drawer, Thread, release, inbox, and status during a real one-task run;
   the saved `planExecution` fallback must never be presented as current work.
+- Follow-up finding, 2026-08-30: after the owner resumed the real docs/storybook
+  task, Work correctly withheld stale inventory while its focused snapshot
+  refreshed, but replaced the entire page with `Guildhall is working`. The
+  temporary state omitted the task name and release progress, so the owner
+  could not tell what was underway or where it fit.
+- [x] Regression and installed proof, 2026-08-30: the shared ProjectView
+  pending surface now keeps the active task title and `Stage 1: V1 Release
+  Hardening · 0 of 16 complete` visible instead of a generic working panel.
+  ProjectView coverage proves that compact state. The installed Looma + Knit
+  replay showed the same focused task and milestone progress during a real
+  resume, followed by a single Pause control and no competing task action.
 
 ### Finding: Owner routes must not flash a contradictory saved state
 
@@ -61045,3 +61056,40 @@ the change governs when an owner-facing route may present them as current.
   `stale:false`, cold direct Thread, Release, and Inbox routes for real Looma
   + Knit showed only a stable shell while connecting, then their single current
   action with no stale paused status, activity wall, or layout replacement.
+
+### Finding: A focused resume cannot leave its only action inert
+
+- [ ] User job: when an owner resumes the selected Work item, Guildhall either
+  shows the run as underway or returns the item to a visibly actionable state
+  with a clear result. It cannot leave a disabled resume button beside a
+  paused task.
+- Finding, 2026-08-30: on the real docs/storybook item, `Resume this work
+  item` became disabled while both its screen and the authoritative project
+  snapshot still reported `paused_live_work` and `run: stopped`. Work had set a
+  local active-task flag after the start response, but that flag did not clear
+  when the authoritative run state was already stopped.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-focused-resume-reconciliation-2026-08-30`. Touched
+contract: focused Work optimistic-run state. A local active marker is valid
+only while the shared project snapshot says the run is active; it must be
+cleared whenever an authoritative stopped snapshot is observed, including
+after a start that ends before the first refresh. Considered but not touched:
+task lifecycle, start endpoint semantics, action ranking, and provider state.
+Required proof: a focused task whose post-start snapshot is stopped is
+immediately resumeable again, rather than indefinitely disabled.
+
+#### Schema Migration Decision
+
+No schema migration. This corrects an ephemeral view-state reconciliation
+rule; persisted task and run records remain authoritative and unchanged.
+
+- [x] Regression and installed proof, 2026-08-30: the focused Work regression
+  proves that a stopped post-start snapshot restores the visible, enabled
+  `Resume this work item` action. A local running marker survives only through
+  a confirmed shared running state, then clears after the next shared stopped
+  state; a running card has no competing `Open task` control. After a fresh
+  build, install, restart, and `stale:false`, the real Looma + Knit docs task
+  moved from enabled Resume to `Work is underway` with its exact title and
+  `0 of 16 complete`, then Pause returned it to the same enabled Resume action.

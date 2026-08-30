@@ -69,6 +69,7 @@
   let selectedWorkId = $state<string | null>(null)
   let runWorkBusyId = $state<string | null>(null)
   let runWorkActiveId = $state<string | null>(null)
+  let runWorkObservedActive = $state(false)
   let runWorkError = $state<string | null>(null)
   let inventoryLoadBusy = $state(false)
   let pendingRouteScrollTaskId = $state<string | null>(null)
@@ -451,8 +452,12 @@
         runWorkError = body.error ?? `Start failed (HTTP ${res.status})`
         return
       }
-      runWorkActiveId = taskId
-      await project.refresh(detail.id)
+      const refreshed = await project.refresh(detail.id)
+      // The shared run snapshot owns the active state. A start request can
+      // succeed while the focused pass has already stopped, so never leave an
+      // optimistic Work-only marker behind in that case.
+      runWorkActiveId = refreshed?.run?.status === 'running' ? taskId : null
+      runWorkObservedActive = false
       setTimeout(() => void project.refresh(detail.id), 500)
       setTimeout(() => void project.refresh(detail.id), 1800)
     } finally {
@@ -865,7 +870,15 @@
   })
 
   $effect(() => {
-    if (!projectRunActive) runWorkActiveId = null
+    if (!runWorkActiveId) return
+    // The tab can receive a fresh shared snapshot before its parent has passed
+    // matching props down. Clear the local marker only after this component has
+    // observed shared running work followed by a later stopped snapshot.
+    if (projectRunActive) {
+      runWorkObservedActive = true
+      return
+    }
+    if (runWorkObservedActive) runWorkActiveId = null
   })
 </script>
 
@@ -892,7 +905,7 @@
               <p>{focusedDecisionDetail}</p>
             {/if}
           </div>
-          {#if !isFocusedWorkRunning(focusedWork) || !isFocusedRunnableWork(focusedWork)}
+          {#if !isFocusedWorkRunning(focusedWork)}
             <Button
               variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'}
               disabled={runWorkBusyId === focusedWork.id || runWorkActiveId === focusedWork.id}

@@ -6,6 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event'
 import WorkTab from '../WorkTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
+import { project } from '../../../lib/project.svelte.js'
 import type { ProjectDetail, Task } from '../../../lib/types.js'
 
 function json(data: unknown): Response {
@@ -69,6 +70,8 @@ describe('WorkTab', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     cleanup()
+    project.detail = null
+    project.error = null
   })
 
   it('does not dump completed scope rows into the explicitly opened inventory', async () => {
@@ -260,6 +263,52 @@ describe('WorkTab', () => {
     await waitFor(() => {
       expect(fetchSpy.mock.calls.some(([input]) => String(input).includes('/api/project/task/task-091/start'))).toBe(true)
     })
+  })
+
+  it('returns a focused task to an actionable state when its post-start snapshot is stopped', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=task-091')
+    path.value = '/projects/narrative-harness/work?task=task-091'
+    const ready = detail([
+      task({ id: 'task-091', title: 'Present draft review evaluation and provenance', status: 'review' }),
+    ], {
+      id: 'narrative-harness',
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Work ready to resume',
+          taskLabel: 'Present draft review evaluation and provenance',
+          taskId: 'task-091',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-091',
+          tone: 'accent',
+          code: 'ready_work',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true, pauseEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        focusKind: 'ready_work',
+        focusTaskId: 'task-091',
+      },
+    })
+    project.detail = null
+    project.error = null
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/task/task-091/start')) return json({ ok: true })
+      if (String(input).includes('/api/project')) return json(ready)
+      return json({})
+    }))
+
+    render(WorkTab, { props: { detail: ready } })
+
+    const resume = await screen.findByRole('button', { name: 'Resume this work item' })
+    await userEvent.click(resume)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeEnabled())
   })
 
   it('keeps a focused ready-work start failure beside the command', async () => {
@@ -549,7 +598,7 @@ describe('WorkTab', () => {
     expect(within(inspector).queryByRole('button', { name: 'Review spec' })).toBeNull()
   })
 
-  it('uses an action-shaped label for a question-shaped focused work item', async () => {
+  it('uses an action-shaped label without offering a competing control for a running focused item', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-smoke-test')
     path.value = '/projects/looma-knit/work?task=task-smoke-test'
 
@@ -568,7 +617,7 @@ describe('WorkTab', () => {
 
     expect(await screen.findByRole('heading', { name: 'Define safe smoke-test commands' })).toBeInTheDocument()
     expect(screen.queryByText('What commands should I run to smoke test this project without changing files?')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Open task' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull()
   })
 
   it('keeps source-grounded detail in the selected inspector rather than every row', async () => {

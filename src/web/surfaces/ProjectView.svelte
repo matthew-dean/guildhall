@@ -164,6 +164,19 @@
     }
     return false
   })
+  const activeWorkTitle = $derived(
+    detail?.startReadiness?.focusTaskTitle?.trim() ||
+    detail?.actionModel?.primaryAction?.taskLabel?.trim() ||
+    'Guildhall is working',
+  )
+  const activeWorkProgress = $derived.by(() => {
+    const releaseLabel = detail?.releaseSummary?.release?.label?.trim()
+    const counts = detail?.releaseSummary?.counts
+    if (releaseLabel && typeof counts?.done === 'number' && typeof counts.total === 'number') {
+      return `${releaseLabel} · ${counts.done} of ${counts.total} complete. Nothing is waiting on you.`
+    }
+    return 'Nothing is waiting on you.'
+  })
   const routeFocusedTaskId = $derived.by(() => {
     path.href
     if (currentView !== 'work' || typeof window === 'undefined') return null
@@ -1783,10 +1796,10 @@
                 role="status"
                 density="compact"
                 label={runStatus === 'running' ? 'Work is underway' : 'Current work updated'}
-                title={runStatus === 'running' ? 'Guildhall is working' : 'Checking what changed'}
+                title={runStatus === 'running' ? activeWorkTitle : 'Checking what changed'}
               >
                 {runStatus === 'running'
-                  ? 'Guildhall will show the next decision here when this pass finishes.'
+                  ? activeWorkProgress
                   : 'Guildhall finished the last pass and is loading the next decision.'}
               </NoticeBand>
             </div>

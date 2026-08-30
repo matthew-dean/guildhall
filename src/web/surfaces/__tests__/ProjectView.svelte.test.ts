@@ -538,6 +538,50 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Overview ordering task')).not.toBeInTheDocument()
   })
 
+  it('keeps the active task and release progress visible while Work refreshes', async () => {
+    const running = detail({
+      run: { status: 'running', mode: 'one_task', activeTaskId: 'task-link-editor' },
+      startReadiness: {
+        canStart: true,
+        code: 'running',
+        focusTaskId: 'task-link-editor',
+        focusTaskTitle: 'Knit: add link editor controls',
+      },
+      actionModel: {
+        primaryAction: {
+          label: 'Knit: add link editor controls',
+          taskId: 'task-link-editor',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-link-editor',
+          tone: 'running',
+          code: 'running',
+        },
+      },
+      releaseSummary: {
+        release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'active', source: 'release_plan' },
+        counts: { total: 16, done: 3 },
+      },
+      taskPayload: { surface: 'overview' },
+    } as Partial<ProjectDetail>)
+    const pendingProject = deferredResponse()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return pendingProject.promise
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      return json({})
+    }))
+    project.detail = running
+    project.error = null
+
+    render(ProjectView, { initialView: 'work', initialSub: null, projectId: 'looma-knit' })
+
+    expect(await screen.findByRole('heading', { name: 'Knit: add link editor controls' })).toBeInTheDocument()
+    expect(screen.getByText('Stage 1 · 3 of 16 complete. Nothing is waiting on you.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Guildhall is working' })).toBeNull()
+
+    pendingProject.resolve(json(running))
+  })
+
   it('keeps the Work inventory projection when a supervisor event refreshes the project', async () => {
     const projectPayload = detail({
       tasks: [task({ id: 'task-work-only', title: 'Work inventory task' })],
