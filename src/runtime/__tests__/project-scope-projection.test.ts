@@ -1397,4 +1397,29 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start.message).toContain(recoveryReason)
     expect(projection.start.message).not.toContain('max_revisions_exceeded')
   })
+
+  it('deduplicates task source references while preserving their first-seen order', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Trace source references',
+        description: 'Use docs/guide/owner-flow.md while shaping this task.',
+        references: ['docs/guide/owner-flow.md', ' docs/reference/cli.md '],
+        sourceClaims: [{ references: ['docs/reference/cli.md', 'docs/guide/owner-flow.md'] }],
+      }),
+    ]))
+
+    expect(projection.rows.find(row => row.taskId === 'task-contracts')?.sourceRefs).toEqual([
+      'docs/guide/owner-flow.md',
+      'docs/reference/cli.md',
+    ])
+  })
+
+  it('uses the task reference when no source is recorded', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({ id: 'task-contracts', title: 'No source yet', description: 'No linked source.' }),
+    ]))
+
+    expect(projection.rows.find(row => row.taskId === 'task-contracts')?.sourceRefs).toEqual(['task:task-contracts'])
+  })
 })

@@ -947,8 +947,11 @@ function sourceRefsForTask(task: Task): string[] {
     ...(task.references ?? []),
     ...((task.sourceClaims ?? []).flatMap(claim => claim.references ?? [])),
     ...explicitMarkdownSourceRefsFromTask(task),
-  ].filter(ref => ref.trim().length > 0)
-  return refs.length > 0 ? refs : [`task:${task.id}`]
+  ]
+    .map(ref => ref.trim())
+    .filter(ref => ref.length > 0)
+  const uniqueRefs = [...new Set(refs)]
+  return uniqueRefs.length > 0 ? uniqueRefs : [`task:${task.id}`]
 }
 
 export function summarizeExecutionScopeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['counts'] {
