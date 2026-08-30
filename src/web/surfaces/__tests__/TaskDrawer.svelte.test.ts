@@ -383,7 +383,7 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Project needs your decision first')
+    await screen.findByText('Next action')
     expect(screen.getByText('Approve the documented release boundary for the current milestone.')).toBeInTheDocument()
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.queryByText('Task size')).not.toBeInTheDocument()
@@ -392,7 +392,7 @@ describe('TaskDrawer', () => {
     expect(path.value).toBe('/projects/looma-knit/task/task-review')
   })
 
-  it('lets a task with an open escalation own the compact drawer over another project decision', async () => {
+  it('hands a stopped task to the shared next project action', async () => {
     project.detail = {
       ...projectDetail(),
       actionModel: {
@@ -455,9 +455,10 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Queued')
-    expect(screen.getByRole('button', { name: 'Retry worker' })).toBeInTheDocument()
-    expect(screen.queryByText('Project needs your decision first')).toBeNull()
+    await screen.findByText('Next action')
+    expect(screen.getByText('The task you opened stopped. Guildhall has selected the next work item that can move forward.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry worker' })).not.toBeInTheDocument()
   })
 
   it('keeps reviewer planning metadata out of the normal task overview', async () => {

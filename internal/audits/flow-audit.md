@@ -60848,3 +60848,49 @@ authoritative; this removes a client-side cache state that could outlive it.
   Overview repair disabled at once and, 1.25 seconds later, had replaced its
   task and removed false `Pause` chrome. The project and activity APIs both
   agreed on the resulting next repair task.
+
+### Finding: A stopped focused task must hand off to the shared next decision
+
+- [ ] User job: after the owner starts one focused item and it stops, the
+  resulting screen explains that outcome and offers the one authoritative next
+  action. It must not leave a prior task's optional retry buried below its
+  record while the shared project action has advanced to a different task.
+- Finding, 2026-08-30: a real Looma + Knit focused ContextMenu implementation
+  pass stopped after three ticks with an escalation. The selected task drawer
+  continued to say `Queued` and exposed `Retry worker` after task links and
+  delivery detail. At the same time, the authoritative project response named
+  the docs/storybook task as the ready shared next action. An owner therefore
+  has two competing paths and no clear explanation of why Guildhall switched
+  focus.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-stopped-focused-handoff-2026-08-30`.
+Touched contracts: selected-task drawer handoff. The selected record may retain
+a concise outcome, but the primary decision is always the current typed project
+action; the drawer cannot independently elevate a stale task recovery.
+Considered but not touched: action ranking, escalation persistence, focused-run
+execution, and task status lifecycle. Required proof: when a focused run ends
+on a different shared action, every owner-facing surface names the same next
+task, explains the completed task's outcome, and offers the next action above
+the fold.
+
+#### Schema Migration Decision
+
+No schema migration. This corrects a client presentation exception that
+overrode the existing shared action contract.
+
+- [x] Regression proof, 2026-08-30: focused TaskDrawer coverage proves a
+  stopped selected task with an open escalation yields to the project's typed
+  next action, explains that the prior task stopped, and keeps the recovery
+  command out of the primary surface. `pnpm exec vitest run
+  src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts --reporter=dot` passes
+  72/72.
+- [x] Installed proof, 2026-08-30: after `pnpm build`, `pnpm dev:install`,
+  service restart, and `stale:false`, the real stopped ContextMenu drawer
+  showed `Next action`, named the docs/storybook task, and explained why
+  Guildhall advanced. `Open Work` was above the fold without page-level
+  horizontal overflow at 1280x800, 1024x800, and 390x844. It opened the exact
+  named task, whose focused screen offered one `Resume only this work item`
+  action. The owner can now understand the handoff in two reads and one click,
+  without hunting through the stopped task's mechanics.

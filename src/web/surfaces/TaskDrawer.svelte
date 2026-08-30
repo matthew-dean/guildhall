@@ -734,15 +734,20 @@
   const projectDecisionEyebrow = $derived(
     projectPrimaryAction?.operation === 'repair_spec'
       ? 'One repair is ready'
-      : 'Project needs your decision first',
+      : 'Next action',
+  )
+  const projectDecisionContext = $derived(
+    firstOpenEscalation
+      ? 'The task you opened stopped. Guildhall has selected the next work item that can move forward.'
+      : null,
   )
   const projectDecisionElsewhere = $derived(Boolean(
     !fullRecordRequested &&
     !focusedSpecReview &&
     !focusedSpecRepair &&
-    // This task already has the owner's concrete recovery decision. A
-    // project-level recommendation for another task must not hide it.
-    !firstOpenEscalation &&
+    // The shared project action is the single owner-facing priority. A
+    // selected task's recovery remains reachable as its full record, but it
+    // cannot independently replace a newer project decision.
     task?.id &&
     projectPrimaryAction?.taskId &&
     projectPrimaryAction.taskId !== task.id,
@@ -1393,6 +1398,9 @@
           {#if projectPrimaryAction.detail}
             <span class="drawer-project-decision-detail">{projectPrimaryAction.detail}</span>
           {/if}
+          {#if projectDecisionContext}
+            <span class="drawer-project-decision-context">{projectDecisionContext}</span>
+          {/if}
           <div class="drawer-project-decision-actions">
             <Button variant="primary" size="sm" disabled={busy || runBusy} onclick={openProjectDecision}>{projectPrimaryAction.buttonLabel}</Button>
             <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View this task record</Button>
@@ -1953,6 +1961,11 @@
   .drawer-project-decision-detail {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-relaxed);
+  }
+  .drawer-project-decision-context {
+    color: var(--text-subtle);
+    font-size: var(--gh-type-size-caption);
     line-height: var(--gh-type-line-height-relaxed);
   }
   :global(.drawer-run-action) {
