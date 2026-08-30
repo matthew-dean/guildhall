@@ -954,7 +954,9 @@ export interface ProjectSummaryShellReadModel {
 export function readProjectSummaryShellAtBoundary(projectRoot: string): ProjectSummaryShellReadModel {
   const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
   const saved = readProjectStateDatabaseShellState<ProjectSummaryProjection>(tasksPath, {
-    includeOrientation: false,
+    // The compact payload still drops orientation, but the selected release
+    // membership is needed while normalizing its progress denominator.
+    includeOrientation: true,
     includeApprovedPlan: false,
   })
   if (saved) {

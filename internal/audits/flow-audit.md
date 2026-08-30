@@ -61226,3 +61226,31 @@ revert restores the old read behavior only, with no data conversion.
   + Knit task-detail API returned `exploring`, no block reason, no top-level
   open escalation IDs, an empty runtime list, and all three recovered records
   marked resolved.
+
+### Finding: Every live surface must preserve the selected release denominator
+
+- [ ] User job: whether an owner sees progress on Overview, Release, Work, or
+  the persistent activity surface, `Stage 1: V1 Release Hardening` means the
+  same bounded work. Counts cannot silently include later work in one place
+  and exclude it in another.
+- Finding, 2026-08-30: while the real Looma + Knit docs task was running, the
+  primary project read correctly reported `0` deferred items in the selected
+  16-item release, but `/api/project/activity` reported `26` deferred items.
+  The activity shell discarded the selected release membership before its
+  common summary normalizer could correct an older saved count.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-release-denominator-shell-2026-08-30`. Touched contract:
+the promoted project summary shell. Every reader of the shared release summary
+must retain the selected release membership long enough to normalize the
+release denominator, then may discard orientation detail from its compact
+payload. Considered but not touched: task inventory, release ranking, activity
+polling frequency, and view copy. Required proof: a shell/activity read and a
+project read return the same selected-release counts when later work exists.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. The saved orientation record already contains
+the selected release membership; this change preserves that existing data
+inside the read boundary before returning the compact shell.

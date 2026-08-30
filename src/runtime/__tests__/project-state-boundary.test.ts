@@ -38,6 +38,7 @@ import {
   readProjectMapStateModel,
   readProjectOverviewStateAtBoundary,
   readProjectStateAuthorityAtBoundary,
+  readProjectSummaryShellAtBoundary,
   readProjectSurfaceStateAtBoundary,
   readProjectTaskRecordsAtBoundaryWithRevision,
   readProjectTaskCurrentStateAtBoundary,
@@ -231,6 +232,70 @@ describe('project-state-boundary', () => {
         id: 'release-queue',
         nodeIds: ['work:task-queue'],
       })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the selected release deferred count in compact summary shells', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-summary-shell-release-count-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    try {
+      writeProjectStateDatabaseSnapshot(tasksPath, {
+        projectRoot: root,
+        queue: {
+          version: 1,
+          selectedReleaseId: 'release-current',
+          releases: [{
+            id: 'release-current',
+            label: 'Current release',
+            kind: 'release',
+            state: 'active',
+            source: 'owner_approved',
+            nodeIds: ['work:task-current'],
+            deferredNodeIds: ['work:task-later'],
+          }],
+          tasks: [
+            { id: 'task-current', title: 'Current task', status: 'ready' },
+            { id: 'task-later', title: 'Later task', status: 'ready' },
+          ],
+        },
+        summary: {
+          freshness: 'current',
+          releaseSummary: {
+            scopeMode: 'named_release',
+            release: { id: 'release-current', label: 'Current release', kind: 'release', state: 'active', source: 'owner_approved' },
+            state: 'active',
+            counts: { total: 1, done: 0, unfinished: 1, ready: 1, active: 0, blocked: 0, deferred: 26, ownerBlocked: 0, proofBlocked: 0 },
+            taskStatusCounts: { ready: 1 },
+            blockers: [],
+            updatedAt: '2026-08-30T00:00:00.000Z',
+          },
+          orientationSpine: {
+            selectedRelease: {
+              id: 'release-current',
+              label: 'Current release',
+              deferredNodeIds: ['work:task-later'],
+            },
+          },
+        },
+        scopeRows: [{
+          taskId: 'task-current',
+          scope: 'included',
+          eligibilityReason: 'selected release membership',
+          hierarchyRole: 'primary',
+          handoffState: 'ready',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: [],
+        }],
+      })
+      promoteProjectStateDatabaseAuthority(root)
+
+      const shell = readProjectSummaryShellAtBoundary(root)
+      expect(shell.summary?.releaseSummary?.counts.deferred).toBe(1)
+      expect(shell.summary?.orientationSpine).toBeNull()
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
