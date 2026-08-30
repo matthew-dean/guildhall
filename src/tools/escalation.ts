@@ -94,6 +94,12 @@ function normalizeEscalationText(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim()
 }
 
+function hasRecordedHardGateFailure(task: Task): boolean {
+  return (task.gateResults ?? []).some(gate =>
+    gate.type === 'hard' && gate.passed === false,
+  )
+}
+
 function findMatchingOpenEscalation(escalations: Escalation[], input: RaiseEscalationInput): Escalation | null {
   return escalations.find(escalation =>
     !escalation.resolvedAt &&
@@ -175,6 +181,17 @@ export async function raiseEscalation(
     const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
     Object.assign(task, effectiveTask)
     const effectiveEscalations = await readEffectiveEscalations(projectRoot, task)
+
+    // A provider's explanation of a failed command is audit material, not
+    // authority to halt a release. Only the typed gate ledger may establish a
+    // hard-gate failure.
+    if (input.reason === 'gate_hard_failure' && !hasRecordedHardGateFailure(task)) {
+      return {
+        success: false,
+        error:
+          'Cannot raise gate_hard_failure without a recorded failed hard gate. Run and persist the task\'s authoritative gates first.',
+      }
+    }
 
     if (input.handling === 'guildhall_recovery') {
       return {

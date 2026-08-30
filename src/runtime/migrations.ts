@@ -114,7 +114,7 @@ import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema
 import { effectiveTaskTitle } from '@guildhall/shared'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import type { Task } from '@guildhall/core'
-import { buildProofSetupTaskContract, isProofSetupTask, materializeProofSetupTask, raiseEscalation } from '@guildhall/tools'
+import { buildProofSetupTaskContract, isProofSetupTask, materializeProofSetupTask, raiseEscalation, resolveEscalation } from '@guildhall/tools'
 import { taskDoneButProofMissing, taskDoneButProofMissingForScope, taskHasScriptProofPath } from './proof-health.js'
 import {
   inspectEmptyMastraDatabase,
@@ -250,6 +250,7 @@ const ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.101/active-relea
 const SPEC_REPAIR_ACTION_REPROJECTION_MIGRATION_ID = '0.13.102/spec-repair-action-reprojection'
 const COLLAPSED_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.103/collapsed-release-progress-reprojection'
 const NESTED_TASK_EVIDENCE_ROOT_REPAIR_MIGRATION_ID = '0.13.104/nested-task-evidence-root-repair'
+const UNPROVEN_GATE_FAILURE_RECOVERY_MIGRATION_ID = '0.13.105/unproven-gate-failure-recovery'
 const ATOMIC_DECISION_FOCUS_MIGRATION_ID = '0.13.70/atomic-decision-focus'
 const DURABLE_DECISION_SNAPSHOT_MIGRATION_ID = '0.13.71/durable-decision-snapshot'
 const INDEXED_RELEASE_SUMMARY_REPROJECTION_MIGRATION_ID = '0.13.72/indexed-release-summary-reprojection'
@@ -270,6 +271,33 @@ interface FinalProjectStateMigrationResult {
   removedPaths: string[]
   queueTaskCount: number
   summaryFreshness: string
+}
+
+interface UnprovenGateFailureRepair {
+  taskId: string
+  escalationId: string
+}
+
+async function findUnprovenGateFailureRepairs(projectRoot: string): Promise<UnprovenGateFailureRepair[]> {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return []
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const queueRead = readProjectStateDatabaseQueueWithRevision(tasksPath)
+  if (!queueRead) return []
+  const tasks = await buildEffectiveTasks(projectRoot, queueRead.definition.tasks as unknown as Task[], {
+    evidence: 'current',
+  }) as unknown as Task[]
+  const repairs: UnprovenGateFailureRepair[] = []
+  for (const task of tasks) {
+    const hasRecordedFailure = (task.gateResults ?? []).some(gate =>
+      gate.type === 'hard' && gate.passed === false,
+    )
+    if (hasRecordedFailure) continue
+    for (const escalation of task.escalations ?? []) {
+      if (escalation.resolvedAt || escalation.reason !== 'gate_hard_failure') continue
+      repairs.push({ taskId: task.id, escalationId: escalation.id })
+    }
+  }
+  return repairs
 }
 
 function taskIsImportedSourceWork(task: Task): boolean {
@@ -6016,6 +6044,52 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: UNPROVEN_GATE_FAILURE_RECOVERY_MIGRATION_ID,
+    title: 'Repair unsupported gate blockers',
+    introducedIn: '0.13.105',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Reopens a task only when an older hard-gate blocker has no recorded failed gate result, so work can continue to its real next check.',
+    async detect(projectRoot) {
+      const repairs = await findUnprovenGateFailureRepairs(projectRoot)
+      return {
+        needed: repairs.length > 0,
+        affectedPaths: repairs.length > 0
+          ? [projectStateDatabasePath(projectRoot), `${repairs.length} unsupported gate blocker${repairs.length === 1 ? '' : 's'}`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const repairs = await findUnprovenGateFailureRepairs(projectRoot)
+      for (const repair of repairs) {
+        const result = await resolveEscalation({
+          tasksPath,
+          taskId: repair.taskId,
+          escalationId: repair.escalationId,
+          resolution: "Auto-repaired because no durable failed hard-gate result was recorded. Guildhall will continue from this task's own verification path.",
+          resolvedBy: 'system',
+          nextStatus: 'ready',
+        })
+        if (!result.success) {
+          throw new Error(`Could not repair unsupported gate blocker for ${repair.taskId}: ${result.error ?? 'unknown error'}`)
+        }
+      }
+      if (repairs.length > 0) {
+        markProjectStateDatabaseStale(projectRoot)
+        const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+          projectId: path.basename(projectRoot),
+        })
+        if (!projection) throw new Error('The shared project decision could not be refreshed after unsupported gate blocker repair.')
+      }
+      return {
+        summary: `Reopened ${repairs.length} task${repairs.length === 1 ? '' : 's'} whose hard-gate blocker had no recorded failed gate result.`,
+        affectedPaths: repairs.length > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -6080,6 +6154,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.12.42/task-evidence-history-compression': 'migrations.test.ts: moves SQLite history into compressed ledgers before emptying the aggregate database',
   [COMPLETION_SUMMARY_EVIDENCE_MIGRATION_ID]: 'workspace-importer.test.ts: preserves a durable completion timestamp after promoted task-definition compaction',
   [NESTED_TASK_EVIDENCE_ROOT_REPAIR_MIGRATION_ID]: 'migrations.test.ts: restores a nested-checkout escalation through the canonical workspace task handle without duplicating a later retry',
+  [UNPROVEN_GATE_FAILURE_RECOVERY_MIGRATION_ID]: 'migrations.test.ts: reopens only an unsupported gate blocker and leaves a recorded failed hard gate unchanged',
   [LEGACY_LIVE_STATE_CLEANUP_MIGRATION_ID]: 'migrations.test.ts: removes legacy live-state files even when the SQLite cutover was already recorded',
   [EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID]: 'migrations.test.ts: realigns promoted summary and scope from current evidence without reading compatibility files',
   [CURRENT_STATUS_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: materializes the shared current task status rule into indexed rows',

@@ -378,12 +378,28 @@ describe('raiseEscalation', () => {
       tasksPath,
       taskId: 'task-001',
       agentId: 'worker-agent',
-      reason: 'gate_hard_failure',
+      reason: 'decision_required',
       summary: 'typecheck keeps failing',
       details: 'Tried 3 times. Stack: tsc -b --verbose ...',
     })
     const task = await readEffectiveTask()
     expect(task.escalations[0]?.details).toContain('Stack: tsc')
+  })
+
+  it('rejects a hard-gate escalation that has no durable failed gate result', async () => {
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'gate_hard_failure',
+      summary: 'The build is allegedly broken outside this task.',
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringMatching(/recorded failed hard gate/i),
+    })
+    expect((await readEffectiveTask()).status).toBe('in_progress')
   })
 
   it('returns error for unknown task id', async () => {
@@ -443,6 +459,21 @@ describe('resolveEscalation', () => {
     })
     expect(proseOnly.success).toBe(true)
     expect((await readEffectiveTask()).gateScopeExceptions).toEqual([])
+
+    const checkedAt = new Date().toISOString()
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: `task-001-gate-typecheck-${checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+      taskId: 'task-001',
+      kind: 'gate_result',
+      recordedAt: checkedAt,
+      payload: {
+        gateId: 'typecheck',
+        command: 'pnpm typecheck',
+        type: 'hard',
+        passed: false,
+        checkedAt,
+      },
+    })
 
     const raised = await raiseEscalation({
       tasksPath,

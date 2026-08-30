@@ -21,6 +21,7 @@ import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema
 import { buildEffectiveTasks } from '../effective-task.js'
 import { summarizeCurrentProof } from '@guildhall/shared'
 import { buildProjectScopeProjection, taskCompletionProofSatisfiedByLinkedChildren } from '../project-scope-projection.js'
+import type { Task } from '@guildhall/core'
 
 let tmp: string
 let projectRoot: string
@@ -5385,6 +5386,105 @@ describe('applyProjectMigrations', () => {
     expect(second.applied).toEqual([])
     expect(second.failed).toEqual([])
     await expect(readTaskEvidence(projectRoot, 'task-proof-verification-migration')).resolves.toHaveLength(6)
+  })
+
+  it('reopens only gate blockers without durable failed hard-gate evidence', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const now = '2026-08-30T00:00:00.000Z'
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-unproven-gate',
+          title: 'Unproven gate blocker',
+          status: 'blocked',
+          projectPath: projectRoot,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-recorded-gate',
+          title: 'Recorded gate blocker',
+          status: 'blocked',
+          projectPath: projectRoot,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      releases: [],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    await appendTaskEvidence(projectRoot, 'task-unproven-gate', {
+      id: 'esc-task-unproven-gate-1',
+      taskId: 'task-unproven-gate',
+      kind: 'escalation',
+      recordedAt: now,
+      payload: {
+        id: 'esc-task-unproven-gate-1',
+        taskId: 'task-unproven-gate',
+        agentId: 'worker-agent',
+        reason: 'gate_hard_failure',
+        handling: 'owner_required',
+        summary: 'A model claimed an unrelated build failure.',
+        raisedAt: now,
+      },
+    })
+    await appendTaskEvidence(projectRoot, 'task-recorded-gate', {
+      id: 'esc-task-recorded-gate-1',
+      taskId: 'task-recorded-gate',
+      kind: 'escalation',
+      recordedAt: now,
+      payload: {
+        id: 'esc-task-recorded-gate-1',
+        taskId: 'task-recorded-gate',
+        agentId: 'gate-checker-agent',
+        reason: 'gate_hard_failure',
+        handling: 'owner_required',
+        summary: 'A recorded hard gate failed.',
+        raisedAt: now,
+      },
+    })
+    await appendTaskEvidence(projectRoot, 'task-recorded-gate', {
+      id: 'task-recorded-gate-hard-failure',
+      taskId: 'task-recorded-gate',
+      kind: 'gate_result',
+      recordedAt: now,
+      payload: {
+        gateId: 'docs-build',
+        command: 'pnpm --filter @looma/docs build',
+        type: 'hard',
+        passed: false,
+        checkedAt: now,
+      },
+    })
+
+    const before = await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.13.105/unproven-gate-failure-recovery'],
+    })
+    expect(before.blocked.map(item => item.id)).toEqual(['0.13.105/unproven-gate-failure-recovery'])
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.105/unproven-gate-failure-recovery'],
+    })
+    expect(result.failed).toEqual([])
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.105/unproven-gate-failure-recovery'])
+
+    const queue = readProjectStateDatabaseQueueDefinition(tasksPath)!
+    const effective = await buildEffectiveTasks(projectRoot, queue.tasks as never[], { evidence: 'current' }) as unknown as Task[]
+    const unproven = effective.find(task => task.id === 'task-unproven-gate')!
+    const recorded = effective.find(task => task.id === 'task-recorded-gate')!
+    expect(unproven.status).toBe('ready')
+    expect(unproven.escalations?.find(escalation => escalation.id === 'esc-task-unproven-gate-1')?.resolvedBy).toBe('system')
+    expect(recorded.status).toBe('blocked')
+    expect(recorded.escalations?.find(escalation => escalation.id === 'esc-task-recorded-gate-1')?.resolvedAt).toBeUndefined()
+
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.105/unproven-gate-failure-recovery'],
+    })).applied).toEqual([])
   })
 })
 

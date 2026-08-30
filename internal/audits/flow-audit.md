@@ -60894,3 +60894,64 @@ overrode the existing shared action contract.
   named task, whose focused screen offered one `Resume only this work item`
   action. The owner can now understand the handoff in two reads and one click,
   without hunting through the stopped task's mechanics.
+
+### Finding: Unrelated repository failures cannot block a scoped task's handoff
+
+- [ ] User job: when Guildhall runs a narrowly scoped documentation task, a
+  pre-existing failure outside that task's declared verification scope cannot
+  turn it into an unexplained blocked item. The owner should receive the real
+  next decision, not be asked to retry work that cannot change the failure.
+- Finding, 2026-08-30: a real Looma + Knit docs/storybook convention task
+  stopped after three ticks with `gate_hard_failure`: pre-existing failures in
+  `packages/core` blocked review for a Markdown-only task. Its own acceptance
+  contract names the docs build, and the resulting project action simply
+  advanced back to ContextMenu without explaining that the docs task could not
+  resolve the unrelated failure. This makes a routine documentation task look
+  like an owner recovery problem and prevents meaningful release progress.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-scoped-gate-failure-authority-2026-08-30`.
+Touched contracts: gate-failure escalation authority. `gate_hard_failure` may
+block work only when the task already has durable, typed failed hard-gate
+evidence; a model's command summary or claimed unrelated baseline failure is
+display-only material and cannot create release-blocking state. A selected task
+with a system-resolved unsupported blocker must say that it is ready again
+while the shared project action remains the single next move. Considered but
+not touched: task priority, release ranking, provider selection, Markdown
+content, and hard-gate command selection. Required proof: an unsupported
+worker gate escalation is rejected without blocking the task, while a recorded
+failed hard gate still creates the recovery path.
+
+#### Schema Migration Decision
+
+Persisted state touched: legacy task escalation records. Change class:
+required corrective project migration. Existing-data impact:
+`0.13.105/unproven-gate-failure-recovery` resolves only open
+`gate_hard_failure` escalations whose effective task has no persisted failed
+hard `GateResult`, then returns that task to `ready`. Safety: a typed failed
+hard gate remains blocked, and reapplying the migration has no effect after the
+system resolution. Compatibility reader: existing effective-task and
+escalation readers already understand the resolution fields. Fixtures and
+tests cover an unsupported legacy blocker and a genuine failed gate. Owner
+plan text: Guildhall clears the unsupported blocker and returns the task to its
+own verification path. Revert behavior: disable the migration before applying
+it to leave existing records unchanged; after application, restore the prior
+blocked status only through an explicit recovery decision.
+
+- [x] Regression proof, 2026-08-30: `raise-escalation` now rejects a
+  `gate_hard_failure` without a durable failed hard-gate result, while a typed
+  failed gate remains eligible for recovery and an explicit scope disposition.
+  The automatic `0.13.105/unproven-gate-failure-recovery` migration resolves
+  only legacy unsupported blockers and returns them to `ready`; it leaves a
+  recorded hard-gate failure blocked. Focused escalation and migration tests
+  pass. TaskDrawer coverage also proves a system-repaired gate blocker explains
+  that the task is ready again while retaining the one shared next action.
+- [x] Installed proof, 2026-08-30: after `pnpm build`, `pnpm dev:install`,
+  restart, and `stale:false`, the real docs/storybook task was `ready` with its
+  old `gate_hard_failure` system-resolved. Its direct drawer says why the
+  blocker was cleared and presents the single shared `Open Work` action; that
+  action opens the named ContextMenu work item with one focused resume action.
+  The repair route had no page-level horizontal overflow at 1280x800,
+  1024x800, or 390x844. Migration coverage preserves a separate task with a
+  recorded typed failed hard gate as blocked.

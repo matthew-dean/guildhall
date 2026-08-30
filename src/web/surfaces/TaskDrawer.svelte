@@ -736,9 +736,17 @@
       ? 'One repair is ready'
       : 'Next action',
   )
+  const systemRepairedGateBlocker = $derived(Boolean(
+    task?.status === 'ready' &&
+    (task.escalations ?? []).some(escalation =>
+      escalation.reason === 'gate_hard_failure' && escalation.resolvedBy === 'system',
+    ),
+  ))
   const projectDecisionContext = $derived(
     firstOpenEscalation
       ? 'The task you opened stopped. Guildhall has selected the next work item that can move forward.'
+      : systemRepairedGateBlocker
+        ? 'Guildhall cleared a blocker that was not tied to this task. This task is ready again after the current work item.'
       : null,
   )
   const projectDecisionElsewhere = $derived(Boolean(

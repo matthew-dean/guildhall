@@ -461,6 +461,60 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: 'Retry worker' })).not.toBeInTheDocument()
   })
 
+  it('explains a system-repaired gate blocker while preserving the shared next action', async () => {
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          label: 'Work ready to resume',
+          buttonLabel: 'Open Work',
+          href: '/work?task=task-review',
+          tone: 'accent',
+          taskId: 'task-review',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'ready',
+        escalations: [{
+          id: 'esc-unsupported-gate',
+          taskId: 'task-link-editor',
+          agentId: 'worker-agent',
+          reason: 'gate_hard_failure',
+          summary: 'A previous run claimed an unsupported gate failure.',
+          raisedAt: now,
+          resolvedAt: '2026-05-20T09:00:00.000Z',
+          resolvedBy: 'system',
+        }],
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Next action')
+    expect(screen.getByText('Guildhall cleared a blocker that was not tied to this task. This task is ready again after the current work item.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeInTheDocument()
+  })
+
   it('keeps reviewer planning metadata out of the normal task overview', async () => {
     const payload = drawerPayload({
       threadTurns: [],
