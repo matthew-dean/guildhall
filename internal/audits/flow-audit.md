@@ -61349,3 +61349,54 @@ the effective task projection and changes no stored approval data.
   `LOO-EBUYE7` as queued rather than a second approval. The queue remained
   unclipped at 1024px and 390px; the one resume action stayed above
   the mobile fold, and selecting that row offered `Open task`, not approval.
+
+### Finding: Resuming work must never preserve an out-of-scope task sandbox
+
+- [ ] User job: when an owner resumes paused work, Guildhall either continues
+  the named task from its real in-scope progress or silently repairs its own
+  disposable sandbox first. The owner never restarts a docs task only to have
+  Guildhall direct work at an unrelated source file or failed build.
+- Finding, 2026-08-29: the real paused Looma + Knit task `LOO-1CWL9M` is
+  scoped to adding a convention in `docs/component-system.md`, but its retained
+  task worktree has an uncommitted `packages/core/stencil.config.ts` edit and a
+  stale checkpoint that directs the next worker to that core build file. The
+  recovery path classifies any dirty task worktree as partial progress, and
+  reusable-worktree synchronization then checkpoints it without verifying that
+  the change belongs to the current task.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-task-worktree-scope-integrity-2026-08-29`. Touched
+contracts: task worktree recovery and task worktree lifecycle. Before a
+no-progress timeout or a worker dispatch can preserve or reuse a task sandbox,
+Guildhall compares both uncommitted files and the branch delta from its base
+with the task's authoritative likely targets. A sandbox containing unrelated
+work is disposable system state: Guildhall snapshots only in-scope target
+content, tears down the worktree and branch, forgets its workspace registration
+and stale recovery checkpoint, recreates a fresh task branch from the task's
+configured base (falling back only when no base was stored), and restores only
+that scoped content. It must not expose raw file paths
+or a repair choice to the owner. Considered but not touched: task scope
+inference, source-reference schema, worker prompt wording, and release ranking.
+Required proof: unrelated dirty or committed work is discarded, valid scoped
+work survives, and the next worker receives a target-only context.
+
+- [x] Scope-integrity recovery now runs before a resumed worker dispatch as
+  well as on a no-progress timeout. It compares uncommitted files and the
+  branch delta, keeps only target-matching content, and rebuilds from the
+  stored task base.
+  Evidence: focused orchestrator coverage creates a real mixed task branch,
+  verifies the target documentation edit remains as the only pending edit,
+  verifies the unrelated core change is absent, and verifies the non-default
+  configured base is retained. Focused suite: 4/4; typecheck passed.
+- [ ] Drive the repaired path against the real Looma + Knit paused worktree
+  and confirm the app reports a resumed task whose fresh workspace contains
+  only the documentation task's progress.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. This corrects the lifecycle of already
+disposable task-worktree and checkpoint state. Existing task, workspace, and
+checkpoint records retain their format; an invalid workspace is removed through
+the existing lifecycle boundary before dispatch. Revert behavior: stop invoking
+the scope-integrity reset; no owner data is transformed or lost.

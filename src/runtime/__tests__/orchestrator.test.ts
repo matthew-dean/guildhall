@@ -29,7 +29,7 @@ import {
   type DomainLevers,
   type LeverSettings,
 } from '@guildhall/levers'
-import { InMemoryGitDriver } from '../git-driver.js'
+import { InMemoryGitDriver, NodeGitDriver } from '../git-driver.js'
 import { writeCheckpoint } from '@guildhall/tools'
 import { appendFailureClassificationNote, classifyAgentFailure } from '../policy.js'
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
@@ -11729,6 +11729,9 @@ describe('Orchestrator.run — full loops', () => {
   it('reopens stale no-output worker timeouts as partial progress when the task worktree is dirty', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'dirty-no-output')
     await fs.mkdir(worktreePath, { recursive: true })
+    const targetPath = path.join(worktreePath, 'scripts', 'prove-deepinfra.mjs')
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.writeFile(targetPath, 'export const proof = true\n', 'utf8')
     await writeQueue([
       mkTask({
         id: 'a',
@@ -11817,6 +11820,241 @@ describe('Orchestrator.run — full loops', () => {
       note.role === 'policy-classification' &&
       note.content.includes('"class":"model_tool_use_failure"'),
     )).toBe(true)
+  })
+
+  it('discards an out-of-scope dirty task sandbox before retrying a no-output timeout', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'out-of-scope-no-output')
+    await fs.mkdir(path.join(worktreePath, 'packages', 'core'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'core', 'stencil.config.ts'),
+      'export const unrelated = true\n',
+      'utf8',
+    )
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'a',
+      agentId: 'worker-agent',
+      intent: 'Continue unrelated core build work',
+      nextPlannedAction: 'Fix packages/core/stencil.config.ts',
+      nextActionKind: 'rerun_verification',
+      filesTouched: ['packages/core/stencil.config.ts'],
+    })
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Document the docs naming convention',
+        status: 'blocked',
+        assignedTo: 'worker-agent',
+        spec: VALID_SPEC,
+        worktreePath,
+        branchName: 'guildhall/task-a',
+        blockReason: 'human_judgment_required: Worker timed out after producing no visible progress.',
+        structuredSpec: fixtureStructuredSpec('Docs naming convention timeout', ['docs/component-system.md']),
+        recoveryCode: 'worker_timeout_no_progress',
+        escalations: [
+          {
+            id: 'esc-a',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            recoveryCode: 'worker_timeout_no_progress',
+            summary: 'Worker timed out after producing no visible progress.',
+            details: 'No in-scope progress was recorded.',
+            raisedAt: '2026-05-03T00:00:00.000Z',
+          } as any,
+        ],
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    expect(gitDriver.state.removedWorktrees).toEqual([worktreePath])
+    expect(gitDriver.state.deletedBranches).toEqual(['guildhall/task-a'])
+    await expect(fs.access(path.join(memoryDir, 'tasks', 'a', 'checkpoint.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.notes.some((note) =>
+      note.role === 'workspace-recovery' &&
+      note.content.includes('repaired a stale task workspace'),
+    )).toBe(true)
+    expect(task?.notes.some((note) => note.content.includes('packages/core/stencil.config.ts'))).toBe(false)
+  })
+
+  it('repairs an out-of-scope dirty task sandbox before worker dispatch', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'dispatch-out-of-scope')
+    await fs.mkdir(path.join(worktreePath, 'packages', 'core'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'core', 'stencil.config.ts'),
+      'export const unrelated = true\n',
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Document the docs naming convention',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        spec: VALID_SPEC,
+        worktreePath,
+        branchName: 'guildhall/task-a',
+        structuredSpec: fixtureStructuredSpec('Docs naming convention', ['docs/component-system.md']),
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    expect(gitDriver.state.removedWorktrees).toEqual([worktreePath])
+    expect(gitDriver.state.deletedBranches).toEqual(['guildhall/task-a'])
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.notes.some((note) =>
+      note.role === 'workspace-recovery' &&
+      note.content.includes('before dispatch'),
+    )).toBe(true)
+  })
+
+  it('preserves only in-scope committed task work when rebuilding a mixed task branch', async () => {
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'Exercise real task-worktree recovery.',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({ path: agentSettingsPath, settings })
+
+    const docsPath = path.join(tmpDir, 'docs', 'component-system.md')
+    const unrelatedPath = path.join(tmpDir, 'packages', 'core', 'stencil.config.ts')
+    await fs.mkdir(path.dirname(docsPath), { recursive: true })
+    await fs.mkdir(path.dirname(unrelatedPath), { recursive: true })
+    await fs.writeFile(docsPath, '# Component system\n', 'utf8')
+    await fs.writeFile(unrelatedPath, 'export const base = true\n', 'utf8')
+    execFileSync('git', ['add', 'docs/component-system.md', 'packages/core/stencil.config.ts'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'add component-system fixture'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['checkout', '-b', 'codex/component-audit-roadmap'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    await fs.writeFile(path.join(tmpDir, 'docs', 'audit-context.md'), 'component audit base\n', 'utf8')
+    execFileSync('git', ['add', 'docs/audit-context.md'], { cwd: tmpDir, stdio: 'ignore' })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'add component audit base'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['checkout', 'main'], { cwd: tmpDir, stdio: 'ignore' })
+
+    const worktreePath = path.join(process.env.GUILDHALL_CONFIG_DIR!, 'worktrees', 'test-ws', 'a')
+    await fs.mkdir(path.dirname(worktreePath), { recursive: true })
+    execFileSync('git', ['worktree', 'add', '-b', 'guildhall/task-a', worktreePath, 'codex/component-audit-roadmap'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    await fs.writeFile(
+      path.join(worktreePath, 'docs', 'component-system.md'),
+      '# Component system\n\n## Naming convention\n\nUse the documented component name.\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'core', 'stencil.config.ts'),
+      'export const unrelated = true\n',
+      'utf8',
+    )
+    execFileSync('git', ['add', 'docs/component-system.md', 'packages/core/stencil.config.ts'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'mixed stale task work'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Document the component naming convention',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        spec: VALID_SPEC,
+        worktreePath,
+        branchName: 'guildhall/task-a',
+        baseBranch: 'codex/component-audit-roadmap',
+        structuredSpec: fixtureStructuredSpec('Component naming convention', ['docs/component-system.md']),
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('a', { status: 'review' })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents: agentSet({ worker }),
+      gitDriver: new NodeGitDriver(),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    expect(worker.calls).toHaveLength(1)
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.worktreePath).toBe(worktreePath)
+    expect(task?.status).toBe('review')
+    expect(await fs.readFile(path.join(worktreePath, 'docs', 'component-system.md'), 'utf8')).toContain(
+      '## Naming convention',
+    )
+    expect(await fs.readFile(path.join(worktreePath, 'packages', 'core', 'stencil.config.ts'), 'utf8')).toBe(
+      'export const base = true\n',
+    )
+    expect(await fs.readFile(path.join(worktreePath, 'docs', 'audit-context.md'), 'utf8')).toBe(
+      'component audit base\n',
+    )
+    expect(execFileSync('git', ['diff', '--name-only', 'codex/component-audit-roadmap...HEAD'], {
+      cwd: worktreePath,
+      encoding: 'utf8',
+    }).trim()).toBe('')
+    expect(execFileSync('git', ['diff', '--name-only'], {
+      cwd: worktreePath,
+      encoding: 'utf8',
+    }).trim().split('\n').filter(Boolean)).toEqual(['docs/component-system.md'])
   })
 
   it('reopens a stale review-handoff tool-loop blocker after the validator bug is fixed', async () => {

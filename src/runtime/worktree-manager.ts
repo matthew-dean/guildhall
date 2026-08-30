@@ -104,6 +104,14 @@ export interface EnsureWorktreeResult {
   }
 }
 
+export interface DiscardTaskWorktreeInput {
+  task: Task
+  mode: WorktreeMode
+  projectId: string
+  projectPath: string
+  gitDriver: GitDriver
+}
+
 export class WorktreeSyncError extends Error {
   readonly code: 'task_worktree_sync' | 'task_worktree_sync_conflict'
 
@@ -327,6 +335,32 @@ export async function cleanupWorktreeForTerminal(
     throw new Error(`Refusing to remove non-Guildhall worktree for ${input.task.id}: ${worktreePath}`)
   }
   await input.gitDriver.removeWorktree(input.projectPath, worktreePath)
+}
+
+/**
+ * Drop a Guildhall-owned disposable task sandbox so the next dispatch starts
+ * from the configured base. Callers must establish that no in-scope task
+ * progress is present before using this recovery boundary.
+ */
+export async function discardTaskWorktreeForRecovery(
+  input: DiscardTaskWorktreeInput,
+): Promise<boolean> {
+  if (input.mode === 'none' || !input.task.worktreePath?.trim()) return false
+  const worktreePath = resolveRuntimePath(input.task.worktreePath)
+  const ownedRoots = [
+    path.resolve(worktreeRootFor(input.projectId)),
+    path.resolve(input.projectPath, DEFAULT_WORKTREE_ROOT_SEGMENT),
+  ]
+  if (!ownedRoots.some((ownedRoot) => isDescendantPath(ownedRoot, worktreePath))) {
+    throw new Error(`Refusing to discard non-Guildhall worktree for ${input.task.id}: ${worktreePath}`)
+  }
+  const branchName = input.task.branchName ?? computeBranchName(input.task, input.mode)
+  if (!branchName.startsWith('guildhall/task-')) {
+    throw new Error(`Refusing to discard non-Guildhall task branch for ${input.task.id}: ${branchName}`)
+  }
+  await input.gitDriver.removeWorktree(input.projectPath, worktreePath)
+  await input.gitDriver.deleteBranch(input.projectPath, branchName)
+  return true
 }
 
 function isDescendantPath(root: string, candidate: string): boolean {

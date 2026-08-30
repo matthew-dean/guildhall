@@ -62,6 +62,7 @@ import {
   findReclaimTasks,
   loadReclaimCandidates,
   readCheckpoint,
+  clearCheckpoint,
   checkpointIsFreshForTask,
   writeCheckpoint,
   ensureExploringTranscriptEntry,
@@ -201,6 +202,7 @@ import {
 } from './task-state-store.js'
 import {
   cleanupWorktreeForTerminal,
+  discardTaskWorktreeForRecovery,
   computeBranchName,
   computeWorktreePath,
   resolveWorktreeMode,
@@ -311,6 +313,11 @@ import { promisify } from 'node:util'
 import { resolveRuntimePath } from './path-utils.js'
 
 const execFileP = promisify(execFile)
+
+interface ScopedTaskFileSnapshot {
+  relativePath: string
+  contents: Buffer | null
+}
 
 function worktreeIncludeForTaskProject(
   config: ResolvedConfig,
@@ -3672,7 +3679,7 @@ export class Orchestrator {
     // Git authority of its own. That is a valid execution scope, not a dirty
     // checkout. Use the shared checkout until workspace/project resolution
     // identifies an actual repository.
-    const worktreeMode = repositoryStatus?.repository === false
+    let worktreeMode = repositoryStatus?.repository === false
       ? 'none'
       : proofRecoveryNeedsFreshWorktree(task)
         ? 'per_attempt'
@@ -3680,7 +3687,35 @@ export class Orchestrator {
     let activeWorktreePath = activeWorktreeSyncRecovery
       ? task.worktreePath ?? effectiveTaskProjectPath
       : effectiveTaskProjectPath
-    const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
+    const baseBranch = task.baseBranch?.trim() || await this.resolveBaseBranch(effectiveTaskProjectPath)
+    let scopedWorkspaceSnapshot: ScopedTaskFileSnapshot[] = []
+    if (!activeWorktreeSyncRecovery && agent.name === 'worker-agent') {
+      const repairedWorkspace = await this.discardOutOfScopeTaskWorktreeBeforeDispatch(task)
+      if (repairedWorkspace) {
+        scopedWorkspaceSnapshot = repairedWorkspace
+        worktreeMode = 'per_task'
+        const now = this.now()
+        const queuedTask = queueBefore.tasks.find((candidate) => candidate.id === task.id)
+        if (queuedTask) {
+          delete queuedTask.worktreePath
+          delete queuedTask.branchName
+          delete queuedTask.baseBranch
+          delete (queuedTask as Task & { workspace?: TaskWorkspaceState }).workspace
+          queuedTask.notes.push({
+            agentId: 'coordinator',
+            role: 'workspace-recovery',
+            content:
+              'Guildhall repaired a stale task workspace before dispatch. The next worker starts from the approved task scope rather than unrelated retained work.',
+            timestamp: now,
+          })
+          queuedTask.updatedAt = now
+          queueBefore.lastUpdated = now
+          await this.writeQueue(queueBefore)
+          task.notes = queuedTask.notes
+          task.updatedAt = now
+        }
+      }
+    }
     if (!activeWorktreeSyncRecovery && worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
       if (!task.worktreePath) {
         const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
@@ -3838,6 +3873,7 @@ export class Orchestrator {
         task.branchName = ensured.workspace.branchName
         task.baseBranch = ensured.workspace.baseBranch
         ;(task as Task & { workspace?: TaskWorkspaceState }).workspace = ensured.workspace
+        await this.restoreScopedTaskFiles(activeWorktreePath, scopedWorkspaceSnapshot)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         const queue = await this.readQueue()
@@ -10578,7 +10614,52 @@ export class Orchestrator {
         const dirtyTaskWorktree =
           taskWorktreePath.length > 0 &&
           !(await this.gitDriver.isClean(resolveRuntimePath(taskWorktreePath)))
-        if (dirtyTaskWorktree) {
+        const dirtyTaskFiles = dirtyTaskWorktree ? await this.changedFilesForTask(task) : []
+        const likelyTaskFiles = resolveLikelyTaskFiles(task)
+        const hasInScopeDirtyProgress = dirtyTaskFiles.some((file) =>
+          this.fileMatchesLikelyTarget(file, likelyTaskFiles, taskWorktreePath),
+        )
+        if (dirtyTaskFiles.length > 0 && !hasInScopeDirtyProgress) {
+          const discarded = await this.discardOutOfScopeTaskWorktree(task)
+          if (!discarded) continue
+          const classification: FailureClassification = {
+            class: 'provider_unavailable',
+            confidence: 'high',
+            evidence: [{
+              kind: 'task',
+              summary: 'Guildhall discarded an out-of-scope disposable task sandbox before retrying.',
+              ref: task.blockReason ?? 'worker timeout',
+            }],
+            scope: 'task',
+            safePlaybooks: ['retry_current_task_context'],
+            needsHuman: false,
+          }
+          const recoveryPlan = resolveRecoveryPlan({
+            taskId: task.id,
+            classification,
+            notes: task.notes,
+          })
+          resolveRecoverableProviderNoProgressTimeoutEscalations(
+            task,
+            now,
+            'Superseded after Guildhall discarded a stale out-of-scope task sandbox before retrying.',
+          )
+          if (activeEscalations(task).length > 0) continue
+          appendFailureClassificationNote(task, classification, {
+            agentId: 'coordinator',
+            timestamp: now,
+          })
+          appendRecoveryPlaybookNote(task, recoveryPlan, {
+            agentId: 'coordinator',
+            timestamp: now,
+            status: 'started',
+            summary:
+              'Guildhall discarded a stale task sandbox and will retry this task from its approved scope instead of resuming unrelated retained work.',
+          })
+          recoveryRole = 'workspace-recovery'
+          recoveryNote =
+            'Guildhall repaired a stale task workspace before retrying this work. The task stays in automation and will restart from its approved scope.'
+        } else if (hasInScopeDirtyProgress) {
           const classification: FailureClassification = {
             class: 'model_tool_use_failure',
             confidence: 'medium',
@@ -11246,6 +11327,116 @@ export class Orchestrator {
         `[guildhall] worktree cleanup failed for ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
       )
       return false
+    }
+  }
+
+  private async discardOutOfScopeTaskWorktree(task: Task): Promise<boolean> {
+    try {
+      const worktreeMode = await this.resolveWorktreeModeSafe()
+      const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
+      const discarded = await discardTaskWorktreeForRecovery({
+        task,
+        mode: task.worktreePath?.trim() ? 'per_task' : worktreeMode,
+        projectId: this.opts.config.workspaceId,
+        projectPath: effectiveTaskProjectPath,
+        gitDriver: this.gitDriver,
+      })
+      if (!discarded) return false
+      await Promise.all([
+        clearCheckpoint(this.opts.config.memoryDir, task.id),
+        clearTaskWorkspaceState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), task.id),
+      ])
+      delete task.worktreePath
+      delete task.branchName
+      delete task.baseBranch
+      delete (task as Task & { workspace?: TaskWorkspaceState }).workspace
+      return true
+    } catch (err) {
+      console.warn(
+        `[guildhall] could not discard out-of-scope worktree for ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return false
+    }
+  }
+
+  private async discardOutOfScopeTaskWorktreeBeforeDispatch(
+    task: Task,
+  ): Promise<ScopedTaskFileSnapshot[] | null> {
+    const taskWorktreePath = task.worktreePath?.trim() ?? ''
+    if (!taskWorktreePath) return null
+    const changedFiles = await this.changedFilesAcrossTaskWorkspace(task)
+    if (changedFiles.length === 0) return null
+    const likelyTaskFiles = resolveLikelyTaskFiles(task)
+    const scopedFiles = changedFiles.filter((file) =>
+      this.fileMatchesLikelyTarget(file, likelyTaskFiles, taskWorktreePath),
+    )
+    if (scopedFiles.length === changedFiles.length) return null
+    const snapshots = await this.captureScopedTaskFiles(taskWorktreePath, scopedFiles)
+    const discarded = await this.discardOutOfScopeTaskWorktree(task)
+    if (!discarded) {
+      throw new Error(`Guildhall could not repair the stale task workspace for ${task.id}`)
+    }
+    return snapshots
+  }
+
+  private async changedFilesAcrossTaskWorkspace(task: Task): Promise<string[]> {
+    const workingFiles = await this.changedFilesForTask(task)
+    const worktreePath = task.worktreePath?.trim()
+    if (!worktreePath) return workingFiles
+    const baseBranch = task.baseBranch?.trim() || await this.resolveBaseBranch(
+      this.resolveEffectiveTaskProjectPath(task),
+    )
+    try {
+      const { stdout } = await execFileP('git', ['diff', '--name-only', `${baseBranch}...HEAD`], {
+        cwd: resolveRuntimePath(worktreePath),
+        maxBuffer: 1024 * 1024,
+      })
+      return uniqueStrings([
+        ...workingFiles,
+        ...stdout.split('\n').map(file => file.trim()).filter(file =>
+          file.length > 0 && !isIgnorableCheckpointPath(file),
+        ),
+      ])
+    } catch {
+      return workingFiles
+    }
+  }
+
+  private async captureScopedTaskFiles(
+    worktreePath: string,
+    files: readonly string[],
+  ): Promise<ScopedTaskFileSnapshot[]> {
+    const root = path.resolve(worktreePath)
+    return await Promise.all(files.map(async file => {
+      const relativePath = path.relative(root, path.resolve(root, file))
+      if (!relativePath || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+        throw new Error(`Refusing to preserve a task file outside its worktree: ${file}`)
+      }
+      try {
+        return { relativePath, contents: await fs.readFile(path.join(root, relativePath)) }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { relativePath, contents: null }
+        throw err
+      }
+    }))
+  }
+
+  private async restoreScopedTaskFiles(
+    worktreePath: string,
+    snapshots: readonly ScopedTaskFileSnapshot[],
+  ): Promise<void> {
+    const root = path.resolve(worktreePath)
+    for (const snapshot of snapshots) {
+      const target = path.resolve(root, snapshot.relativePath)
+      if (!target.startsWith(`${root}${path.sep}`)) {
+        throw new Error(`Refusing to restore a task file outside its worktree: ${snapshot.relativePath}`)
+      }
+      if (snapshot.contents === null) {
+        await fs.rm(target, { force: true })
+      } else {
+        await fs.mkdir(path.dirname(target), { recursive: true })
+        await fs.writeFile(target, snapshot.contents)
+      }
     }
   }
 

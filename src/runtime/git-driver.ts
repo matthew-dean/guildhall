@@ -324,8 +324,10 @@ export interface GitDriver {
   ): Promise<WorktreeSyncResult>
   /** Inspect whether a reusable worktree still has an active merge. */
   worktreeMergeState(worktreePath: string, baseBranch: string): Promise<WorktreeMergeState>
-  /** Remove a worktree (and its branch ref). Safe to call on missing paths. */
+  /** Remove a worktree. Safe to call on missing paths. */
   removeWorktree(repoRoot: string, worktreePath: string): Promise<void>
+  /** Remove a disposable Guildhall task branch after its worktree is gone. */
+  deleteBranch(repoRoot: string, branch: string): Promise<void>
   /** Package dirty shared-checkout changes into a task branch commit. */
   checkpointDirtyWork(
     repoRoot: string,
@@ -625,6 +627,22 @@ export class NodeGitDriver implements GitDriver {
     await execGit(['worktree', 'remove', '--force', resolvedWorktreePath], {
       cwd: resolveRuntimePath(repoRoot),
     })
+  }
+
+  async deleteBranch(repoRoot: string, branch: string): Promise<void> {
+    const normalizedBranch = branch.trim()
+    if (!normalizedBranch.startsWith('guildhall/task-')) {
+      throw new Error(`Refusing to delete non-Guildhall task branch: ${branch}`)
+    }
+    try {
+      await execGit(['branch', '--delete', '--force', normalizedBranch], {
+        cwd: resolveRuntimePath(repoRoot),
+      })
+    } catch (err) {
+      const detail = errorDetail(err)
+      if (/not found|not a valid branch name|not a branch/i.test(detail)) return
+      throw err
+    }
   }
 
   async checkpointDirtyWork(
@@ -936,6 +954,7 @@ export interface InMemoryGitDriverState {
   worktreeSyncs: Array<{ worktreePath: string; baseBranch: string; commitMessage: string; result: WorktreeSyncResult }>
   checkpoints: Array<CheckpointDirtyWorkOptions & { result: CheckpointResult }>
   removedWorktrees: string[]
+  deletedBranches: string[]
   merges: { branch: string; baseBranch: string; result: MergeResult }[]
   cherryPicks: { branch: string; baseBranch: string; result: MergeResult }[]
   pushes: { branch: string; result: PushResult }[]
@@ -979,6 +998,7 @@ export class InMemoryGitDriver implements GitDriver {
       worktreeSyncs: [],
       checkpoints: [],
       removedWorktrees: [],
+      deletedBranches: [],
       merges: [],
       cherryPicks: [],
       pushes: [],
@@ -1132,6 +1152,10 @@ export class InMemoryGitDriver implements GitDriver {
 
   async removeWorktree(_repoRoot: string, worktreePath: string): Promise<void> {
     this.state.removedWorktrees.push(worktreePath)
+  }
+
+  async deleteBranch(_repoRoot: string, branch: string): Promise<void> {
+    this.state.deletedBranches.push(branch)
   }
 
   async checkpointDirtyWork(
