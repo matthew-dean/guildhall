@@ -63542,3 +63542,44 @@ current typed Git-story snapshot and is not stored as task or release state.
   bounded recovery was exhausted; the saved change remained in review and was
   not falsely marked done. Its broader Stage 2 proof blockers remain visible
   as release state, not as a false completed-release claim.
+
+### Finding: A focused recovery must suppress generic project controls
+
+- [x] User job: when Guildhall identifies one saved change whose automated
+  review should be retried, the owner sees that one retry action and no generic
+  project command that starts a different workflow.
+- Live finding, 2026-08-30: Narrative Harness Work correctly named
+  `NAR-091` and rendered `Retry review`, while project chrome also offered a
+  generic `Resume`. The two commands had different semantics, so the header
+  made the next step ambiguous instead of reinforcing the focused decision.
+
+#### Contract Touch Decision
+
+Work id: `focused-review-retry-one-owner-command-2026-08-30`. Touched
+contracts: the project-shell visibility rule that consumes the shared
+owner-action model. The underlying decision, task status, recovery operation,
+and run-control contract are unchanged. Considered but not touched: action
+ranking, review-retry recovery logic, run execution, and task persistence.
+Required proof: a focused `review_retry` action has one visible owner command
+and the project shell does not render a competing generic `Resume` or
+`Retry review` control. Apply/revert: extend the existing focused-action
+visibility rule.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This is a presentation constraint over the existing
+shared owner-action model.
+
+#### Validation
+
+- `pnpm exec vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts`
+  passed (80 tests). The new regression verifies the header stays clear while
+  the content-area `Retry review` action remains available. The shell tests now
+  also assert the current concise Release orientation (`Current work`) rather
+  than the removed `Scope readiness` wall of status copy.
+- Installed Narrative Harness replay, 2026-08-30: after fresh build/install,
+  restart, and `stale:false`, the focused Work route showed project progress,
+  `NAR-091`, the saved-change explanation, and one visible `Retry review`
+  button. The top bar contained only project navigation and `New thread`; it
+  did not render `Resume` or a duplicate retry action, and the viewport had no
+  horizontal overflow.

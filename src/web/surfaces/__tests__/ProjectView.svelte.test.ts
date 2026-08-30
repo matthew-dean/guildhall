@@ -518,7 +518,7 @@ describe('ProjectView', () => {
     ['planner', 'Knit: add link editor controls'],
     ['map', 'Project map'],
     ['timeline', 'What needs your attention'],
-    ['release', 'Scope readiness'],
+    ['release', 'Current work'],
     ['settings', 'Settings'],
     ['workspace-import', 'Review existing project work'],
     ['facts', 'Project map'],
@@ -533,7 +533,7 @@ describe('ProjectView', () => {
   it('loads project detail before rendering a cold direct Release route', async () => {
     await renderProjectViewWithoutInitialDetail('release')
 
-    expect(await screen.findByText('Scope readiness')).toBeInTheDocument()
+    expect(await screen.findByText('Current work')).toBeInTheDocument()
     expect(screen.queryByText('Loading project...')).not.toBeInTheDocument()
   })
 
@@ -694,9 +694,9 @@ describe('ProjectView', () => {
     render(ProjectView, { initialView: 'release', initialSub: null, projectId: 'looma-knit' })
 
     expect(screen.getByText('Loading project...')).toBeInTheDocument()
-    expect(screen.queryByText('Scope readiness')).toBeNull()
+    expect(screen.queryByText('Current work')).toBeNull()
     pendingProject.resolve(json(detail()))
-    expect(await screen.findByText('Scope readiness')).toBeInTheDocument()
+    expect(await screen.findByText('Current work')).toBeInTheDocument()
     expect(screen.getByText('Release status')).toBeInTheDocument()
   })
 
@@ -1875,6 +1875,50 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: 'Advance one task' })).not.toBeInTheDocument()
     },
   )
+
+  it('keeps the generic project run control out of chrome when review retry owns the next action', async () => {
+    const reviewRetry = detail({
+      startReadiness: {
+        canStart: true,
+        code: 'review_retry',
+        message: 'The saved change is intact; retry review starts that check again.',
+        actionHref: '/work?task=task-link-editor',
+        focusTaskId: 'task-link-editor',
+        focusTaskTitle: 'Knit: add link editor controls',
+        focusKind: 'review_retry',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          code: 'review_retry',
+          taskId: 'task-link-editor',
+          label: 'Automated review needs retry',
+          taskLabel: 'Knit: add link editor controls',
+          buttonLabel: 'Retry review',
+          href: '/work?task=task-link-editor',
+          tone: 'warn',
+          operation: 'start_focused',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Retry review',
+          startEnabled: true,
+          pauseEnabled: false,
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    })
+    installFetchFakes(reviewRetry)
+
+    await renderProjectView('overview', null, 'looma-knit', reviewRetry)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Resume')
+    expect(topbar).not.toHaveTextContent('Retry review')
+    expect(screen.getByRole('button', { name: 'Retry review' })).toBeInTheDocument()
+  })
 
   it('keeps generic Resume out of project chrome when blocked task recovery owns the next action', async () => {
     const blockedTask = detail({

@@ -790,6 +790,7 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
   const directTaskPrimaryAction = $derived(
     (primaryAction?.code === 'ready_work' ||
       primaryAction?.code === 'paused_live_work' ||
+      primaryAction?.code === 'review_retry' ||
       primaryAction?.code === 'worker_recovery' ||
       primaryAction?.code === 'blocked_work') &&
       Boolean(primaryAction.taskId),
