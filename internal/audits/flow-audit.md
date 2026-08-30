@@ -62694,7 +62694,7 @@ state.
 
 ### Finding: Focused Work must not stack three names for the same live state
 
-- [ ] User job: when an owner opens the one current task, the route names the
+- [x] User job: when an owner opens the one current task, the route names the
   scope once, gives its bounded progress once, and uses the decision card for
   the actual execution state and task. A running task must not make the owner
   read three stacked variants of “current work is underway” before seeing what
@@ -62732,7 +62732,7 @@ No persisted-schema change. Existing shared fields remain the authority.
 
 ### Finding: Automated review must not masquerade as fresh implementation work
 
-- [ ] User job: after implementation hands a task to an automated reviewer,
+- [x] User job: after implementation hands a task to an automated reviewer,
   including after a local-service restart, the owner can see that the saved
   change is awaiting review and resume that review without being told the task
   is a new ready-to-start implementation item.
