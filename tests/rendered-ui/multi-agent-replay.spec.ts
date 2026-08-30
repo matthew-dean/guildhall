@@ -9,6 +9,7 @@ import {
   classifyRouteProbe,
   routeApiChecks,
 } from '../../scripts/browser-route-proof.mjs'
+import { applyRequiredProjectUpdates } from './flow-audit-assertions'
 
 const replayProjectIds = ['jess', 'commerce-project', 'looma-knit', 'narrative-harness', 'font-something']
 const fixtureRoot = join(process.cwd(), '.playwright-fixtures')
@@ -205,12 +206,16 @@ test.afterAll(async () => {
     }
     if (originalTasks === undefined) continue
     const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+    await mkdir(join(projectPath, 'memory'), { recursive: true })
+    await mkdir(projectSystemStateDir(projectPath), { recursive: true })
     await writeFile(tasksPath, originalTasks, 'utf8')
     await writeFile(join(projectSystemStateDir(projectPath), 'TASKS.json'), originalTasks, 'utf8')
   }
 })
 
 test('spec review starts at one decision without a tab hunt', async ({ page }) => {
+  await page.goto('/projects/narrative-harness/work')
+  await applyRequiredProjectUpdates(page)
   await page.route('**/api/project?*', async route => {
     if (!route.request().url().includes('projectId=narrative-harness')) {
       await route.continue()
@@ -222,7 +227,12 @@ test('spec review starts at one decision without a tab hunt', async ({ page }) =
       response,
       json: {
         ...body,
-        startReadiness: { ...body.startReadiness, canStart: true, code: 'ready_work' },
+        startReadiness: {
+          ...body.startReadiness,
+          canStart: true,
+          code: 'ready_work',
+          reviewTaskIds: ['coherence-reviewer-mvp'],
+        },
       },
     })
   })
@@ -242,6 +252,8 @@ test('spec review starts at one decision without a tab hunt', async ({ page }) =
 })
 
 test('owner input is a response surface, not a Thread dashboard', async ({ page }) => {
+  await page.goto('/projects/jess/work')
+  await applyRequiredProjectUpdates(page)
   const presentOwnerQuestion = async (route: any) => {
     const url = route.request().url()
     if (
@@ -284,9 +296,12 @@ test('owner input is a response surface, not a Thread dashboard', async ({ page 
             ...(actionModel.primaryAction ?? {}),
             label: 'Answer a project question',
             buttonLabel: 'Answer question',
-            href: '/thread?thread=task%3Abc-jess-structural_review-8c11fc652d-2026-06-04T00-44-08-860Z',
+            href: '/thread?thread=bc-owner-question',
             tone: 'warn',
             code: 'owner_input_required',
+            taskId: null,
+            taskLabel: 'Jess',
+            detail: 'Which outcome should this release optimize for?',
           },
         },
         ...(url.includes('/api/project/thread?')

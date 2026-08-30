@@ -23,3 +23,16 @@
 - **Fixtures and tests:** completed-intake materialization tests cover old and new handoff states; project-action-model tests cover summary/current action behavior; schema-36 upgrade, release-selection round trip, and compact release-readiness tests cover dependency fields; the Narrative Harness and Looma rendered fixtures prove parent/child suppression with exact progressive counts; calibration validation covers the changed lifecycle cases.
 - **Owner-facing plan text:** no migration action is required. Existing projects upgrade when Guildhall opens their writable state database.
 - **Rollback/revert behavior:** stop new writes before rolling back. JSON readers from the previous build ignore additive fields, but rolling back a schema-37 database requires the normal pre-migration backup/restore path rather than dropping columns in place. Preserve intake files so a forward repair can recover materialized handoffs.
+
+### Legacy task-array compatibility amendment
+
+- **Work id:** `pr20-legacy-task-array-reconciliation-2026-08-30`.
+- **Persisted schema touched:** none. The migration boundary now converts the oldest top-level `TASKS.json` array form into the existing version-1 queue envelope before schema validation.
+- **Contracts considered but not touched:** task identity and ordering, task status, release membership, dependency authority, runtime evidence, database schema, public API response shapes, and the current version-1 queue envelope.
+- **Existing data impact:** legacy arrays retain every task in order and gain only the envelope metadata (`version: 1` plus a deterministic `lastUpdated` derived from their task timestamps, with the legacy epoch fallback). Current envelope-shaped queues are unchanged.
+- **Runtime boundary:** read-only projections may use the deterministic compatibility envelope, but only an explicit project migration persists it. Refresh skips stale-blocker mutation for a top-level legacy array while continuing to repair current queues and legacy envelope-shaped queues.
+- **Required follow-up:** none. The explicit project migration remains the sole path that persists the compatibility envelope.
+- **Proof:** a focused regression validates the array-to-envelope conversion; the release suite covers persisted-state migration behavior; the rendered suite proves the migration gate, post-migration routes, and shared action surfaces in one ordered run.
+- **Waivers:** no behavioral, compatibility, or proof waivers.
+- **Owner-review items:** legacy arrays remain readable before migration without being rewritten by refresh; after the owner applies the required migration, Guildhall persists the supported queue envelope and continues normal stale-blocker repair.
+- **Rollback/revert behavior:** revert the adapter and guard together. No reverse data migration is required because the produced envelope is already the supported persisted format.

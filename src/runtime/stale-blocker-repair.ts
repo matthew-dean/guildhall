@@ -305,6 +305,10 @@ export async function repairCompletionProofCriteriaForProjectWithEvidence(projec
 export async function repairStaleBlockersForProjectWithRuntime(projectPath: string): Promise<StaleBlockerRepairResult> {
   const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
   const rawQueue = await readProjectTaskQueueForRichMutation(projectPath)
+  // Top-level task arrays predate the current queue envelope and are repaired
+  // only by the explicit project migration. Refresh must not promote or
+  // rewrite that legacy source as a side effect.
+  if (Array.isArray(rawQueue)) return { changed: false, repairs: [] }
   const queue = preserveRuntimeOverlayOnTaskQueueParse(rawQueue, TaskQueueSchema.parse(rawQueue))
   const result = repairStaleBlockersInQueue(queue)
   if (result.changed) {
