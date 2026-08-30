@@ -290,10 +290,61 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.queryByText('Task size')).not.toBeInTheDocument()
     expect(screen.queryByText('Add the link editing controls to the selected text menu.')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'View task details' }))
+    await user.click(screen.getByRole('button', { name: 'View checkpoint' }))
     await waitFor(() => {
-      expect(path.href).toBe('/projects/looma-knit/task/task-link-editor?detail=full&tab=overview')
+      expect(path.href).toBe('/projects/looma-knit/task/task-link-editor?detail=checkpoint')
     })
+  })
+
+  it('keeps the shared resume action visible when an owner opens a saved checkpoint', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?detail=checkpoint')
+    path.value = '/projects/looma-knit/task/task-link-editor?detail=checkpoint'
+    path.href = '/projects/looma-knit/task/task-link-editor?detail=checkpoint'
+    project.detail = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'Work paused',
+          detail: 'The task is paused. Resume continues from its pinned checkpoint.',
+          buttonLabel: 'Resume work',
+          href: '/work?task=task-link-editor',
+          tone: 'accent',
+          taskId: 'task-link-editor',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as ProjectDetail
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'review',
+        openQuestions: [],
+        latestCheckpoint: {
+          nextPlannedAction: 'Rerun the focused extension tests, then continue from the saved verification evidence.',
+        },
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    }))
+
+    render(TaskDrawer, { taskId: 'task-link-editor', projectId: 'looma-knit', onClose: vi.fn() })
+
+    expect(await screen.findByRole('button', { name: 'Resume work' })).toBeInTheDocument()
+    expect(screen.getByText('Checkpoint saved')).toBeInTheDocument()
+    expect(screen.getByText('Rerun the focused extension tests, then continue from the saved verification evidence.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open full task record' })).toBeInTheDocument()
+    expect(screen.queryByText('Task links')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delivery steps')).not.toBeInTheDocument()
+    expect(screen.queryByText('Add the link editing controls to the selected text menu.')).not.toBeInTheDocument()
   })
 
   it('confirms focused work is underway without dumping the task record', async () => {

@@ -182,13 +182,17 @@
     }
   }
 
-  function requestedInitialTab(href: string): DrawerTab | null {
+  function requestedParams(href: string): URLSearchParams {
     const queryStart = href.indexOf('?')
     const hashStart = href.indexOf('#', queryStart)
     const search = queryStart >= 0
       ? href.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart)
       : (typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, ''))
-    const raw = new URLSearchParams(search).get('tab')
+    return new URLSearchParams(search)
+  }
+
+  function requestedInitialTab(href: string): DrawerTab | null {
+    const raw = requestedParams(href).get('tab')
     if (raw === 'action') return 'current'
     if (
       raw === 'current' ||
@@ -206,21 +210,15 @@
   }
 
   function requestedFullRecord(href: string): boolean {
-    const queryStart = href.indexOf('?')
-    const hashStart = href.indexOf('#', queryStart)
-    const search = queryStart >= 0
-      ? href.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart)
-      : (typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, ''))
-    return new URLSearchParams(search).get('detail') === 'full'
+    return requestedParams(href).get('detail') === 'full'
+  }
+
+  function requestedCheckpoint(href: string): boolean {
+    return requestedParams(href).get('detail') === 'checkpoint'
   }
 
   function requestedDiagnosticContext(href: string): boolean {
-    const queryStart = href.indexOf('?')
-    const hashStart = href.indexOf('#', queryStart)
-    const search = queryStart >= 0
-      ? href.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart)
-      : (typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, ''))
-    return new URLSearchParams(search).get('diagnostics') === 'context'
+    return requestedParams(href).get('diagnostics') === 'context'
   }
 
   const BASE_TABS = [
@@ -456,6 +454,12 @@
 
   function openFullTaskRecord(): void {
     nav(`${currentTaskHref(taskId, scopedProjectId())}?detail=full&tab=overview`, {
+      backgroundPath: drawerBackgroundPath(),
+    })
+  }
+
+  function openCheckpoint(): void {
+    nav(`${currentTaskHref(taskId, scopedProjectId())}?detail=checkpoint`, {
       backgroundPath: drawerBackgroundPath(),
     })
   }
@@ -714,6 +718,7 @@
     return next
   })
   const fullRecordRequested = $derived(requestedFullRecord(routeHref || navPath.href || currentBrowserHref()))
+  const checkpointRequested = $derived(requestedCheckpoint(routeHref || navPath.href || currentBrowserHref()))
   const diagnosticContextRequested = $derived(requestedDiagnosticContext(routeHref || navPath.href || currentBrowserHref()))
   const scopeHandoffState = $derived.by(() => task?.id
     ? project.detail?.orientationSpine?.scopeRows?.find(row => row.taskId === task.id)?.handoffState
@@ -1314,9 +1319,26 @@
               <Icon name="sparkles" size={14} />
               {projectPrimaryAction?.buttonLabel ?? 'Resume work'}
             </Button>
-            <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View task details</Button>
+            {#if checkpointRequested}
+              <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>Open full task record</Button>
+            {:else}
+              <Button variant="secondary" size="sm" onclick={openCheckpoint}>View checkpoint</Button>
+            {/if}
           </div>
         </UtilityPanel>
+        {#if checkpointRequested && drawerOutcome}
+          <UtilityPanel
+            as="section"
+            className="drawer-outcome"
+            tone={drawerOutcomeTone}
+            railStrength="strong"
+            ariaLabel={drawerOutcome.eyebrow}
+          >
+            <span class="outcome-eyebrow">{drawerOutcome.eyebrow}</span>
+            <strong>{drawerOutcome.title}</strong>
+            <span>{drawerOutcome.detail}</span>
+          </UtilityPanel>
+        {/if}
       {:else if showFocusedRunningState && task}
         <UtilityPanel
           as="section"
@@ -1554,7 +1576,9 @@
                   onclick={() => runProject('start', task.id)}
                 >
                   <Icon name="sparkles" size={14} />
-                  Resume only this work item
+                  {projectPrimaryAction?.taskId === task.id
+                    ? projectPrimaryAction.buttonLabel ?? 'Resume work'
+                    : 'Resume only this work item'}
                 </Button>
               {/if}
             {/if}

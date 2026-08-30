@@ -62824,3 +62824,54 @@ orientation detail; release and action facts remain the existing authorities.
   `Resume work`, with no horizontal overflow. Narrative Harness independently
   rendered Stage 2 progress, its saved review handoff, and one `Resume review`
   action without the removed orientation narrative.
+
+### Finding: Opening task details must preserve the action-first handoff
+
+- [x] User job: after choosing `View task details` for paused work, the owner
+  can still see and execute `Resume work` immediately. Details must provide
+  only the next checkpoint and its one decision by default; the full brief,
+  raw metadata, linked-task inventory, and secondary task operations stay out
+  of the first reading path.
+- Live finding, 2026-08-30: t-minus-t's compact `TMI-004` handoff correctly
+  showed `Resume work`. Clicking `View task details` replaced it with two
+  repeated `Overview` labels, `0/1 DELIVERY STEPS` twice, the full imported
+  task brief, five metadata lines, an empty links section, a duplicate
+  delivery-step list, and `Resume only this work item`. The actual primary
+  resume command vanished precisely when the owner requested more context.
+
+#### Contract Touch Decision
+
+Work id: `task-detail-preserves-shared-owner-action-2026-08-30`. Touched
+contracts: TaskDrawer's default task-detail composition and its use of the
+existing shared primary action. The focused overview will preserve the owner
+handoff and reduce default content to the saved checkpoint; full task material
+will remain an explicit deeper inspection surface. Considered but not touched:
+task lifecycle, task content, checkpoint persistence, action ranking, run
+dispatch, task routes, and persisted schema. Required proof: opening paused
+task details retains `Resume work`, contains no duplicated overview/progress
+labels, and does not render the full brief or operational metadata until the
+owner deliberately opens deeper details. Apply/revert: TaskDrawer presentation
+only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing task and primary-action data are
+recomposed at the detail boundary.
+
+#### Validation
+
+- `TaskDrawer.svelte.test.ts` passes 75 focused tests. The new checkpoint test
+  proves the shared `Resume work` action, saved checkpoint, and deliberately
+  deeper full-record affordance coexist without task links, delivery steps, or
+  task description on the checkpoint screen. The drawer's query parsing is
+  centralized so checkpoint, full-record, diagnostic, and tab routes share the
+  same URL interpretation.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass. After `pnpm dev:install`, `guildhall stop`, and
+  `guildhall start`, `/api/stale-server` reported `stale:false` with zero
+  startup errors. The real t-minus-t flow was replayed: the compact task
+  handoff had `Resume work` and `View checkpoint`; the checkpoint screen kept
+  `Resume work`, exposed the saved next step, and offered `Open full task
+  record`; the explicitly opened full record kept the shared `Resume work`
+  action rather than `Resume only this work item`. Narrative Harness's NAR-091
+  task independently rendered one saved-review handoff and `Resume review`.
