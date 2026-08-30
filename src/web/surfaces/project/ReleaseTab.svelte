@@ -14,7 +14,7 @@
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { releaseVerdictSummary } from '../../lib/release-readiness.js'
-  import type { ProjectDetail, ProjectOrientationSpine, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
+  import type { ProjectDetail, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
 
   interface ReleaseItem {
     id?: string
@@ -109,7 +109,6 @@
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
-  let spine = $state<ProjectOrientationSpine | null>(null)
   let error = $state<string | null>(null)
   let initNeeded = $state(false)
   let closeBusy = $state(false)
@@ -179,24 +178,6 @@
     }
   })
 
-  $effect(() => {
-    let disposed = false
-    spine = null
-    projectFetch('/api/project/spine?compact=true', { cache: 'no-store' }, activeProjectId)
-      .then(r => r.json())
-      .then(j => {
-        if (disposed) return
-        spine = (j?.spine ?? null) as ProjectOrientationSpine | null
-      })
-      .catch(() => {
-        if (disposed) return
-        spine = null
-      })
-    return () => {
-      disposed = true
-    }
-  })
-
   function idOf(it: ReleaseItem): string {
     return (it.id ?? it.taskId) ?? ''
   }
@@ -255,14 +236,9 @@
       if (payload.release && typeof payload.release === 'object' && !Array.isArray(payload.release)) {
         data = { ...data, release: payload.release as ReleasePayload['release'] }
       }
-      const [summaryResponse, spineResponse] = await Promise.all([
-        projectFetch('/api/project/release-readiness/summary', { cache: 'no-store' }, activeProjectId),
-        projectFetch('/api/project/spine?compact=true', { cache: 'no-store' }, activeProjectId),
-      ])
+      const summaryResponse = await projectFetch('/api/project/release-readiness/summary', { cache: 'no-store' }, activeProjectId)
       const summary = await summaryResponse.json().catch(() => null) as Partial<ReleasePayload> | null
       if (summary && !summary.error) data = { ...data, ...summary }
-      const spinePayload = await spineResponse.json().catch(() => null) as { spine?: ProjectOrientationSpine | null } | null
-      spine = spinePayload?.spine ?? spine
     } catch (err) {
       closeError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -390,7 +366,7 @@
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
   const openCriteria = $derived(criteria.filter(criterion => criterion.items.length > 0))
   const hasNamedRelease = $derived(Boolean(data?.release?.label ?? projectSummary?.release?.label))
-  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
+  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Release')
 
   const verdict = $derived(data ? releaseVerdictSummary(data) ?? { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' } : { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' })
   const verdictTitle = $derived(data?.verdict?.title ?? verdict.label)
@@ -413,26 +389,8 @@
           description: '',
           },
   )
-  const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? projectSummary?.release?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Unreleased work')
-  const spineReleaseLabel = $derived(spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? projectSummary?.release?.label ?? 'Unreleased work')
-
-  const statusRows = $derived(
-    data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],
-  )
+  const releaseLabel = $derived(data?.release?.label ?? projectSummary?.release?.label ?? '')
   const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
-  const spineReleaseBlocker = $derived(spine?.release?.blockers?.[0] ?? null)
-  const spineBlockerNode = $derived(spineReleaseBlocker?.owningNodeId ? spine?.nodes?.[spineReleaseBlocker.owningNodeId] ?? null : null)
-  const spineTopBlockerLabel = $derived.by(() => {
-    const blocker = spine?.summary?.topBlocker
-    if (!blocker) return spineReleaseBlocker?.label ?? null
-    return typeof blocker === 'string' ? blocker : blocker.label ?? spineReleaseBlocker?.label ?? null
-  })
-  const spineScopeCounts = $derived.by(() => {
-    if (!spine?.summary) return ''
-    const included = spine.summary.includedWorkCount ?? spine.summary.includedCount ?? 0
-    const deferred = spine.summary.deferredWorkCount ?? spine.summary.deferredCount ?? 0
-    return `${included} included · ${deferred} later`
-  })
 </script>
 
 {#if initNeeded}
@@ -453,7 +411,7 @@
 {:else}
   <div class="release-shell">
     <SectionHeader
-      eyebrow={releaseLabel}
+      eyebrow={releaseLabel || undefined}
       title={sectionCopy.title}
       description={sectionCopy.description}
       headingTag="h2"
@@ -472,33 +430,6 @@
       <NoticeBand tone="danger" role="alert" label="Release" title="Could not ship release">
         <p>{closeError}</p>
       </NoticeBand>
-    {/if}
-
-    {#if spine?.summary?.headline && !hasNamedRelease && (section === 'criteria' || !releaseShipped)}
-      <FrameCard
-        tone={spineTopBlockerLabel ? 'warn' : 'neutral'}
-        padding="compact"
-        class="release-spine-card"
-      >
-        <div class="release-spine">
-          <div>
-            <span class="release-spine-label">{spineReleaseLabel}</span>
-            <strong>{spine.summary.headline}</strong>
-            <p>{spine.summary.purpose ?? spine.charter?.goal ?? 'Project purpose has not been pinned yet.'}</p>
-          </div>
-          <div class="release-spine-side">
-            {#if spineScopeCounts}
-              <StatusPill label={spineScopeCounts} tone="neutral" />
-            {/if}
-            {#if spineTopBlockerLabel}
-              <span>Top blocker: {spineTopBlockerLabel}</span>
-            {/if}
-            {#if spineBlockerNode}
-              <button type="button" onclick={() => openTask(spineBlockerNode.refs?.taskIds?.[0] ?? '')}>{spineBlockerNode.title}</button>
-            {/if}
-          </div>
-        </div>
-      </FrameCard>
     {/if}
 
     {#if section === 'verdict'}
@@ -726,55 +657,6 @@
     justify-content: flex-end;
   }
 
-  .release-spine {
-    display: grid;
-    grid-template-columns: minmax(18rem, 1fr) minmax(16rem, 0.75fr);
-    gap: var(--gh-space-4);
-    align-items: start;
-  }
-
-  .release-spine div {
-    display: grid;
-    gap: var(--gh-space-1);
-    min-width: 0;
-  }
-
-  .release-spine-label,
-  .release-spine p,
-  .release-spine-side span {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-body);
-    line-height: var(--gh-type-line-height-body);
-    overflow-wrap: anywhere;
-  }
-
-  .release-spine strong {
-    color: var(--text);
-    font-size: var(--gh-type-size-panel-title);
-    line-height: var(--gh-type-line-height-tight);
-    overflow-wrap: anywhere;
-  }
-
-  .release-spine p {
-    margin: 0;
-  }
-
-  .release-spine-side {
-    justify-items: start;
-    max-inline-size: 36rem;
-  }
-
-  .release-spine-side button {
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--accent);
-    cursor: pointer;
-    font: inherit;
-    font-weight: var(--gh-type-weight-strong);
-    text-align: left;
-  }
-
   .criteria {
     list-style: none;
     display: grid;
@@ -843,16 +725,6 @@
     text-decoration: underline;
   }
 
-  @container (max-width: 760px) {
-    .release-spine {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .release-spine-side {
-      max-inline-size: none;
-    }
-  }
-
   .notice-link {
     min-height: var(--gh-control-height-default);
     padding: var(--gh-control-padding-block) var(--gh-control-padding-inline);
@@ -867,7 +739,6 @@
   }
 
   @media (max-width: 720px) {
-    .release-spine,
     .release-action {
       grid-template-columns: 1fr;
     }

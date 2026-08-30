@@ -62777,3 +62777,50 @@ No persisted-schema change. Existing paused-work facts are reused.
   `"Open supported documents as TypeScript" is paused in live work. Resume
   continues from that pinned task.` Narrative Harness independently retained
   its equivalent saved-review handoff and one visible `Resume review` action.
+
+### Finding: Release must not bury its one owner action under duplicate scope exposition
+
+- [x] User job: when the owner opens Release while current work is paused or
+  underway, they can tell the current progress and act on the shared handoff
+  immediately. The route must not repeat the selected scope, its readiness,
+  its headline, and the project-purpose essay before the available action.
+- Live finding, 2026-08-30: t-minus-t Release displayed `CURRENT TASK SCOPE`,
+  `Scope readiness`, another `Current task scope`, its generic in-progress
+  sentence, and the entire product description before `WORK PAUSED` and the
+  only useful command, `Resume work`. Those details were produced by a second
+  orientation-spine request despite the shared action model already supplying
+  the active task and its continuation consequence.
+
+#### Contract Touch Decision
+
+Work id: `release-default-action-first-2026-08-30`. Touched contract: the
+Release route's presentation boundary for the existing shared action model and
+release progress summary. The default verdict view will show one compact
+release header and the shared owner action; it will not independently fetch or
+render orientation-spine narrative. Considered but not touched: release
+membership, scope computation, action ranking, readiness verdict construction,
+criteria detail, task execution, and persisted project schema. Required proof:
+a paused current task renders release progress, one concrete pause handoff,
+and `Resume work` without the purpose copy or duplicated scope card; a ready
+release still renders its terminal ship action. Apply/revert: route
+presentation and unnecessary supporting request only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The default route stops consuming redundant derived
+orientation detail; release and action facts remain the existing authorities.
+
+#### Validation
+
+- `ReleaseTab.svelte.test.ts` passes 32 focused tests. The default Release
+  route no longer requests `/api/project/spine`; a regression fixture proves
+  that a scope headline, project purpose, blocker narrative, and included/later
+  counts remain absent while the actual release verdict stays visible.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass. After `pnpm dev:install`, `guildhall stop`, and
+  `guildhall start`, `/api/stale-server` reported `stale:false` with zero
+  startup errors. Real t-minus-t Release rendered only `Release`, `0/1 done`,
+  the paused `TMI-004` handoff, its concrete continuation sentence, and
+  `Resume work`, with no horizontal overflow. Narrative Harness independently
+  rendered Stage 2 progress, its saved review handoff, and one `Resume review`
+  action without the removed orientation narrative.
