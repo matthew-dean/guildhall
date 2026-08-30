@@ -62046,6 +62046,49 @@ stored data change.
 
 No persisted-schema change.
 
+### Finding: Release verification must read and write one project-scoped design-system state
+
+- [x] User job: after Guildhall writes design-system guidance, release readiness
+  immediately evaluates that same revision and reports every current release
+  blocker. The writer and readiness reader must not silently use different
+  project-state roots, and a persisted projection must not hide a newly
+  computed blocker.
+- Verification finding, 2026-08-30: the release gate exposed two divergent
+  contracts. The design-system tool wrote through the canonical project system
+  state root while the runtime store joined paths directly under the supplied
+  memory directory; readiness also selected either projected or live blockers
+  instead of combining them. This made a successful write invisible to the
+  readiness reader and could undercount release blockers.
+
+#### Contract Touch Decision
+
+Work id: `pr20-release-readiness-reconciliation-2026-08-30`. Touched
+contracts: the project-scoped design-system persistence location and the
+release-readiness blocker aggregation rule. Both design-system readers and
+writers now resolve `.guildhall`, `memory`, and `project-state` inputs through
+one shared project-system-state helper; standalone compatibility directories
+retain their direct-path behavior. Readiness merges projected and live blockers
+by blocker id so either source can add current evidence without duplicating the
+same blocker. Considered but not touched: the persisted design-system JSON
+shape, release blocker schema, API response shape, task state schema, and
+projection versioning. Required proof: a successful design-system POST is
+immediately visible to readiness, projected and live blockers coexist, the
+release suite passes, and typecheck/build remain green. Apply/revert: the path
+helper and blocker merge are self-contained and can be reverted together with
+their regression expectations.
+
+#### Schema Migration Decision
+
+No persisted-schema change and no migration is required. Existing canonical
+project-system-state files keep the same location and shape. The fallback for
+standalone directories preserves tests and external callers that intentionally
+provide a non-project memory root; no stored record is rewritten.
+
+#### Validation
+
+- `pnpm test:release`: 14 files, 322 tests passed.
+- `pnpm typecheck` and `pnpm build` passed.
+
 ### Finding: Landed work without proof must advance to verification, not retry implementation
 
 - [ ] User job: when an owner or delegated owner commits and pushes a task's

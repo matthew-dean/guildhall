@@ -2077,13 +2077,13 @@ describe('project-summary-projection', () => {
     })
 
     expect(projection.decision?.execution).toMatchObject({
-      state: 'paused',
+      state: 'runnable',
       code: 'paused_live_work',
       progressState: 'partial_work_saved',
     })
     expect(projection.actionModel?.primaryAction).toMatchObject({
       buttonLabel: 'Resume work',
-      detail: 'Progress is saved. Resume continues this task from its current workspace.',
+      detail: '"one" is paused with saved work. Resume continues the same task.',
     })
   })
 
@@ -2101,13 +2101,13 @@ describe('project-summary-projection', () => {
     })
 
     expect(projection.decision?.execution).toMatchObject({
-      state: 'paused',
+      state: 'runnable',
       code: 'paused_live_work',
       progressState: 'partial_work_saved',
     })
     expect(projection.actionModel?.primaryAction).toMatchObject({
       buttonLabel: 'Resume work',
-      detail: 'Progress is saved. Resume continues this task from its current workspace.',
+      detail: '"one" is paused with saved work. Resume continues the same task.',
     })
   })
 
@@ -2125,7 +2125,7 @@ describe('project-summary-projection', () => {
     })
 
     expect(projection.decision?.execution).toMatchObject({
-      state: 'paused',
+      state: 'runnable',
       code: 'worker_recovery',
       progressState: 'worker_retry_recommended',
     })
@@ -2159,7 +2159,7 @@ describe('project-summary-projection', () => {
     })
 
     expect(projection.decision?.execution).toMatchObject({
-      state: 'paused',
+      state: 'runnable',
       code: 'worker_recovery',
       progressState: 'worker_edit_loss',
     })

@@ -11,7 +11,9 @@ import {
   getProjectMigrationSnapshotDir,
   getProjectRecentEventsPath,
   getProjectStateDir,
+  getProjectSystemStatePath,
   getProjectTranscriptPath,
+  projectScopedStatePath,
   appendProjectProgressHeartbeat,
   compactProjectProgressHeartbeats,
   PROJECT_HEARTBEAT_HISTORY_MAX_BYTES,
@@ -55,6 +57,19 @@ describe('local history layout', () => {
     expect(transcriptPath).not.toContain(`${path.sep}memory${path.sep}`)
     expect(debugLedgerPath).not.toContain(`${path.sep}memory${path.sep}`)
     expect(localHistoryExists(projectRoot)).toBe(false)
+  })
+
+  it('resolves canonical project-state handles while preserving standalone directories', () => {
+    const projectRoot = path.join(tmp, 'repo')
+    const relativePath = 'design-system.yaml'
+    const canonicalPath = getProjectSystemStatePath(projectRoot, relativePath)
+    const projectStateDir = path.join(tmp, 'allocated-cache', 'project-state')
+    const standaloneDir = path.join(tmp, 'standalone-fixture')
+
+    expect(projectScopedStatePath(path.join(projectRoot, '.guildhall'), relativePath)).toBe(canonicalPath)
+    expect(projectScopedStatePath(path.join(projectRoot, 'memory'), relativePath)).toBe(canonicalPath)
+    expect(projectScopedStatePath(projectStateDir, relativePath)).toBe(path.join(projectStateDir, relativePath))
+    expect(projectScopedStatePath(standaloneDir, relativePath)).toBe(path.join(standaloneDir, relativePath))
   })
 
   it('allocates only through the explicit write boundary without registering temporary projects', () => {

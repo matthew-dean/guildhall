@@ -17,6 +17,7 @@ import {
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
   writeProjectStateDatabaseDiagnosticProjection,
+  writeProjectStateDatabaseSummarySnapshot,
   writeProjectStateJsonAsync,
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
@@ -2454,7 +2455,7 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
     for (const body of [project, map]) {
       expect(body.orientationSpine?.activePins?.[0]).toMatchObject({
         nodeId: 'work:task-import-e2e',
-        kind: 'owner_input',
+        kind: 'active_work',
         label: 'E2E tests: login -> create page -> edit -> search flow',
       })
     }
@@ -4704,16 +4705,15 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         status: 'done',
       }),
     ])
-    expect(spineBody.summaryFreshness).toBe('stale')
-    expect(spineBody.requiresRefresh).toBe(true)
+    expect(spineBody.summaryFreshness).toBe('current')
+    expect(spineBody.requiresRefresh).toBeUndefined()
     expect(compactReadiness).toMatchObject({
-      summaryFreshness: 'stale',
-      requiresRefresh: true,
+      summaryFreshness: 'current',
       ready: false,
       release: { id: 'headless-mvp' },
       scope: { id: 'headless-mvp' },
     })
-    expect(compactReadiness).not.toHaveProperty('releaseCounts')
+    expect(compactReadiness).toHaveProperty('releaseCounts')
   })
 
   it('returns a compact project spine for overview previews without changing the full map spine', async () => {
@@ -5074,6 +5074,20 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         blockReason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
       }),
     ])
+    const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
+    const savedProjection = readProjectStateDatabaseProjectionState(tasksPath)
+    expect(savedProjection?.summary?.payload).toBeTruthy()
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: savedProjection!.summary!.payload,
+      scopeRows: savedProjection!.scopeRows.map(row => row.taskId === 'task-oauth'
+        ? {
+            ...row,
+            handoffState: 'spec_review',
+            blocksRelease: true,
+            blockerSummary: 'Stale projected blocker detail.',
+          }
+        : row),
+    })
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('settle external setup blocker')
@@ -5089,6 +5103,11 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         reason: 'OAuth client secrets need external setup before Guildhall can verify this work.',
       },
     ])
+    expect(body.releaseBlockers).toContainEqual(expect.objectContaining({
+      id: 'task-oauth',
+      code: 'blocked',
+      label: 'OAuth client secrets need external setup before Guildhall can verify this work.',
+    }))
     expect(body.totals.humanBlockingCount).toBe(1)
   })
 
@@ -5517,8 +5536,9 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
 
   it('reports the design-system approval state', async () => {
     // Draft a DS via the endpoint, then check before/after approval.
+    await seed([])
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await app.fetch(new Request(projectUrl('/api/project/design-system'), {
+    const draftResponse = await app.fetch(new Request(projectUrl('/api/project/design-system'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -5531,6 +5551,9 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         authoredBy: 'human',
       }),
     }))
+    expect(draftResponse.ok).toBe(true)
+    const draftBody = await draftResponse.json()
+    expect(draftBody).toMatchObject({ ok: true, revision: 1 })
     let res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     let body = await res.json() as any
     expect(body.diagnostics.designSystem.drafted).toBe(true)

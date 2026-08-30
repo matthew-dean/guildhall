@@ -3763,6 +3763,13 @@ function summarizeScopedReleaseWork(
     .filter(row => row.scope === 'included' && row.countInProjectTotals !== false)
     .filter(projectScopeRowNeedsOwnerInput)
     .length
+  const releaseBlockers = new Map(projectionReleaseBlockers.map(blocker => [blocker.id, blocker]))
+  // Persisted rows establish the saved release membership, while the live
+  // task pass owns current blocker detail. A matching live id must therefore
+  // replace stale projected code/label fields rather than merely deduplicate.
+  for (const blocker of releaseBlockersById.values()) {
+    releaseBlockers.set(blocker.id, blocker)
+  }
 
   return {
     statusCounts,
@@ -3773,7 +3780,7 @@ function summarizeScopedReleaseWork(
     shelvedUnclaimed,
     blockedByAgent,
     proofMissingDoneTasks,
-    releaseBlockers: projectionReleaseBlockers.length > 0 ? projectionReleaseBlockers : [...releaseBlockersById.values()],
+    releaseBlockers: [...releaseBlockers.values()],
     humanBlockingCount: Math.max(projectionOwnerBlockingCount, humanBlockingKeys.size),
     unfinishedCount,
     scopedTasks,

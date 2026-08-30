@@ -1,10 +1,10 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
-import path from 'node:path'
+import { dirname } from 'node:path'
 import yaml from 'js-yaml'
 import { DesignSystem, DESIGN_SYSTEM_FILE } from '@guildhall/core'
-import { getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { projectScopedStatePath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // update-design-system: project-wide design-system authoring surface.
@@ -15,11 +15,7 @@ import { getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guild
 // ---------------------------------------------------------------------------
 
 function designSystemPath(memoryDir: string): string {
-  const base = path.basename(path.resolve(memoryDir))
-  if (base === '.guildhall' || base === 'memory') {
-    return getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), DESIGN_SYSTEM_FILE)
-  }
-  return path.join(memoryDir, DESIGN_SYSTEM_FILE)
+  return projectScopedStatePath(memoryDir, DESIGN_SYSTEM_FILE)
 }
 
 const TokenInput = z.object({
@@ -139,7 +135,7 @@ export async function updateDesignSystem(
     })
 
     const tmp = `${p}.tmp`
-    await fs.mkdir(path.dirname(p), { recursive: true })
+    await fs.mkdir(dirname(p), { recursive: true })
     await fs.writeFile(tmp, yaml.dump(next, { noRefs: true, lineWidth: 100 }), 'utf-8')
     await fs.rename(tmp, p)
 
