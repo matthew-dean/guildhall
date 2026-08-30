@@ -7,6 +7,30 @@ help_summary: |
 
 <!-- markdownlint-disable MD003 -->
 
+## 2026-08-30 LFS-safe repository freshness polling
+
+- Work id: `lfs-safe-repository-polling`.
+- User job: from service start, Guildhall establishes a repository baseline;
+  while working it notices changed repository metadata without invoking
+  content filters; a timed-out or unreadable observation keeps the last known
+  state and retries on the next poll instead of scheduling false work; after a
+  real change, the repository projection refreshes and the service remains
+  visibly healthy at `/api/stale-server`.
+- Observed failure: the five-second repository watcher ran a bounded
+  `git status` across every registered workspace. In an LFS-heavy repository,
+  Git invoked the LFS clean filter and the 750 ms timeout killed it mid-object,
+  leaving partial files in `.git/lfs/tmp` on every poll.
+- [x] Replace filter-capable status polling with a branch/index/filesystem
+  metadata fingerprint that still detects pushes, staged changes, unstaged
+  changes, additions, and removals.
+- [x] Add a regression whose configured content filter records any invocation;
+  repository freshness reads detect an asset change without invoking it.
+- [x] Install and restart Guildhall, confirm `/api/stale-server` reports
+  `stale:false`, and observe the LFS temp directory remain at `0B` from second
+  20 through second 55 after bounded startup projection work completed.
+- Contract/schema decision: no persisted contract or schema changed; this is a
+  side-effect and implementation correction at an existing observation seam.
+
 ## 2026-08-09 Project config round-trip integrity
 
 - [x] Preserve explicitly configured per-role model overrides when Guildhall rewrites `guildhall.yaml`.
