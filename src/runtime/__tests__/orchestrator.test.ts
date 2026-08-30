@@ -3977,7 +3977,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
   })
 
-  it('preserves a valid current recovery blueprint when inherited references are missing', () => {
+  it('preserves a current structured review contract when inherited references are missing', () => {
     const currentStructuredSpec = StructuredSpec.parse({
       whatThisIs: 'A focused ContextMenu implementation slice.',
       problemContext: 'The current task contract names the component boundary and proof path.',
@@ -4009,13 +4009,6 @@ describe('Orchestrator.tick — routing', () => {
       title: 'Implement the focused ContextMenu slice',
       spec: 'The structured spec is authoritative.',
       structuredSpec: currentStructuredSpec,
-      productBrief: {
-        userJob: 'I want the focused ContextMenu slice ready for review.',
-        successMetric: 'The component has a bounded implementation contract and focused proof.',
-        antiPatterns: [],
-        authoredBy: 'coordinator-recovery',
-        authoredAt: '2026-08-30T00:00:00.000Z',
-      },
       acceptanceCriteria: [{
         id: 'context-menu-proof',
         description: 'The focused ContextMenu proof passes.',
@@ -4033,6 +4026,7 @@ describe('Orchestrator.tick — routing', () => {
       }],
     })
     const before = structuredClone(task)
+    expect(hasUsableBlueprint(task)).toBe(false)
     const queue: TaskQueue = {
       version: 1,
       lastUpdated: '2026-08-30T00:00:00.000Z',

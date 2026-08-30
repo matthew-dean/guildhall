@@ -60315,11 +60315,12 @@ as live work.
 
 Work id: `looma-knit-preserve-current-spec-repair-2026-08-30`.
 Touched contracts: the shared deterministic spec-repair selector may replace a
-recovery seed only when the task lacks the typed completion-boundary contract.
-A valid structured spec, complete product brief, and nonempty acceptance
-contract are authoritative current planning state; an inherited recovery note
-or missing copied parent references cannot authorize a rewrite. Considered but
-not touched: task persistence, reframe transport, reviewer approval, worker
+recovery seed only when the task lacks a valid structured review contract and
+nonempty acceptance contract. Approval remains stricter and still requires a
+complete product brief, but a brief-save failure cannot let recovery discard
+an otherwise concrete current scope. An inherited recovery note or missing
+copied parent references cannot authorize a rewrite. Considered but not
+touched: task persistence, reframe transport, reviewer approval, worker
 dispatch, and inherited-reference storage. Required proof: a repair pass cannot
 reduce a valid concrete spec to a generic contract, and it cannot surface
 resolved recovery prose in the normal spec view.
@@ -60330,9 +60331,40 @@ No schema migration. Existing structured planning and completion-boundary
 contracts establish whether recovery may mutate the task; recovery provenance
 and inherited references remain evidence rather than a new persisted authority.
 
-- [x] Regression proof, 2026-08-30: the recovery queue test now supplies a
-  current, schema-valid ContextMenu contract with a recovery note and missing
-  inherited references. The deterministic repair returns no mutation and
-  preserves the task byte-for-byte. Under-shaped recovery seeds still route
-  through the existing deterministic repair. Focused recovery coverage,
-  `pnpm typecheck`, `pnpm model:independence`, and `pnpm lint:contracts` pass.
+- [x] Regression and installed state proof, 2026-08-30: the recovery queue
+  test supplies a current, schema-valid ContextMenu contract with a recovery
+  note and missing inherited references but no product brief. The deterministic
+  repair returns no mutation and preserves the task byte-for-byte; under-shaped
+  recovery seeds still route through the existing deterministic repair. The
+  installed Looma reframe now retains its specific seven-criterion structured
+  ContextMenu contract after the brief writer fails, rather than replacing it
+  with recovery boilerplate. Focused recovery coverage, `pnpm typecheck`,
+  `pnpm model:independence`, and `pnpm lint:contracts` pass.
+
+### Finding: A failed spec-author tool call must resolve to one explicit recovery, not a stranded review
+
+- [ ] User job: when Guildhall has produced a concrete spec but cannot save a
+  required companion record, the owner sees one clear outcome and one useful
+  next action. The task must not look reviewable while approval is impossible,
+  and the run must not imply hidden ongoing work after it stops.
+- Finding, 2026-08-30: the real Looma ContextMenu reframe created a specific
+  seven-criterion structured spec, but `update-product-brief` failed repeatedly.
+  Guildhall stopped with `spec_review`, no product brief, and an unavailable
+  approval contract. The structured scope is correctly preserved now, but the
+  owner still lacks an explanation and direct way to repair the missing brief.
+
+#### Contract Touch Decision
+
+Pending investigation. The shared spec-repair/approval action model must derive
+the missing typed contract field and offer a single recovery action that cannot
+overwrite the existing structured scope. Considered but not touched yet:
+spec-author tool protocol, product-brief persistence, review approval transport,
+and run-stop semantics. Required proof: a brief-save failure has one focused
+owner action or an automatic retry that records success; the normal task record
+never appears ready for an approval it cannot accept.
+
+#### Schema Migration Decision
+
+Pending investigation. The existing structured spec, product brief, and tool
+failure evidence may suffice. Do not add persisted recovery state before
+tracing the shared action builder and brief-writer failure path.

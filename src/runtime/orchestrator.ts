@@ -583,13 +583,18 @@ function hasDeterministicSpecRepairNote(task: Task): boolean {
   )
 }
 
+function hasCurrentStructuredReviewContract(task: Task): boolean {
+  return StructuredSpec.safeParse(task.structuredSpec).success && task.acceptanceCriteria.length > 0
+}
+
 function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): boolean {
   if (task.status !== 'spec_review') return false
   if (task.id === META_INTAKE_TASK_ID) return false
-  // A valid typed blueprint is current planning state. Recovery provenance and
-  // inherited-reference gaps may warrant separate enrichment, never replacing
-  // the owner's reviewable scope with a synthetic recovery seed.
-  if (hasUsableBlueprint(task)) return false
+  // A structured review contract is current planning state even when a
+  // separate brief-save failure still prevents approval. Recovery provenance
+  // and inherited-reference gaps may warrant enrichment, never replacing the
+  // owner's reviewable scope with a synthetic recovery seed.
+  if (hasCurrentStructuredReviewContract(task)) return false
   const taskWithRuntime = task as Task & {
     proofRecovery?: { kind?: unknown }
     runtime?: { proofRecovery?: { kind?: unknown } }
