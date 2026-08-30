@@ -2071,6 +2071,30 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('makes owner-paused dirty work visible in the shared resume action', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-owner-paused-work-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projection = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 'narrative-harness',
+      queue: queue([task('one', 'in_progress')]),
+      taskRuntimes: [{
+        taskId: 'one',
+        payload: { workerRecovery: { ownerPauseWithSavedWorkAt: now } },
+      }],
+      generatedAt: now,
+    })
+
+    expect(projection.decision?.execution).toMatchObject({
+      state: 'paused',
+      code: 'paused_live_work',
+      progressState: 'partial_work_saved',
+    })
+    expect(projection.actionModel?.primaryAction).toMatchObject({
+      buttonLabel: 'Resume work',
+      detail: 'Progress is saved. Resume continues this task from its current workspace.',
+    })
+  })
+
   it('persists compact execution and runtime state without replacing task facts', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-supplemental-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

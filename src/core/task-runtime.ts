@@ -34,6 +34,9 @@ export const TaskRuntimeState = z.object({
   workerRecovery: z.object({
     noProgressAttempts: z.number().int().nonnegative().optional(),
     dirtyTimeoutRetries: z.number().int().nonnegative().optional(),
+    // An owner-directed pause can preserve the same isolated worktree edits as
+    // a timeout. Keep that fact typed so every owner surface can explain it.
+    ownerPauseWithSavedWorkAt: z.string().optional(),
     likelyTargetTimeoutRetries: z.number().int().nonnegative().optional(),
     noVisibleProgressTimeoutRetries: z.number().int().nonnegative().optional(),
   }).optional(),

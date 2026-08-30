@@ -4665,6 +4665,41 @@ function taskExistingWorktreePath(
   return worktreePath && existsSync(worktreePath) ? worktreePath : null
 }
 
+/**
+ * Persist the one owner-facing fact a pause needs: work already exists in the
+ * focused task worktree. This is intentionally a stop-time check rather than
+ * a read-time Git probe, so normal page loads stay cheap and read-only.
+ */
+export async function recordOwnerPauseWithSavedWork(
+  projectPath: string,
+  taskId: string | null | undefined,
+): Promise<boolean> {
+  const activeTaskId = taskId?.trim()
+  if (!activeTaskId) return false
+  const rawQueue = await readProjectTaskQueueForRichMutation(projectPath) as { tasks?: Array<Record<string, unknown>> } | null
+  const task = rawQueue?.tasks?.find(candidate => candidate.id === activeTaskId)
+  if (!task) return false
+  const worktreePath = taskExistingWorktreePath(task)
+  if (!worktreePath) return false
+  let stdout = ''
+  try {
+    ({ stdout } = await execFileP('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: worktreePath }))
+  } catch {
+    return false
+  }
+  if (!stdout.trim()) return false
+  const runtime = (await readTaskRuntimeStore(projectPath)).tasks[activeTaskId]
+  const updatedAt = new Date().toISOString()
+  await upsertTaskRuntimeState(projectPath, activeTaskId, {
+    workerRecovery: {
+      ...(runtime?.workerRecovery ?? {}),
+      ownerPauseWithSavedWorkAt: updatedAt,
+    },
+    updatedAt,
+  })
+  return true
+}
+
 const TASK_FILE_PREVIEW_LIMIT_BYTES = 256 * 1024
 
 function isWithinPath(candidate: string, root: string): boolean {
@@ -12653,8 +12688,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/project/stop', async c => {
     try {
+      const run = supervisor.get(project.id)
+      const activeTaskId = run?.activeTaskId
+      const rememberSavedWork = async () => {
+        await recordOwnerPauseWithSavedWork(project.path, activeTaskId)
+      }
       await pauseProjectAvailability(project.path, { reason: 'user_paused_project' })
       const stopped = await supervisor.stop(project.id, { waitMs: 1_000 })
+      if (stopped) await rememberSavedWork()
+      else if (run) void run.runPromise.then(rememberSavedWork).catch(() => {})
       return c.json({ ok: true, status: stopped ? 'stopped' : 'stopping' })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

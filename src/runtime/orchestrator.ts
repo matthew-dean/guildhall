@@ -2902,7 +2902,7 @@ export class Orchestrator {
 
   private async resetWorkerRecoveryCounters(
     taskId: string,
-    fields: readonly (keyof NonNullable<TaskRuntimeState['workerRecovery']>)[],
+    fields: readonly ('noProgressAttempts' | 'dirtyTimeoutRetries' | 'likelyTargetTimeoutRetries' | 'noVisibleProgressTimeoutRetries')[],
   ): Promise<void> {
     const current = await this.readWorkerRecovery(taskId)
     const patch: Partial<NonNullable<TaskRuntimeState['workerRecovery']>> = {}
@@ -4378,6 +4378,11 @@ export class Orchestrator {
     let inactivityTimeoutHandle: ReturnType<typeof setTimeout> | undefined
     let wallClockTimeoutHandle: ReturnType<typeof setTimeout> | undefined
     try {
+      if (agent.name === 'worker-agent') {
+        // A new worker pass owns the next pause snapshot. Do not carry an
+        // earlier owner-pause marker into a later clean pass.
+        await this.patchWorkerRecovery(task.id, { ownerPauseWithSavedWorkAt: undefined })
+      }
       externalAbort?.addEventListener('abort', abortListener)
       const result = typeof agent.generateWithEvents === 'function'
         ? await new Promise<Awaited<ReturnType<typeof agent.generateWithEvents>>>((resolve, reject) => {

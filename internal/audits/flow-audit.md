@@ -62058,3 +62058,63 @@ paused focus; this repair carries that existing typed fact into Thread.
   `guildhall stop`, and `guildhall start`, the shared action model named
   `task-004` / `Resume work`; Thread was `current` with active
   `inflight:task-004` and `Work is paused. Resume work when you are ready.`
+
+### Finding: An owner pause must explain saved partial work
+
+- [ ] User job: when an owner pauses a real in-flight task after it has
+  changed its isolated worktree, every owner route says that partial work is
+  saved and that Resume continues the same workspace. A deliberate pause must
+  never discard that fact merely because the worker did not time out.
+- Finding, 2026-08-30: acting as the t-minus-t owner, `task-004` made a
+  partial extension implementation and test setup in its isolated worktree.
+  The owner paused the run after the worker repeatedly reset its own context.
+  Guildhall correctly preserved the task identity and offered `Resume work`,
+  but omitted the existing saved-progress explanation because it only derives
+  that state from `dirtyTimeoutRetries`. The same durable dirty worktree is
+  less visible after an owner-directed pause than after an automatic timeout.
+
+#### Contract Touch Decision
+
+Work id: `owner-pause-saved-work-progress-2026-08-30`. Touched contracts: the
+normalized task runtime recovery record, paused-work summary projection, and
+shared owner action model. A typed timestamp records that Guildhall verified
+saved work in the focused isolated worktree while honoring an owner pause.
+Paused-work presentation treats that record and dirty-timeout recovery as the
+same `partial_work_saved` fact. Considered but not touched: task status,
+worker prompt text, task definitions, task identity, release membership,
+worktree content, and action ranking. Required proof: a stopped t-minus-t
+run with saved work yields the same `Resume work` command and concise
+saved-progress explanation on project, task, Work, and Thread projections;
+an ordinary clean pause remains an ordinary resume. Apply/revert: the
+optional runtime fact is ignored on revert; no task worktree content is
+changed.
+
+#### Schema Migration Decision
+
+Persisted schema touched: optional `workerRecovery.ownerPauseWithSavedWorkAt`
+timestamp in the normalized task runtime overlay. Scope: backward-compatible
+runtime presentation fact. Existing overlays simply have no owner-pause saved
+work marker and retain their current behavior. No mandatory migration is
+required before run; the marker is written only after Guildhall verifies the
+focused isolated worktree is dirty during a pause. Compatibility reader:
+missing means false. Fixtures: a clean paused task, a dirty timeout recovery,
+and an owner-paused dirty worktree. Rollback ignores the optional marker and
+does not remove or alter task worktree changes.
+
+#### Validation
+
+- Focused runtime coverage: `pnpm exec vitest run
+  src/runtime/__tests__/owner-pause-saved-work.test.ts
+  src/runtime/__tests__/project-summary-projection.test.ts --reporter=dot`
+  passed 57 tests. A real temporary Git worktree with an uncommitted file
+  records `ownerPauseWithSavedWorkAt`; a clean paused worktree records
+  nothing; both saved-work sources produce the one shared `Resume work`
+  explanation.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence`
+  passed. The latter's temporary non-repository fixture emits known Git
+  stderr while all 127 assertions pass.
+- Installed t-minus-t follow-up remains intentionally pending: the worker
+  reset its own partial implementation before this repaired pause path could
+  observe it, so the current honest t-minus-t state is a clean paused task.
+  Do not manufacture a dirty project edit merely to satisfy this proof; repeat
+  this exact check on the next real saved-work pause.

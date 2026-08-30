@@ -1226,7 +1226,10 @@ function savedPartialWorkProgressState(
   const recovery = isRecord(runtime?.payload) && isRecord(runtime.payload.workerRecovery)
     ? runtime.payload.workerRecovery
     : null
-  return typeof recovery?.dirtyTimeoutRetries === 'number' && recovery.dirtyTimeoutRetries > 0
+  return (
+    (typeof recovery?.dirtyTimeoutRetries === 'number' && recovery.dirtyTimeoutRetries > 0) ||
+    (typeof recovery?.ownerPauseWithSavedWorkAt === 'string' && recovery.ownerPauseWithSavedWorkAt.trim().length > 0)
+  )
     ? { progressState: 'partial_work_saved' }
     : {}
 }
