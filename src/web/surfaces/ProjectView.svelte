@@ -1773,38 +1773,9 @@
           {#if props.drawerOpen}
             <div class="drawer-background" aria-hidden="true"></div>
           {:else if !detail}
-            {#if currentView === 'thread'}
-              {#await loadThreadTab()}
-                <div class="page-centered page-centered-inline">
-                  <p class="muted">Loading project...</p>
-                </div>
-              {:then module}
-                {@const ThreadTab = module.default}
-                <ThreadTab projectId={activeProjectId} />
-              {/await}
-            {:else if currentView === 'inbox'}
-              {#await loadNeedsYouTab()}
-                <div class="page-centered page-centered-inline">
-                  <p class="muted">Loading project...</p>
-                </div>
-              {:then module}
-                {@const NeedsYouTab = module.default}
-                <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
-              {/await}
-            {:else if currentView === 'release'}
-              {#await loadReleaseTab()}
-                <div class="page-centered page-centered-inline">
-                  <p class="muted">Loading project...</p>
-                </div>
-              {:then module}
-                {@const ReleaseTab = module.default}
-                <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} projectDetail={detail} onRunTask={(taskId) => start('one_task', taskId)} {busy} />
-              {/await}
-            {:else}
-              <div class="page-centered page-centered-inline">
-                <p class="muted">Loading project...</p>
-              </div>
-            {/if}
+            <div class="page-centered page-centered-inline">
+              <p class="muted">Loading project...</p>
+            </div>
           {:else if surfaceDetailPending}
             <div class="page-centered page-centered-inline">
               <NoticeBand

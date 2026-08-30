@@ -61004,3 +61004,44 @@ reconciliation; existing task and run records remain unchanged.
 - [ ] Remaining surface proof: compare the authoritative execution state with
   Work, drawer, Thread, release, inbox, and status during a real one-task run;
   the saved `planExecution` fallback must never be presented as current work.
+
+### Finding: Owner routes must not flash a contradictory saved state
+
+- [ ] User job: opening any release route during active work immediately shows
+  the current milestone, the focused task, and one truthful status. The route
+  may load, but it cannot first present an older status, a different layout,
+  or an invented owner demand and then replace it.
+- Finding, 2026-08-30: during a real ContextMenu run, Overview, Work, Release,
+  and Inbox agreed on active work. A direct Thread route first rendered an
+  old, dense thread list and a `Paused` active-thread dock, then about 2.6
+  seconds later replaced the whole page with the correct compact
+  `No response needed` handoff and running task. Release also called the same
+  running work `What needs your attention`. The owner gets contradictory
+  status and a disruptive layout shift before the actual current screen.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-owner-route-freshness-2026-08-30`. Touched contracts:
+owner-route freshness and action-status presentation. A route must not render
+a persisted project packet as current while its authoritative snapshot is
+loading; it must show a stable loading state until the same shared revision
+that drives chrome is available. All owner-facing action headings derive from
+the shared typed action code, including `running`. Considered but not touched:
+thread persistence, run orchestration, task ranking, and release readiness.
+Required proof: a direct reload of Thread and Release during real live work
+shows no stale content or status before the final action is visible.
+
+#### Schema Migration Decision
+
+No schema migration. Existing persisted summaries remain usable as cache data;
+the change governs when an owner-facing route may present them as current.
+
+- [x] Regression and installed proof, 2026-08-30: ProjectView now preserves
+  the project shell but waits for the shared project packet before mounting
+  Thread, Release, or Inbox. A cold Thread regression proves no thread request
+  or stale thread list can render first; Release coverage reserves
+  `What needs your attention` for an owner decision and labels typed running
+  work `Work is underway`. After a fresh build, install, restart, and
+  `stale:false`, cold direct Thread, Release, and Inbox routes for real Looma
+  + Knit showed only a stable shell while connecting, then their single current
+  action with no stale paused status, activity wall, or layout replacement.

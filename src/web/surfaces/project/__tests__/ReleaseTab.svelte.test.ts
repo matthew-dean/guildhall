@@ -212,6 +212,35 @@ describe('ReleaseTab', () => {
     expect(screen.getByRole('button', { name: 'Open Work' })).toBeTruthy()
   })
 
+  it('does not call live work owner attention on the release route', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/project/spine')) return json({ spine: null })
+      return json({ ...readyPayload, release: { id: 'stage-2', label: 'Stage 2', state: 'active' } })
+    }))
+
+    render(ReleaseTab, {
+      props: {
+        projectDetail: {
+          actionModel: {
+            primaryAction: {
+              label: 'Build the next primitive',
+              taskId: 'task-running',
+              taskLabel: 'Build the selected primitive.',
+              buttonLabel: 'Open Work',
+              href: '/work?task=task-running',
+              tone: 'running',
+              code: 'running',
+            },
+          },
+        },
+      },
+    })
+
+    expect(await screen.findByText('Work is underway')).toBeTruthy()
+    expect(screen.queryByText('What needs your attention')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open Work' })).toBeTruthy()
+  })
+
   it('runs a focused spec repair instead of navigating to a duplicate repair command', async () => {
     let completeRun!: () => void
     const onRunTask = vi.fn(() => new Promise<void>(resolve => {

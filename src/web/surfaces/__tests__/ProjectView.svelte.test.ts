@@ -445,6 +445,23 @@ describe('ProjectView', () => {
     })
   })
 
+  it('waits for the shared project snapshot before mounting a cold Thread route', async () => {
+    const { fetchMock, pendingProject } = installFetchFakesWithPendingProject()
+    project.detail = null
+    project.error = null
+
+    render(ProjectView, { initialView: 'thread', initialSub: null, projectId: 'looma-knit' })
+
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(fetchMock.mock.calls.some(([input]) => new URL(String(input), 'http://localhost').pathname === '/api/project/thread')).toBe(false)
+
+    pendingProject.resolve(json(detail()))
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => new URL(String(input), 'http://localhost').pathname === '/api/project/thread')).toBe(true)
+    })
+  })
+
   it('does not let stale project detail rename a drawer-backed Thread route while detail refreshes', async () => {
     project.detail = detail({ id: 'jess', name: 'Jess', path: '/workspace/jess' })
     project.error = null
@@ -571,7 +588,7 @@ describe('ProjectView', () => {
     })
   })
 
-  it('renders Release readiness when the broad project payload is still loading', async () => {
+  it('waits for the shared project packet before rendering Release readiness', async () => {
     const pendingProject = deferredResponse()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
@@ -597,9 +614,11 @@ describe('ProjectView', () => {
 
     render(ProjectView, { initialView: 'release', initialSub: null, projectId: 'looma-knit' })
 
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(screen.queryByText('Scope readiness')).toBeNull()
+    pendingProject.resolve(json(detail()))
     expect(await screen.findByText('Scope readiness')).toBeInTheDocument()
     expect(screen.getByText('Release status')).toBeInTheDocument()
-    pendingProject.resolve(json(detail()))
   })
 
   it('does not foreground resolved git runtime errors in Overview', async () => {
@@ -2154,7 +2173,7 @@ describe('ProjectView', () => {
     expect(path.value).toBe('/projects/looma-knit/settings/providers')
   })
 
-  it('renders thread shell while project detail is still loading, then keeps explicit error and uninitialized states honest', async () => {
+  it('keeps the thread shell stable while the shared project packet is loading, then keeps explicit error and uninitialized states honest', async () => {
     const user = userEvent.setup()
     const uninitialized = detail({ initializationNeeded: true })
     const pendingProject = new Promise<Response>(() => {})
@@ -2174,7 +2193,8 @@ describe('ProjectView', () => {
     const loading = render(ProjectView, { initialView: 'thread', projectId: 'looma-knit' })
     await screen.findByRole('button', { name: 'Project' })
     expect(screen.getByRole('complementary', { name: 'Project navigation' })).toBeInTheDocument()
-    await waitFor(() => expect(screen.queryByText('Loading project...')).toBeNull())
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
     loading.unmount()
 
     project.detail = null

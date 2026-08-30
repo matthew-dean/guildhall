@@ -399,7 +399,13 @@
   const ownerAction = $derived(projectDetail?.actionModel?.primaryAction ?? null)
   const ownerActionTaskKey = $derived(ownerAction?.taskId ? taskDisplayKey(ownerAction.taskId, [], activeProjectId) : null)
   const hasOwnerAction = $derived(Boolean(ownerAction?.href && ownerAction?.buttonLabel))
-  const ownerActionHeading = $derived(ownerAction?.code === 'ready_work' ? 'Ready to continue' : 'What needs your attention')
+  const ownerActionHeading = $derived(
+    ownerAction?.code === 'running'
+      ? 'Work is underway'
+      : ownerAction?.code === 'ready_work'
+        ? 'Ready to continue'
+        : 'What needs your attention',
+  )
 
   const sectionCopy = $derived(
     section === 'criteria'
