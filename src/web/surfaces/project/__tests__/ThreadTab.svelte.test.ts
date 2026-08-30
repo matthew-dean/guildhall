@@ -1005,6 +1005,48 @@ describe('ThreadTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?task=task-paused-work')
   })
 
+  it('uses shared current-scope counts instead of folding deferred work into the Thread handoff', async () => {
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-deferred-scope',
+        taskId: 'task-current-scope',
+        taskTitle: 'Continue the focused work',
+      }),
+    ], 'worker-deferred-scope', {
+      projectRunStatus: 'stopped',
+      actionModel: {
+        primaryAction: {
+          label: 'Worker needs a fresh pass',
+          taskId: 'task-current-scope',
+          taskLabel: 'Continue the focused work',
+          detail: 'The prior worker pass did not leave a durable change.',
+          buttonLabel: 'Retry worker',
+          href: '/work?task=task-current-scope',
+          tone: 'warn',
+          code: 'worker_recovery',
+        },
+      },
+      orientationSpine: {
+        summary: {
+          selectedScopeLabel: 'Current task scope',
+          includedWorkCount: 1,
+          deferredWorkCount: 3,
+          progress: { done: 0, total: 4, deferred: 3 },
+        },
+      },
+      releaseReadiness: {
+        releaseCounts: { done: 0, total: 1, deferred: 3 },
+      },
+    })
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'Current work' })
+    expect(screen.getByText('Current task scope · 0 of 1 complete')).toBeTruthy()
+    expect(screen.queryByText('Current task scope · 0 of 4 complete')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Retry worker' })).toBeTruthy()
+  })
+
   it('keeps passive running work out of Thread until an owner response is needed', async () => {
     const actionModel = {
       primaryAction: {

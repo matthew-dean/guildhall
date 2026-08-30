@@ -1582,11 +1582,15 @@
       ?? readyWorkOrientation?.selectedRelease?.label
       ?? null,
   )
+  // Release readiness is the shared owner-facing scope denominator. The
+  // orientation progress can include explicitly deferred work, so use it only
+  // for older Thread responses that do not carry release readiness yet.
+  const readyWorkScopeCounts = $derived(project.detail?.releaseReadiness?.releaseCounts ?? null)
   const readyWorkProgress = $derived(readyWorkOrientation?.summary?.progress ?? null)
   const readyWorkContext = $derived.by(() => {
     const scope = readyWorkScopeLabel?.trim() || null
-    const done = readyWorkProgress?.done
-    const total = readyWorkProgress?.total
+    const done = readyWorkScopeCounts?.done ?? readyWorkProgress?.done
+    const total = readyWorkScopeCounts?.total ?? readyWorkProgress?.total
     const progress = Number.isFinite(done) && Number.isFinite(total) && (total ?? 0) > 0
       ? `${done} of ${total} complete`
       : null

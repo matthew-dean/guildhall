@@ -62386,3 +62386,46 @@ typed action-model fields.
   The real Overview rendered its shared `Retry worker` command inside the
   decision card at 1114px, 900px, and 390px; the title computed to ellipsis,
   detail to two lines, and no viewport had horizontal overflow.
+
+### Finding: Thread must not turn deferred work into current-scope progress
+
+- [ ] User job: when the owner follows the same current-work handoff through
+  Overview, Work, Thread, Release, or task detail, every route reports the
+  same current-scope denominator. Deferred work can be disclosed as later,
+  but it cannot silently inflate current progress.
+- Live finding, 2026-08-30: t-minus-t's Overview, Work, and Release correctly
+  reported `0 of 1 complete` for `TMI-004`, while Thread displayed `Current
+  task scope · 0 of 4 complete`. The extra three records were explicitly
+  deferred. Thread consumed the orientation spine's project-wide progress
+  total instead of the canonical release-readiness scope counts.
+
+#### Contract Touch Decision
+
+Work id: `thread-reuses-current-scope-counts-2026-08-30`. Touched contracts:
+Thread's presentation of the existing shared release-readiness count
+projection. Thread must prefer `releaseReadiness.releaseCounts` for its owner
+handoff progress and may fall back to orientation progress only when that
+projection is unavailable. Considered but not touched: task state, deferred
+membership, orientation-spine progress semantics, action ranking, release
+readiness construction, and persisted project data. Required proof: a scope
+with one included item and three deferred items displays `0 of 1 complete` in
+Thread, while legacy Thread data without release readiness retains its
+orientation fallback. Apply/revert: display reuse only; reverting restores the
+misleading Thread-only denominator.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This consumes an existing shared summary field.
+
+#### Validation
+
+- `ThreadTab.svelte.test.ts` passes 128 tests. The new deferred-scope case
+  supplies an orientation total of four beside shared release counts of one
+  and proves Thread renders only `Current task scope · 0 of 1 complete`.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false` with zero startup errors. Thread rendered the canonical
+  `0 of 1 complete` at 1114px, 900px, and 390px, with no page-level horizontal
+  overflow. It no longer presents the three later tasks as current work.
