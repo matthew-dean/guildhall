@@ -1560,6 +1560,19 @@
     runStatus !== 'running' &&
     runStatus !== 'stopping',
   ))
+  // A running project with no owner input is not a conversation. The shared
+  // action model already identifies the work in motion; keep Thread to that
+  // handoff instead of rendering an operational queue and agent telemetry.
+  const showPassiveExecutionHandoff = $derived(Boolean(
+    ownerAction &&
+    ownerActionHasThread &&
+    !showProjectDecisionFirst &&
+    !showReadyWorkSummary &&
+    !projectActivityVisible &&
+    (runStatus === 'running' || runStatus === 'stopping') &&
+    !project.detail?.actionModel?.ownerInput?.active &&
+    !threadActionModel?.ownerInput?.active,
+  ))
   const workHandoffTitle = $derived(
     ownerAction?.code === 'paused_live_work' ? 'Current work' : 'No response needed',
   )
@@ -3776,7 +3789,9 @@
         </p>
       </Card>
 
-      {@render capabilityRequestDecisions()}
+      {#if !showPassiveExecutionHandoff}
+        {@render capabilityRequestDecisions()}
+      {/if}
     </Stack>
   {:else}
     <div class="thread-body">
@@ -3819,6 +3834,23 @@
             </Row>
           </div>
         </Card>
+      {:else if showPassiveExecutionHandoff}
+        <Card title="No response needed" titleTag="h2" tone="accent" variant="callout" railStrength="strong">
+          <div class="thread-project-decision">
+            <div>
+              <h3>{ownerAction?.label ?? 'Work is underway'}</h3>
+              {#if ownerAction?.taskLabel}
+                <p class="thread-project-decision-task">{ownerAction.taskLabel}</p>
+              {/if}
+              {#if ownerAction?.detail}
+                <p>{ownerAction.detail}</p>
+              {/if}
+            </div>
+            <Row justify="end" wrap>
+              <Button variant="secondary" onclick={openProjectDecision}>{ownerAction?.buttonLabel ?? 'Open work'}</Button>
+            </Row>
+          </div>
+        </Card>
       {:else if threadChains.length === 0}
         <Card title="Nothing current">
           <p class="muted">
@@ -3827,7 +3859,7 @@
         </Card>
       {/if}
 
-      {#if threadChains.length > 0 && !showProjectDecisionFirst && !showReadyWorkSummary}
+      {#if threadChains.length > 0 && !showProjectDecisionFirst && !showReadyWorkSummary && !showPassiveExecutionHandoff}
         {#if ownerAction && !ownerActionHasThread}
           <Row justify="end">
             <Button variant="ghost" size="sm" onclick={() => (projectActivityVisible = false)}>Back to project decision</Button>

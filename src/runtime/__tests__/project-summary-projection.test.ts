@@ -208,11 +208,49 @@ describe('project-summary-projection', () => {
         ...projection.decision,
         primaryAction: { kind: 'open_work' as const, targetId: 'done-task', reasonCode: 'ready_work' },
       },
-    }
+    } as typeof projection
 
     expect(synchronizeProjectSummaryDecision(stale).decision.primaryAction).toEqual({
       kind: 'none',
       reasonCode: 'release_shipped',
+    })
+  })
+
+  it('makes a saved blocked-task action own an older ready-work decision', () => {
+    const projection = buildProjectSummaryProjection({
+      projectId: 'narrative-harness',
+      queue: queue([task('ready-task', 'ready', { spec: 'A real spec.' })]),
+      generatedAt: now,
+    })
+    const stale = {
+      ...projection,
+      actionModel: {
+        ...projection.actionModel,
+        primaryAction: {
+          source: 'task' as const,
+          code: 'blocked_work' as const,
+          taskId: 'blocked-task',
+          label: 'Component implementation',
+          detail: 'Worker made no visible progress.',
+          buttonLabel: 'Open task',
+          href: '/task/blocked-task',
+          tone: 'warn' as const,
+        },
+      },
+    } as typeof projection
+
+    expect(synchronizeProjectSummaryDecision(stale).decision).toMatchObject({
+      execution: {
+        state: 'blocked',
+        code: 'blocked_work',
+        focusKind: 'blocked_work',
+        focusTaskId: 'blocked-task',
+      },
+      primaryAction: {
+        kind: 'open_work',
+        targetId: 'blocked-task',
+        reasonCode: 'blocked_work',
+      },
     })
   })
 

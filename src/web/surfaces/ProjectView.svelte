@@ -708,10 +708,12 @@
   const startReadiness = $derived(detail?.startReadiness ?? null)
   const primaryAction = $derived(detail?.actionModel?.primaryAction ?? null)
   const actionRunControl = $derived(detail?.actionModel?.runControl ?? null)
-  // A runnable work item has its own explicit command in focused Work. Keeping
-  // a generic Resume beside it creates two competing answers to one decision.
-  const focusedRunnablePrimaryAction = $derived(
-    (primaryAction?.code === 'ready_work' || primaryAction?.code === 'paused_live_work') &&
+  // A focused work item or blocked recovery has its own direct command in the
+  // content area. The shell must not offer a second, generic run control.
+  const directTaskPrimaryAction = $derived(
+    (primaryAction?.code === 'ready_work' ||
+      primaryAction?.code === 'paused_live_work' ||
+      primaryAction?.code === 'blocked_work') &&
       Boolean(primaryAction.taskId),
   )
   const primaryActionOwnsAttention = $derived(
@@ -1243,7 +1245,7 @@
       (
         runStatus === 'running' ||
         runStatus === 'stopping' ||
-        (!focusedRunnablePrimaryAction &&
+        (!directTaskPrimaryAction &&
           (availabilityPaused ||
             (!allTerminalStart && (!availabilityPaused || startDisabledReason !== 'No tasks to start'))))
       ),

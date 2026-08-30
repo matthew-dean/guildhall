@@ -1720,6 +1720,49 @@ describe('ProjectView', () => {
     },
   )
 
+  it('keeps generic Resume out of project chrome when blocked task recovery owns the next action', async () => {
+    const blockedTask = detail({
+      startReadiness: {
+        canStart: true,
+        code: 'ready_work',
+        message: 'Unrelated work is ready.',
+        focusTaskId: 'task-unrelated-ready',
+        focusTaskTitle: 'Unrelated ready work',
+        focusKind: 'ready_work',
+        actionHref: '/work?task=task-unrelated-ready',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          code: 'blocked_work',
+          taskId: 'task-blocked',
+          label: 'Component implementation',
+          detail: 'This task stopped and needs recovery.',
+          buttonLabel: 'Open task',
+          href: '/task/task-blocked',
+          tone: 'warn',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Needs recovery',
+          startEnabled: false,
+          pauseEnabled: false,
+          disabledReason: 'Open the blocked task to choose its recovery action.',
+          href: '/task/task-blocked',
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    })
+    installFetchFakes(blockedTask)
+
+    await renderProjectView('thread', null, 'looma-knit', blockedTask)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Resume')
+  })
+
   it('labels owner-input recovery blockers without saying answer', async () => {
     const recoveryDetail = detail({
       startReadiness: {

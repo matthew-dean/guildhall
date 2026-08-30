@@ -1004,6 +1004,58 @@ describe('ThreadTab', () => {
     expect(path.href).toBe('/projects/looma-knit/work?task=task-paused-work')
   })
 
+  it('keeps passive running work out of Thread until an owner response is needed', async () => {
+    const actionModel = {
+      primaryAction: {
+        label: 'Component implementation',
+        taskId: 'task-running-work',
+        taskLabel: 'Guildhall is working on Component implementation.',
+        detail: 'Nothing is waiting on you right now.',
+        buttonLabel: 'Open work',
+        href: '/work?task=task-running-work',
+        tone: 'running',
+      },
+      ownerInput: { active: false },
+    }
+    installFetchFakes([
+      workerTurn({
+        id: 'worker-running-work',
+        taskId: 'task-running-work',
+        taskTitle: 'Component implementation',
+        summary: 'Raw worker activity must not become the default Thread view.',
+      }),
+      workerTurn({
+        id: 'worker-queued-history',
+        taskId: 'task-queued-history',
+        taskTitle: 'Old queued work',
+        status: 'pending',
+        summary: 'Old queue detail does not help the owner while work is running.',
+      }),
+    ], 'worker-running-work', {
+      projectRunStatus: 'running',
+      actionModel,
+    })
+    project.detail = {
+      ...(project.detail as ProjectDetail),
+      run: { status: 'running', mode: 'continuous' },
+      actionModel,
+    }
+
+    render(ThreadTab)
+
+    await screen.findByRole('heading', { name: 'No response needed' })
+    expect(screen.getByText('Component implementation')).toBeTruthy()
+    expect(screen.getByText('Nothing is waiting on you right now.')).toBeTruthy()
+    expect(screen.queryByLabelText('Thread list')).toBeNull()
+    expect(screen.queryByLabelText('Selected thread')).toBeNull()
+    expect(screen.queryByLabelText('Active thread dock')).toBeNull()
+    expect(screen.queryByText('Old queued work')).toBeNull()
+    expect(screen.queryByText('Raw worker activity must not become the default Thread view.')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open work' }))
+    expect(path.href).toBe('/projects/looma-knit/work?task=task-running-work')
+  })
+
   it('shows a direct owner question without the Thread list or history', async () => {
     installFetchFakes([
       importedDraftTurn({

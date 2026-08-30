@@ -153,6 +153,12 @@ describe('buildProjectActionModel', () => {
       href: '/task/task-blocked',
       code: 'blocked_work',
     })
+    expect(model.runControl).toMatchObject({
+      label: 'Needs recovery',
+      startEnabled: false,
+      disabledReason: 'Open the blocked task to choose its recovery action.',
+      href: '/task/task-blocked',
+    })
     expect(model.secondaryActions).toContainEqual(expect.objectContaining({ taskId: 'task-ready' }))
   })
 
@@ -1072,7 +1078,7 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction).toMatchObject({
       source: 'task',
       label: 'Implement a no-UI runner that builds a packet from fixture records.',
-      detail: "decision_required: Cannot transition task to 'review' -- guard keeps blocking despite self-critique note being persisted",
+      detail: 'This task stopped before it could make visible progress. Choose its recovery action to continue.',
       buttonLabel: 'Open task',
       href: '/task/runner-proof',
       tone: 'warn',

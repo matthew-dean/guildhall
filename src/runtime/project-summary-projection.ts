@@ -2561,6 +2561,13 @@ export function updateProjectSummaryProjection(
         runMode: next.execution.mode,
         releaseLifecycleState: next.releaseSummary.release?.state,
       })
+      // Runtime patches rebuild the compact action model after the execution
+      // overlay. Reapply its typed primary action so the saved decision cannot
+      // keep pointing at stale ready work when a concrete blocked task owns
+      // the recovery handoff.
+      if (next.actionModel.primaryAction?.code === 'blocked_work') {
+        next.decision = applyProjectActionModelPrimaryAction(next.decision, next.actionModel.primaryAction)
+      }
     }
     const resolvedNext = next
     if (!resolvedNext) throw new Error('Project summary update did not produce a projection.')

@@ -527,6 +527,12 @@ function taskBlockedReason(task: ProjectActionTask): string | null {
   return reason.length > 0 ? reason : null
 }
 
+function ownerBlockDetail(reason: string): string {
+  return /^[a-z_]+:/.test(reason)
+    ? 'This task stopped before it could make visible progress. Choose its recovery action to continue.'
+    : reason
+}
+
 function hasExecutionChildren(task: ProjectActionTask, tasks: readonly ProjectActionTask[]): boolean {
   const explicitChildren = task.hierarchy?.childIds ?? []
   if (explicitChildren.length > 0) return true
@@ -576,7 +582,7 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
     source: 'task',
     label: taskLabel(task),
     detail: blockedReason
-      ? blockedReason
+      ? ownerBlockDetail(blockedReason)
       : approvedBriefNeedsSpec
       ? 'Guildhall is shaping a source-backed spec from the approved brief.'
       : cleanup
@@ -849,13 +855,18 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     })
     .slice(0, 3)
   const blockedButRunnable = startReadiness?.code === 'proof_evidence_missing'
-  const blockedWork = startReadiness?.code === 'blocked_work' || startReadiness?.focusKind === 'blocked_work'
+  // A recorded blocked task is more specific than a stale ready-work
+  // recommendation. Its recovery action owns the next owner decision and
+  // must therefore also own the run control.
+  const blockedWork = startReadiness?.code === 'blocked_work' ||
+    startReadiness?.focusKind === 'blocked_work' ||
+    primaryAction?.code === 'blocked_work'
   const disabledReason = stopping
     ? 'Pause requested. Guildhall is waiting for active work to stop.'
-    : !runActive && startReadiness?.canStart === false && !blockedButRunnable
-      ? blockedWork
-        ? 'Open the blocked task to choose its recovery action.'
-        : startReadiness.message
+    : !runActive && blockedWork
+      ? 'Open the blocked task to choose its recovery action.'
+      : !runActive && startReadiness?.canStart === false && !blockedButRunnable
+        ? startReadiness.message
       : !runActive && setupBlocksStart
         ? setup.detail ?? ownerInput.detail ?? 'Finish setup before starting work.'
         : undefined
@@ -865,18 +876,20 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     runControl: {
       label: setupBlocksStart && !running && !stopping
         ? 'Waiting on setup'
+        : blockedWork && !running && !stopping
+          ? 'Needs recovery'
         : availabilityPaused && !running && !stopping
           ? 'Resume'
         : ownerInput.active && !running && !stopping
           ? 'Waiting on answer'
           : runControlLabel(startReadiness, running, stopping),
-      startEnabled: availabilityPaused || running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart),
+      startEnabled: !blockedWork && (availabilityPaused || running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart)),
       // Pause is an execution command, never a generic red treatment for a
       // blocked project. A stopped project has a next action, not something
       // to pause.
       pauseEnabled: running,
       disabledReason,
-      href: startReadiness?.actionHref ?? setup.href,
+      href: blockedWork ? primaryAction?.href ?? startReadiness?.actionHref ?? setup.href : startReadiness?.actionHref ?? setup.href,
     },
     ownerInput,
     setup,

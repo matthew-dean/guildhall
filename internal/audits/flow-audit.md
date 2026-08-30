@@ -60147,3 +60147,81 @@ rebuild from the repaired canonical evidence; it changes no task data shape.
   directly to the visible `Retry worker` recovery action. At 1280x720 and
   960x720 that action remains visible with no horizontal overflow; at 390x844
   the Overview action remains visible with no horizontal overflow.
+
+### Finding: Thread must not turn passive execution into an operational dashboard
+
+- [x] User job: when the owner opens Thread while Looma + Knit is actively
+  working and no answer is needed, they immediately learn that no response is
+  required, what task is moving, and how to leave or pause it. Thread must not
+  make them scan queued backlog items, historical ages, or agent telemetry.
+- Finding, 2026-08-29: while `Component implementation` was running, installed
+  Thread listed the active task plus ten old queued tasks, a waiting dependent,
+  an optional project check-in, duplicated task titles and ages, a live dock,
+  recent agent-thought text, and a disabled composer. The same run was already
+  intelligible in Overview and Work. This route therefore adds cognitive load
+  without offering an owner decision and violates the one-minute test.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-thread-passive-execution-handoff-2026-08-29`.
+Touched contracts: the existing project/thread action model's typed
+`primaryAction`, `ownerInput.active`, and run status distinguish an active
+owner conversation from passive execution. Thread consumes that shared state
+and preserves its normal decision path whenever owner input is active.
+Considered but not touched: task history persistence, worker transcript
+retention, scheduler selection, composer transport, capability-request
+persistence, and project queue ordering. Required follow-up: prove the
+installed route hides passive operational detail while retaining the shared
+open-work handoff, then prove owner questions still remain actionable.
+
+#### Schema Migration Decision
+
+No schema migration. Thread and event persistence remain intact; only the
+normal presentation chooses the existing typed action state over passive
+operational history. The original transcript remains available through a
+deliberate task/work route when it supports an owner decision.
+
+- [x] Regression proof, 2026-08-30: `ThreadTab` now renders one `No response
+  needed` handoff for a represented running task with `ownerInput.active:
+  false`; it omits the Thread list, selected-thread region, active dock, raw
+  worker activity, and queued history. It keeps the shared `Open work` route.
+  The live Looma run ended in a recorded blocker before the repaired build was
+  installed, so the next passive-running project state still needs a fresh
+  installed-browser observation rather than inventing one.
+
+### Finding: Global run control must not contradict the owner’s actual next action
+
+- [x] User job: when active work stops because a named task needs recovery, the
+  global control and the project action must agree that the owner should open
+  that task. The owner must not be invited to resume the whole project before
+  they can see or resolve why the current work stopped.
+- Finding, 2026-08-29: after the real Looma `Component implementation` retry
+  stopped again with `human_judgment_required`, Thread correctly showed the
+  single `Open task` action. The global chrome instead showed `Resume`.
+  Those controls imply competing next steps for the same shared run and task
+  state, violating the one-minute orientation requirement.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-blocked-run-control-reconciliation-2026-08-30`.
+Touched contracts: the shared action model's recorded blocked-task action owns
+the owner run-control label, enabled state, href, and decision focus. The
+compact serve boundary reconciles the response decision and orientation pin
+with that same action after current task records are available. Considered but
+not touched: project availability persistence, scheduler stop semantics, task
+escalation schema, and pause/resume transport. Required proof: action model,
+decision packet, orientation spine, chrome, Thread, and task drawer all name
+the same recovery task.
+
+#### Schema Migration Decision
+
+No schema migration. This repairs derived action/decision reconciliation and
+read-time projection only; task, availability, escalation, and run persistence
+are unchanged.
+
+- [x] Installed proof, 2026-08-30: after `pnpm dev:install`, restart, and a
+  `stale:false` response, the real Looma API reports `Component
+  implementation`, `blocked_work`, `Needs recovery`, one blocked decision
+  focus, and one matching orientation pin. The 1280px installed task drawer
+  has no top-bar Resume and exposes `Retry worker`; installed Thread has one
+  plain-language `Open task` action with no queue or agent transcript.

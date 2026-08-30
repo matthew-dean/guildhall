@@ -48,8 +48,8 @@ import { taskBlockerSummary } from './task-blocker-summary.js'
 import { requestSpecReview } from './spec-review-ownership.js'
 import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
 import { validateProductBriefGrounding } from './spec-quality.js'
-import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
-import { applyRuntimeExecutionToProjectDecision, projectDecisionInFlight, projectDecisionStartReadiness, reconcileRegisteredProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
+import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, synchronizeProjectSummaryDecision, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
+import { applyProjectActionModelPrimaryAction, applyRuntimeExecutionToProjectDecision, projectDecisionInFlight, projectDecisionStartReadiness, reconcileRegisteredProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
 import { readCurrentThreadTaskIdsAtBoundary, readThreadHistoryReadProjection, readThreadReadProjection, threadReadProjectionFromBoundary } from './thread-read-projection.js'
@@ -5927,6 +5927,7 @@ function ownerOrientationExecutionHeadline(scopeLabel: string, readiness: { code
   if (readiness?.code === 'running') return `${scopeLabel} is underway.`
   if (readiness?.code === 'stopping') return `${scopeLabel} is pausing.`
   if (readiness?.code === 'paused_live_work') return `${scopeLabel} is paused.`
+  if (readiness?.code === 'blocked_work') return `${scopeLabel} needs recovery.`
   return null
 }
 
@@ -7755,8 +7756,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }))
     const promotedState = (overviewState?.authority ?? surfaceState?.authority) === 'database'
     const compactState: ProjectCompactStateReadModel | null = surfaceState?.compact ?? null
-    const savedProjection = overviewState?.summary ?? surfaceState?.summary ?? compactState?.summary ??
+    const savedProjectionRecord = overviewState?.summary ?? surfaceState?.summary ?? compactState?.summary ??
       (promotedState ? null : readProjectSummaryForProjectAtBoundary(project.path))
+    // Runtime overlays can update the compact action model after its saved
+    // decision packet. Normalize the pair at the read boundary so every
+    // ordinary project surface receives one owner action and focus.
+    const savedProjection = savedProjectionRecord
+      ? synchronizeProjectSummaryDecision(savedProjectionRecord)
+      : null
     const stateQueueRevision = overviewState?.queueRevision ?? compactState?.queueRevision ?? null
     const stateProjectRevision = overviewState?.projectRevision ?? compactState?.projectRevision ?? null
     const compactProjection = savedProjection
@@ -8194,6 +8201,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       items: savedAttention.freshness === 'current' ? savedAttention.items : [],
       runStatus: run?.status ?? 'stopped',
     })
+    // The response action can use current task records that saved readiness
+    // deliberately omits. Keep the decision packet on that same owner focus.
+    const responseDecision = summary.decision && sharedResponseActionModel?.primaryAction
+      ? applyProjectActionModelPrimaryAction(summary.decision, sharedResponseActionModel.primaryAction)
+      : summary.decision
+    const ownerResponseReadiness = responseDecision
+      ? projectDecisionStartReadiness(responseDecision)
+      : responseStartReadiness
     let sharedReleaseCounts = isRecord(compactReleaseReadiness) && isRecord(compactReleaseReadiness.releaseCounts)
       ? compactReleaseReadiness.releaseCounts as {
           total: number
@@ -8220,7 +8235,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         proofBlocked: Math.max(sharedReleaseCounts.proofBlocked, compactProofBlocked),
       }
     }
-    const responseStartMessage = responseStartReadiness?.message
+    const responseStartMessage = ownerResponseReadiness?.message
     if (typeof responseStartMessage === 'string' && responseStartMessage.trim().length > 0) {
       const orientationSummary = (orientationSpine as { summary?: unknown }).summary
       const orientationSummaryRecord = orientationSummary && typeof orientationSummary === 'object' && !Array.isArray(orientationSummary)
@@ -8229,7 +8244,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const selectedScopeLabel = typeof orientationSummaryRecord.selectedScopeLabel === 'string'
         ? orientationSummaryRecord.selectedScopeLabel
         : 'Current scope'
-      const executionHeadline = ownerOrientationExecutionHeadline(selectedScopeLabel, responseStartReadiness)
+      const executionHeadline = ownerOrientationExecutionHeadline(selectedScopeLabel, ownerResponseReadiness)
       orientationSpine = {
         ...orientationSpine,
         summary: {
@@ -8237,9 +8252,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(executionHeadline ? {
             headline: executionHeadline,
             topBlocker: null,
-          } : responseStartReadiness?.canStart ? {
+          } : ownerResponseReadiness?.canStart ? {
             headline: `${selectedScopeLabel} is ready to continue.`,
             topBlocker: null,
+          } : {}),
+          ...(responseDecision?.execution.focus ? {
+            pinnedNow: [responseDecision.execution.focus.displayTitle],
           } : {}),
           nextAction: responseStartMessage,
         },
@@ -8314,6 +8332,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       workProgress: workProgressFromProjectSummaryProjection(projection, sharedReleaseCounts),
       ...(releaseSummary ? { releaseSummary } : {}),
       releaseReadiness: compactReleaseReadiness,
+      ...(responseDecision ? { decision: responseDecision } : {}),
       startReadiness: responseStartReadiness,
       actionModel: sharedResponseActionModel,
       orientationSpine,
