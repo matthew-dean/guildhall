@@ -62118,3 +62118,20 @@ does not remove or alter task worktree changes.
   observe it, so the current honest t-minus-t state is a clean paused task.
   Do not manufacture a dirty project edit merely to satisfy this proof; repeat
   this exact check on the next real saved-work pause.
+
+### Finding: A worker that loses its edits cannot look like ordinary progress
+
+- [ ] User job: when an active task's isolated worktree goes from changed back
+  to clean without a review, proof, or completion transition, the owner sees
+  a truthful recovery state rather than a generic working or resume message.
+- Finding, 2026-08-30: during the real t-minus-t `task-004` run, the worker
+  made the command/docs/test changes, then reset its worktree and restarted
+  the same work. The eventual clean paused state is truthful, but it erases
+  the fact that Guildhall had observed unsuccessful implementation churn. The
+  worker's natural-language explanation is evidence only; the repair must use
+  typed worktree observations and task transitions, not model prose.
+- Next repair: persist a bounded typed worktree-observation sequence at worker
+  tool/turn boundaries, detect changed-to-clean loss without a terminal or
+  review transition, and route that fact through the existing shared recovery
+  action model. The owner should get one executable recovery action, not an
+  activity transcript or a new diagnostic surface.
