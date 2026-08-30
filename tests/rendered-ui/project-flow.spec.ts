@@ -441,17 +441,19 @@ test('a shipped release ends calmly and offers only the next-release entry point
 })
 
 test('project shell keeps a required update as the sole visible work interruption', async ({ page }) => {
-  await page.setViewportSize({ width: 1114, height: 692 })
-  await page.goto('/projects/looma-knit')
+  for (const [width, height] of [[1114, 692], [900, 692], [390, 844]] as const) {
+    await page.setViewportSize({ width, height })
+    await page.goto('/projects/looma-knit')
 
-  const overview = page.getByRole('region', { name: 'Project overview' })
-  await expect(overview).toBeVisible()
-  await expect(overview.getByRole('button', { name: 'Review project update' })).toBeVisible()
-  await expectNoClippedContent(page, {
-    containerSelector: '.overview-decision-card',
-    itemSelector: '.overview-decision-card button',
-  })
-  expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(1115)
+    const overview = page.getByRole('region', { name: 'Project overview' })
+    await expect(overview).toBeVisible()
+    await expect(overview.getByRole('button', { name: 'Review project update' })).toBeVisible()
+    await expectNoClippedContent(page, {
+      containerSelector: '.overview-decision-card',
+      itemSelector: '.overview-decision-card button',
+    })
+    expect(await page.locator('html').evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(width + 1)
+  }
 
   await page.goto('/projects/looma-knit/work')
   await expect(page.getByRole('region', { name: 'Project update required' })).toBeVisible()

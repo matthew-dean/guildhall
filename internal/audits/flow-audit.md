@@ -62338,3 +62338,51 @@ No persisted-schema change. This removes a duplicate presentation derivation.
   `stale:false` with zero startup errors. The real `task-004` recovery state
   exposed identical `Retry worker` primary, Activity top/current, and summary
   actions, all with the same task id and `start_focused` operation.
+
+### Finding: Overview must keep the owner command visible and its summary bounded
+
+- [x] User job: on the first Overview card, an owner can read the current
+  milestone, identify the task, and use its one executable command without
+  hunting through Work or losing the end of a long title. The card must stay
+  inside its frame at desktop, split-screen, and mobile widths.
+- Live finding, 2026-08-29: the installed project Overview showed `What needs
+  your attention` and a long review-task title running past the edge of its
+  card, with no visible command. The shared action record did contain a
+  review operation, so an owner-facing action disappeared between the summary
+  and its presentation. This is a release-blocking flow break: a prompt to act
+  without the action is not a usable handoff.
+
+#### Contract Touch Decision
+
+Work id: `overview-visible-bounded-owner-command-2026-08-30`. Candidate
+touched contract: Overview presentation of the existing shared primary-action
+model. The action's identity, ranking, wording, and operation remain owned by
+the shared runtime projection; this work may only guarantee that the existing
+command is rendered and that unbounded display prose cannot displace it.
+Considered but not touched: action-model ranking, migration behavior, task and
+release schemas, task titles, and route-local action derivation. Required
+proof: every non-shipped Overview state exposes the shared primary button, a
+long task title stays single-line ellipsized, detail stays deliberately bounded,
+and the action remains within the card at constrained widths. Apply/revert:
+presentation-only; reverting restores the overflow risk without modifying
+project data.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This is a bounded rendering repair over existing
+typed action-model fields.
+
+#### Validation
+
+- `ProjectOverviewTab.svelte.test.ts` passes 9 tests. It asserts that a long
+  review target retains its full hover title, uses the bounded task/detail
+  presentation, and still displays the shared `Review next spec` command.
+- The rendered browser regression passes at 1114px, 900px, and 390px. The
+  Overview keeps the only `Review project update` command visible inside the
+  decision card and reports no page-level horizontal overflow at any width.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm build`, `pnpm
+  dev:install`, `guildhall stop`, and `guildhall start`, `/api/stale-server`
+  reported `stale:false` with two refreshed projects and zero startup errors.
+  The real Overview rendered its shared `Retry worker` command inside the
+  decision card at 1114px, 900px, and 390px; the title computed to ellipsis,
+  detail to two lines, and no viewport had horizontal overflow.

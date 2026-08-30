@@ -109,15 +109,17 @@ describe('ProjectOverviewTab owner decision', () => {
   })
 
   it('keeps an owner-review target compact and separate from the review command', () => {
+    const longTaskTitle = 'Keep the component, editor, and migration roadmaps synchronized as their status changes.'
+    const longDetail = 'Review the prepared change before work can continue. This deliberately long explanation must remain supporting context instead of expanding the owner handoff into an unbounded report.'
     render(ProjectOverviewTab, {
       detail: detail({
         actionModel: {
           ...detail().actionModel,
           primaryAction: {
             label: 'Review a spec',
-            taskLabel: 'Keep the component, editor, and migration roadmaps synchronized as their status changes.',
+            taskLabel: longTaskTitle,
             taskId: 'task-import-1rpbo8n',
-            detail: '10 specs are ready for your review before work can continue.',
+            detail: longDetail,
             buttonLabel: 'Review next spec',
             href: '/work?task=task-import-1rpbo8n',
             tone: 'warn',
@@ -131,7 +133,10 @@ describe('ProjectOverviewTab owner decision', () => {
 
     expect(screen.getByRole('heading', { name: 'Review a spec' })).toBeInTheDocument()
     expect(screen.getByText('LOO-EBUYE7')).toBeInTheDocument()
-    expect(screen.getByText(/Keep the component, editor, and migration roadmaps synchronized/i)).toBeInTheDocument()
+    const taskTitle = screen.getByText(longTaskTitle)
+    expect(taskTitle).toHaveClass('decision-task-title')
+    expect(taskTitle.closest('.decision-task')).toHaveAttribute('title', longTaskTitle)
+    expect(screen.getByText(longDetail)).toHaveClass('decision-detail')
     expect(screen.getByRole('button', { name: 'Review next spec' })).toBeInTheDocument()
   })
 

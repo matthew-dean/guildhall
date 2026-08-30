@@ -154,7 +154,7 @@
             </p>
           {/if}
           {#if nextAction.detail}
-            <p>{nextAction.detail}</p>
+            <p class="decision-detail">{nextAction.detail}</p>
           {/if}
         {/if}
       </div>
@@ -239,10 +239,21 @@
   }
 
   .decision-task-title {
+    display: block;
+    flex: 1 1 auto;
     min-width: 0;
+    max-inline-size: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .decision-detail {
+    display: -webkit-box;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
   }
 
   .decision-progress {
