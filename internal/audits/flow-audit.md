@@ -60421,5 +60421,138 @@ existing fields it writes.
 - [x] Focused regression proof, 2026-08-30: the start endpoint's spec-repair
   coverage passes after its database-authoritative repair path reads the
   promoted current task boundary and includes `structuredSpec` in promoted
-  writes. `pnpm typecheck` and `pnpm lint:contracts` pass. Installed replay of
-  this final boundary correction remains required before closing the finding.
+  writes. `pnpm typecheck` and `pnpm lint:contracts` pass. Installed replay
+  reframed ContextMenu from its current state, saved a new owner-authored
+  five-criterion spec, and made `/start` reject an unattended start while that
+  owner review was pending.
+
+### Finding: Reframing must clear the old review owner before it creates a new review decision
+
+- [ ] User job: after the owner asks Guildhall to reframe a task, the resulting
+  review screen tells the truth about who must act. A coordinator-owned recovery
+  gate cannot survive and make a new owner-authored spec look like a decision
+  the owner must approve.
+- Finding, 2026-08-30: the live ContextMenu reframe cleared the old brief and
+  spec but retained its `coordinator` review gate. The fresh spec writer saved
+  a complete six-criterion contract; the project decision correctly treated it
+  as coordinator-runnable, while the Task drawer ignored the typed gate and
+  showed `Approve spec`. Starting the same task was accepted, proving that the
+  screen and executable action disagreed.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-reframe-review-authority-2026-08-30`.
+Touched contracts: a reframe starts a new planning lifecycle and must clear the
+previous `specReviewGate`; the next spec handoff owns the new authority. The
+Task drawer must render an owner approval only for the typed owner gate, not
+from `spec_review` status alone. Considered but not touched: review approval
+persistence, task status values, provider behavior, and release ranking.
+Required proof: a reframed coordinator-owned task has no stale gate while it is
+exploring; its freshly authored spec receives an owner gate; the owner drawer
+and `/start` agree on whether the task can proceed.
+
+#### Schema Migration Decision
+
+No schema migration. `specReviewGate` already represents the authority; this
+is a lifecycle write-boundary correction and a read-side presentation fix.
+
+- [x] Regression and installed proof, 2026-08-30: a reframe clears a
+  coordinator-owned gate before shaping begins. The installed Looma reframe
+  saved an owner-authored spec with `specReviewReadyForOwnerApproval:true`, and
+  `/start` returned the same pending-owner-review boundary the drawer showed.
+
+### Finding: Approving a spec must move immediately to the shared next action
+
+- [ ] User job: after approving the one visible spec decision, the owner sees
+  what Guildhall will do next and one way to continue it. The old full spec is
+  not left on screen as though more reading is required.
+- Finding, 2026-08-30: after the live ContextMenu approval succeeded, the
+  drawer reloaded only its task record. Its project decision stayed stale as
+  `Review needed`, so the view fell through to a long Spec tab rather than the
+  compact `Ready to continue` handoff. The action completed, but the owner had
+  no visible confirmation or next step.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-spec-approval-next-action-refresh-2026-08-30`.
+Touched contracts: a successful owner spec approval must refresh the shared
+project decision before Task drawer presentation chooses its next branch.
+Considered but not touched: approval persistence, spec rendering, task status,
+and release ordering. Required proof: after approval, the same drawer receives
+the current shared focused action and renders the compact continuation command
+instead of its previously selected document tab.
+
+#### Schema Migration Decision
+
+No schema migration. This is a client read-refresh boundary after an existing
+typed approval mutation.
+
+### Finding: A task drawer must not navigate from an older project decision
+
+- [ ] User job: when Guildhall directs the owner from one completed decision to
+  the next task, that task is the current shared project action. Opening a
+  drawer cannot resurrect a previous decision from an older page response.
+- Finding, 2026-08-30: after ContextMenu approval, the drawer showed the
+  correct current project action, but its action button opened a cached
+  AlertDialog recovery. The AlertDialog detail response itself named a different
+  current primary task. The drawer used `project.detail.actionModel` from the
+  old page cache instead of its own revision-matched detail decision, so one
+  click led the owner to an unrelated, non-executable recovery card.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-task-drawer-current-action-boundary-2026-08-30`.
+Touched contracts: the task-detail API must carry the shared action model from
+the same current summary revision as its decision; Task drawer navigation and
+focused handoff presentation must prefer that payload over a page-level cache.
+Considered but not touched: task ranking, release blocker selection, task
+state persistence, and browser routing. Required proof: a stale cached action
+cannot win over the task-detail action model, and the drawer opens the current
+target task.
+
+#### Schema Migration Decision
+
+No schema migration. The shared action model is already persisted in the
+project summary; task detail will expose that existing current projection.
+
+- [x] Regression and installed proof, 2026-08-30: the task-detail packet now
+  carries a revision-matched shared action model. Focused drawer coverage gives
+  the page cache an intentionally stale target and proves the detail target
+  wins. The installed ContextMenu drawer's `Open Work` command opened
+  `task-import-gh97p0`, the actual current action, rather than the stale
+  AlertDialog task.
+
+### Finding: A recovery card must expose the action it recommends on the view the owner landed on
+
+- [x] User job: when a task says it can resume, that exact recovery command is
+  visible without changing tabs, finding a footer, or decoding a vague label.
+  The secondary action must say what it does.
+- Finding, 2026-08-30: the installed docs/storybook task told the owner that
+  its most likely next step was `Resume task`, but its Overview drawer showed
+  only `Reframe task...` and `I handled this...`. The usable retry lived only
+  in a different action view. That makes the task sound actionable while
+  withholding its action from the route Guildhall chose.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-recovery-action-visibility-2026-08-30`.
+Touched contracts: `escalationPrimaryAction` is the shared primary recovery
+command. Every task-drawer branch that presents the same unresolved escalation
+must show that command, while reframe remains an overflow option and manual
+resolution is named `Mark blocker resolved`. Considered but not touched:
+escalation persistence, retry transition semantics, task ranking, and agent
+dispatch. Required proof: an owner-owned escalation on Overview visibly offers
+the shared recovery command and opens its resolution path.
+
+#### Schema Migration Decision
+
+No schema migration. This aligns existing typed escalation actions and their
+presentations.
+
+- [x] Regression and installed proof, 2026-08-30: focused TaskDrawer,
+  CurrentTab, ThreadTab, and escalation-label coverage proves that an
+  owner-owned escalation exposes `Resume task` and a separately named manual
+  resolution path. After installation and restart with `stale:false`, the real
+  docs/storybook task's Overview drawer showed `Resume task` and `Mark blocker
+  resolved...`; opening `Resume task` presented the concrete recovery modal
+  without requiring a tab change.
