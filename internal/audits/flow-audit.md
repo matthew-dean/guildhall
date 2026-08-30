@@ -61236,21 +61236,34 @@ revert restores the old read behavior only, with no data conversion.
 - Finding, 2026-08-30: while the real Looma + Knit docs task was running, the
   primary project read correctly reported `0` deferred items in the selected
   16-item release, but `/api/project/activity` reported `26` deferred items.
-  The activity shell discarded the selected release membership before its
-  common summary normalizer could correct an older saved count.
+  The compact summary reused an old scalar count, and its orientation record
+  described later work rather than authoritative selected-release membership.
+  The normalized `release_membership` relation records no deferred work for
+  this release.
 
 #### Contract Touch Decision
 
 Work id: `looma-knit-release-denominator-shell-2026-08-30`. Touched contract:
 the promoted project summary shell. Every reader of the shared release summary
-must retain the selected release membership long enough to normalize the
-release denominator, then may discard orientation detail from its compact
-payload. Considered but not touched: task inventory, release ranking, activity
-polling frequency, and view copy. Required proof: a shell/activity read and a
-project read return the same selected-release counts when later work exists.
+must derive the selected release's deferred count from normalized
+`release_membership`, not from an orientation payload or a stale scalar cache.
+Compact readers may omit orientation entirely. Considered but not touched: task
+inventory, release ranking, activity polling frequency, and view copy. Required
+proof: a shell/activity read and a project read return the same selected-release
+counts when later work exists.
 
 #### Schema Migration Decision
 
-No persisted-schema migration. The saved orientation record already contains
-the selected release membership; this change preserves that existing data
-inside the read boundary before returning the compact shell.
+No persisted-schema migration. The normalized membership relation already
+exists and remains its current authority; this change stops a summary reader
+from falling back to non-authoritative presentation data.
+
+- [x] Regression and installed proof, 2026-08-30: the compact-shell
+  regression seeds a stale cached count without an orientation payload and
+  proves the normalized membership relation supplies the correct deferred
+  count. After a fresh build, install, restart, and `stale:false`, real Looma
+  + Knit `/api/project` and `/api/project/activity` both returned the same
+  selected-release counts: `total: 16`, `done: 0`, `active: 2`, `blocked: 4`,
+  and `deferred: 0`. The paused Overview stayed oriented and actionable at
+  1280px, 1024px, and 390px with no page-level horizontal overflow; its sole
+  enabled `Resume work` control was visible above the mobile fold.

@@ -1530,6 +1530,27 @@ function readReleaseMembershipByRelease(database: DatabaseSync): Map<string, { i
   return result
 }
 
+function reconcileSummaryReleaseMembership(database: DatabaseSync, summary: JsonRecord): JsonRecord {
+  if (!tableExists(database, 'release_membership')) return summary
+  const releaseSummary = isRecord(summary.releaseSummary) ? summary.releaseSummary : null
+  const release = releaseSummary && isRecord(releaseSummary.release) ? releaseSummary.release : null
+  const releaseId = stringValue(release?.id)
+  const counts = releaseSummary && isRecord(releaseSummary.counts) ? releaseSummary.counts : null
+  if (!releaseId || !counts) return summary
+  const deferred = readReleaseMembershipByRelease(database).get(releaseId)?.deferred.length ?? 0
+  if (Number(counts.deferred) === deferred) return summary
+  return {
+    ...summary,
+    releaseSummary: {
+      ...releaseSummary,
+      counts: {
+        ...counts,
+        deferred,
+      },
+    },
+  }
+}
+
 function readReleaseMembershipByTask(database: DatabaseSync): Map<string, string[]> {
   const result = new Map<string, string[]>()
   if (!tableExists(database, 'release_membership')) return result
@@ -6038,10 +6059,10 @@ function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
     : storedMtime !== currentMtime || storedGoalsMtime !== currentGoalsMtime
   const summaryRevision = Number(row.revision ?? 0)
   const databaseRevision = currentRevision(database)
-  const storedSummary = hydrateSummaryFromAuxiliaryRows(
+  const storedSummary = reconcileSummaryReleaseMembership(database, hydrateSummaryFromAuxiliaryRows(
     database,
     parseJson<JsonRecord>(row.payload_json, {}),
-  )
+  ))
   const stateResolution = readProjectStateResolutionFromDatabase(database, databaseRevision)
   // The decision has a dedicated compact owner. Old summaries may retain a
   // compatibility copy until their next refresh, but a matching durable packet

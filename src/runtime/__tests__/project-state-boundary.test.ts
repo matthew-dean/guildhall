@@ -271,13 +271,6 @@ describe('project-state-boundary', () => {
             blockers: [],
             updatedAt: '2026-08-30T00:00:00.000Z',
           },
-          orientationSpine: {
-            selectedRelease: {
-              id: 'release-current',
-              label: 'Current release',
-              deferredNodeIds: ['work:task-later'],
-            },
-          },
         },
         scopeRows: [{
           taskId: 'task-current',
