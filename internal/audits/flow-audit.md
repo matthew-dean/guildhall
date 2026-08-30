@@ -63470,7 +63470,7 @@ task status, reviewer authority, or stored task-runtime schema.
 
 ### Finding: Release follow-up must execute a repository action, not reopen Release
 
-- [ ] User job: when completed scope is blocked only because its branch is
+- [x] User job: when completed scope is blocked only because its branch is
   local, the owner sees one concrete next action and can complete it in place.
   A Release card must never point back to the same Release route or require a
   trip through a buried task tab to push a branch.
@@ -63485,7 +63485,8 @@ task status, reviewer authority, or stored task-runtime schema.
 
 Work id: `repository-followup-executable-owner-action-2026-08-30`. Touched
 contracts: typed repository follow-up readiness, shared owner-action operation,
-release/overview action dispatch, and first-push Git tracking behavior. A
+project/task-detail action reconciliation, release/overview action dispatch,
+and first-push Git tracking behavior. A
 repository blocker with a focused task may emit only a typed executable action
 when the current Git state supports it: local/no-upstream branches push first;
 pushed branches open a pull request next. Considered but not touched: release
@@ -63493,8 +63494,10 @@ membership, completion counts, task status, pull-request provider behavior,
 Git-story persistence, and local-only/deferred policy. Required proof: a
 no-upstream completed task renders `Push branch`, explicit owner invocation
 uses the existing policy-confirmed endpoint, the push establishes an upstream,
-and the next shared action is the PR handoff rather than the old self-link.
-Apply/revert: shared readiness/action operation plus Git-driver push behavior.
+and the next shared action is the PR handoff rather than the old self-link on
+every owner route, including the task drawer. Apply/revert: shared
+readiness/action operation, task-detail response reconciliation, and Git-driver
+push behavior.
 
 #### Schema Migration Decision
 
@@ -63520,6 +63523,12 @@ current typed Git-story snapshot and is not stored as task or release state.
   diagnostics. The focused action fit without horizontal overflow at the
   default desktop width, 900px narrow desktop, and 390px mobile
   (`scrollWidth === clientWidth` at both constrained widths).
+- Cross-route follow-up, 2026-08-30: the task drawer had bypassed the response
+  reconciler and regressed to saved `Release is ready` copy after a branch was
+  pushed. It now consumes the same reconciled packet as Work, Overview, Thread,
+  Inbox, and Release. On the installed t-minus-t app, both Work and
+  `/api/project/task/task-004` return `Pull request is ready to open` with one
+  `Open pull request` action for `task-004` at the same current revision.
 - Installed Narrative Harness secondary proof, 2026-08-30: the independent
   `NAR-091` review-retry action stayed on focused Work and immediately became
   `Work is underway` with the named task and the global `Pause` control. Its

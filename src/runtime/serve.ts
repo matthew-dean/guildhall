@@ -14823,26 +14823,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const selectedTask = proofMissingForSelectedScope
         ? { ...enrichedTask, completionProof: releaseProofMissingCompletionProof(enrichedTask) }
         : enrichedTask
-      const sharedDecision = databaseAuthority
-        ? taskDetailState?.stateResolution?.decision ?? null
-        : projection.decision
-      const decisionIsCurrent = !databaseAuthority || (
+      // Task detail is a record zoom-in, not a second owner-action authority.
+      // Reuse the same response reconciler as Overview, Work, Thread, Inbox,
+      // and Release so current repository state can advance a saved
+      // "review release" decision to an executable push or PR handoff.
+      const sharedActionSurface = await buildProjectionSurfaceDetail({
+        surface: 'work',
+        requestedTaskId: id,
+      })
+      const sharedDecision = sharedActionSurface.decision
+      const decisionMatchesTaskSnapshot = !databaseAuthority || (
+        sharedActionSurface.projectRevision === taskDetailState?.projectRevision &&
+        sharedActionSurface.queueRevision === taskDetailState?.queueRevision
+      )
+      const decisionIsCurrent = decisionMatchesTaskSnapshot && (!databaseAuthority || (
         isRecord(sharedDecision) &&
         sharedDecision.projectRevision === taskDetailState?.projectRevision &&
         sharedDecision.queueRevision === taskDetailState?.queueRevision
-      )
-      // Task detail is only a record zoom-in. Its owner action must come from
-      // the same summary resolver as Overview, Work, and Thread; returning
-      // the persisted action cache here used stale task-local ranking even
-      // when the decision packet named a different current command.
-      const sharedProjectSummary = summarizeProjectFromProjection(
-        { id: project.id, path: project.path },
-        project,
-        run,
-        projection,
-      )
+      ))
       const sharedDetailActionModel = decisionIsCurrent
-        ? sharedProjectSummary.actionModel ?? null
+        ? sharedActionSurface.actionModel ?? null
         : null
       // Selected-scope counts belong to the durable project summary. Reusing
       // the queue here made task detail recompute scope membership and disagree
