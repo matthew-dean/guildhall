@@ -1661,6 +1661,37 @@ describe('ProjectView', () => {
     }, { timeout: 1200 })
   })
 
+  it('quickly reconciles chrome after a focused run transitions from running to stopped', async () => {
+    const user = userEvent.setup()
+    const stopped = pausedDetail()
+    const running = detail({
+      run: { status: 'running', mode: 'one_task' },
+      availability: { status: 'active', pausedAt: null, resumedAt: now },
+    } as Partial<ProjectDetail>)
+    let projectRequestCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') {
+        projectRequestCount += 1
+        return json(projectRequestCount === 2 ? running : stopped)
+      }
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      if (url.pathname === '/api/project/start') return json({ ok: true })
+      return json({})
+    }))
+
+    await renderProjectView('thread', null, 'looma-knit', stopped)
+    await user.click(screen.getByRole('button', { name: /^resume$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^pause/i })).toBeInTheDocument()
+    }, { timeout: 700 })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^resume$/i })).toBeInTheDocument()
+    }, { timeout: 1200 })
+  })
+
   it('offers one-task advancement from the overflow menu without changing project context', async () => {
     const user = userEvent.setup()
     const fetchMock = installFetchFakes()

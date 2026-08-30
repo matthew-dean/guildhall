@@ -263,6 +263,15 @@
     if (refreshInbox) await loadInbox()
   }
 
+  function scheduleStartedRunReconciliation(mode: 'continuous' | 'one_task'): void {
+    const checkpoints = mode === 'one_task'
+      ? [300, 700, 1200, 1800, 3200]
+      : [300, 1500, 3200]
+    for (const delay of checkpoints) {
+      setTimeout(() => void reconcileRunState(delay >= 1500), delay)
+    }
+  }
+
   $effect(() => {
     if (refreshHandle) clearInterval(refreshHandle)
     refreshHandle = setInterval(() => {
@@ -547,13 +556,7 @@
         optimisticRunStatus = null
         return
       }
-      setTimeout(() => void reconcileRunState(), 300)
-      setTimeout(() => {
-        void reconcileRunState(true)
-      }, 1500)
-      setTimeout(() => {
-        void reconcileRunState(true)
-      }, 3200)
+      scheduleStartedRunReconciliation(mode)
     } finally {
       busy = false
     }
