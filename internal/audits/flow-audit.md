@@ -60625,3 +60625,36 @@ the owner orientation contract.
   `stale:false`, the Looma Activity and project responses agreed on the same
   task id, action, and full task label; the real prior-task drawer read `One
   repair is ready`, named the roadmap-sync task, and exposed `Repair spec`.
+
+### Finding: A focused repair must retire its completed command before the owner can click it again
+
+- [x] User job: after the owner starts the visible repair, that button becomes
+  unavailable immediately and the same drawer refreshes to the next shared
+  action as soon as the repair completes.
+- Finding, 2026-08-30: the cross-task repair ran successfully in one focused
+  pass, but the originating drawer kept its completed `Repair spec` button
+  visible and clickable until its normal four-second poll. The project action
+  had already advanced to a different repair, so the displayed command was
+  stale during the most important moment of the handoff.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-completed-repair-drawer-refresh-2026-08-30`.
+Touched contracts: a TaskDrawer run action refreshes both the shared project
+summary and its revision-bound task payload on the same bounded cadence; the
+action is disabled while the request is in flight. Considered but not touched:
+repair selection, task persistence, run orchestration, and polling interval.
+Required proof: the installed cross-task repair button disables during start
+and the originating drawer replaces it with the next action without waiting
+for ordinary polling.
+
+#### Schema Migration Decision
+
+No schema migration. This is a client refresh boundary after an existing run
+mutation.
+
+- [x] Regression and installed proof, 2026-08-30: TaskDrawer coverage passes
+  with the cross-task repair start route. After installation and restart with
+  `stale:false`, the real Looma repair button disabled as soon as it was
+  clicked, stayed on the originating drawer, then refreshed to the next
+  shared repair task and re-enabled only after the focused pass had stopped.
