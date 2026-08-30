@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
-  import { tick } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import Card from '../../lib/ui-compat/Card.svelte'
   import CardList from '../../lib/CardList.svelte'
   import CardListItem from '../../lib/CardListItem.svelte'
@@ -70,6 +70,7 @@
   let runWorkBusyId = $state<string | null>(null)
   let runWorkActiveId = $state<string | null>(null)
   let runWorkObservedActive = $state(false)
+  let runWorkStartConfirmationTimer: ReturnType<typeof setTimeout> | null = null
   let runWorkError = $state<string | null>(null)
   let inventoryLoadBusy = $state(false)
   let pendingRouteScrollTaskId = $state<string | null>(null)
@@ -411,6 +412,9 @@
     return `${counts.done ?? 0} of ${counts.total} complete`
   })
   const focusedDecisionDetail = $derived.by(() => {
+    if (focusedWork && isFocusedWorkStarting(focusedWork)) {
+      return 'Guildhall accepted the command and is starting this task.'
+    }
     const sharedDetail = detail.actionModel?.primaryAction?.detail?.trim()
     if (sharedDetail) return sharedDetail
     if (focusedWork && hasSpecRepair(focusedWork)) return 'Guildhall needs to repair this spec before it can ask you to review it.'
@@ -421,6 +425,7 @@
   })
   const focusedCardTitle = $derived.by(() => {
     if (focusedWork && isFocusedWorkRunning(focusedWork)) return 'Work is underway'
+    if (focusedWork && isFocusedWorkStarting(focusedWork)) return 'Starting work'
     if (focusedWork && detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
       return detail.actionModel.primaryAction.ownerHeading ?? 'Worker needs a fresh pass'
     }
@@ -480,12 +485,12 @@
         runWorkError = body.error ?? `Start failed (HTTP ${res.status})`
         return
       }
+      // A successful command deserves an immediate, honest acknowledgement.
+      // The shared run snapshot remains authoritative for the durable
+      // `running` state and can still reject or stop this request.
+      beginWorkStartConfirmation(taskId)
       const refreshed = await project.refresh(detail.id)
-      // The shared run snapshot owns the active state. A start request can
-      // succeed while the focused pass has already stopped, so never leave an
-      // optimistic Work-only marker behind in that case.
-      runWorkActiveId = refreshed?.run?.status === 'running' ? taskId : null
-      runWorkObservedActive = false
+      if (refreshed?.run?.status === 'running') runWorkObservedActive = true
       setTimeout(() => void project.refresh(detail.id), 500)
       setTimeout(() => void project.refresh(detail.id), 1800)
     } finally {
@@ -814,8 +819,13 @@
     return projectRunActive && (detail.startReadiness?.focusTaskId ?? readSelectedWorkIdFromUrl()) === task.id
   }
 
+  function isFocusedWorkStarting(task: Task): boolean {
+    return runWorkActiveId === task.id && !isFocusedWorkRunning(task)
+  }
+
   function focusedStatusLabel(task: Task): string {
     if (isFocusedWorkRunning(task)) return 'Working'
+    if (isFocusedWorkStarting(task)) return 'Starting'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'Needs retry'
     if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'Review ready'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'Paused'
@@ -824,6 +834,7 @@
 
   function focusedStatusTone(task: Task): ChipTone {
     if (isFocusedWorkRunning(task)) return 'running'
+    if (isFocusedWorkStarting(task)) return 'accent'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
     if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
@@ -914,10 +925,38 @@
     // observed shared running work followed by a later stopped snapshot.
     if (projectRunActive) {
       runWorkObservedActive = true
+      clearWorkStartConfirmationTimer()
       return
     }
-    if (runWorkObservedActive) runWorkActiveId = null
+    if (runWorkObservedActive) {
+      runWorkActiveId = null
+      clearWorkStartConfirmationTimer()
+    }
   })
+
+  function beginWorkStartConfirmation(taskId: string): void {
+    runWorkActiveId = taskId
+    runWorkObservedActive = false
+    clearWorkStartConfirmationTimer()
+    runWorkStartConfirmationTimer = setTimeout(() => {
+      void confirmWorkStart(taskId)
+    }, 3500)
+  }
+
+  async function confirmWorkStart(taskId: string): Promise<void> {
+    const refreshed = await project.refresh(detail.id)
+    if (runWorkActiveId !== taskId || refreshed?.run?.status === 'running') return
+    runWorkActiveId = null
+    runWorkError = 'Guildhall could not confirm that this work started. Try again.'
+  }
+
+  function clearWorkStartConfirmationTimer(): void {
+    if (runWorkStartConfirmationTimer === null) return
+    clearTimeout(runWorkStartConfirmationTimer)
+    runWorkStartConfirmationTimer = null
+  }
+
+  onDestroy(clearWorkStartConfirmationTimer)
 </script>
 
 {#if focusedMode}
@@ -942,7 +981,7 @@
               <p>{focusedDecisionDetail}</p>
             {/if}
           </div>
-          {#if !isFocusedWorkRunning(focusedWork)}
+          {#if !isFocusedWorkRunning(focusedWork) && !isFocusedWorkStarting(focusedWork)}
             <Button
               variant={effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger' ? 'human' : 'primary'}
               disabled={runWorkBusyId === focusedWork.id || runWorkActiveId === focusedWork.id}

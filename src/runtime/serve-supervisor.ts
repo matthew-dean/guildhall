@@ -185,6 +185,7 @@ export interface SupervisorLifecycleEvent {
 const RECENT_EVENT_LIMIT = 200
 const PERSISTED_EVENT_LINE_LIMIT = RECENT_EVENT_LIMIT * 5
 const PERSISTED_EVENT_BYTE_LIMIT = 512 * 1024
+const STOPPING_RECONCILIATION_MS = 3_000
 const PERSISTED_EVENT_READ_BYTES = PERSISTED_EVENT_BYTE_LIMIT
 const PERSISTED_EVENT_TEXT_LIMIT = 600
 const PERSISTED_EVENT_PAGE_LIMIT = 100
@@ -615,6 +616,7 @@ export function recoverOrphanedExecutionProjection(
 
 export class OrchestratorSupervisor {
   private runs = new Map<string, WorkspaceRun>()
+  private stoppingReconciliationTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private emitter = new EventEmitter()
   private readonly runOrchestratorImpl: RunOrchestratorFn
   private readonly resolveConfigImpl: ResolveConfigFn
@@ -688,7 +690,25 @@ export class OrchestratorSupervisor {
     run.stoppedAt = new Date().toISOString()
     updateExecutionProjection(run, run.stoppedAt)
     await clearStopRequested(getProjectStateDir(run.workspacePath))
+    this.clearStoppingReconciliation(workspaceId)
     return true
+  }
+
+  private scheduleStoppingReconciliation(workspaceId: string): void {
+    this.clearStoppingReconciliation(workspaceId)
+    const timer = setTimeout(() => {
+      this.stoppingReconciliationTimers.delete(workspaceId)
+      void this.forceStopStaleStoppingRun(workspaceId, STOPPING_RECONCILIATION_MS)
+    }, STOPPING_RECONCILIATION_MS)
+    timer.unref?.()
+    this.stoppingReconciliationTimers.set(workspaceId, timer)
+  }
+
+  private clearStoppingReconciliation(workspaceId: string): void {
+    const timer = this.stoppingReconciliationTimers.get(workspaceId)
+    if (!timer) return
+    clearTimeout(timer)
+    this.stoppingReconciliationTimers.delete(workspaceId)
   }
 
   /**
@@ -821,6 +841,7 @@ export class OrchestratorSupervisor {
         run.stopSummary = result
         run.status = 'stopped'
         run.stoppedAt = new Date().toISOString()
+        this.clearStoppingReconciliation(opts.workspaceId)
         // The task's saved decision owns any post-run recovery. A completed
         // supervisor must not leave its transient live-focus packet behind.
         delete run.activeTaskId
@@ -834,6 +855,7 @@ export class OrchestratorSupervisor {
         run.status = 'error'
         run.error = err instanceof Error ? err.message : String(err)
         run.stoppedAt = new Date().toISOString()
+        this.clearStoppingReconciliation(opts.workspaceId)
         delete run.activeTaskId
         delete run.activeTaskTitle
         recordAndEmit({ type: 'supervisor_error', message: run.error })
@@ -890,6 +912,12 @@ export class OrchestratorSupervisor {
     // Clear the marker on clean exit so the next start() doesn't see it.
     if (isTerminated()) {
       await clearStopRequested(getProjectStateDir(run.workspacePath))
+      this.clearStoppingReconciliation(workspaceId)
+    } else {
+      // A cancelled provider turn should settle quickly. If it does not, the
+      // existing stale-stop authority must converge the shared owner state
+      // instead of leaving disabled `Pausing…` controls indefinitely.
+      this.scheduleStoppingReconciliation(workspaceId)
     }
 
     return isTerminated()

@@ -62022,6 +62022,89 @@ stored data change.
 
 No persisted-schema change.
 
+### Live follow-up: focused Work transition proof
+
+- [x] `focused-work-empty-browse-2026-08-30`: focused Work now hides `Browse
+  work` when there is no other current work, while the existing focused-plus-one
+  regression retains it for a real inventory choice. Installed t-minus-t proof
+  at 390px and 1440px showed one `Resume work` action and no clipped content.
+- [x] `focused-work-start-acknowledgement-2026-08-30`: the focused resume
+  action now immediately becomes `Starting work`, hides the stale resume
+  control, and changes to `Work is underway` only after a shared running
+  snapshot confirms it. The focused Work regression covers acknowledged,
+  confirmed-running, and later-stopped transitions. `pnpm typecheck`,
+  `pnpm lint:contracts`, and `pnpm model:independence` pass. Installed
+  t-minus-t proof showed `Starting work` in the same click turn, then
+  `Work is underway` after the shared run snapshot; the focused card had no
+  horizontal overflow at 1024px or 390px.
+
+### Finding: Pause must reach a terminal owner state when its worker is gone
+
+- [x] User job: when the owner presses `Pause`, Guildhall reaches either a
+  usable paused handoff or an explicit failure. It must not leave `Pausing…`
+  disabled indefinitely after its coordinator and queue processes have exited.
+- Live finding, 2026-08-30: t-minus-t accepted the visible Pause action and
+  projected `stopping`, but after more than ten seconds both recorded runtime
+  PIDs were absent while Overview still rendered disabled `Pausing…` and the
+  shared packet stayed `stopping`. The owner could neither resume nor learn
+  what recovery was required.
+
+#### Contract Touch Decision
+
+Work id: `pause-terminal-owner-state-2026-08-30`. Touched contract: the shared
+runtime supervisor's reconciliation of a stop request that has not settled.
+Considered but not touched: the header's optimistic pause marker, run action
+model, task lifecycle, and persisted project data. Required proof: an
+unresponsive stopped run settles to a resumable shared state without another
+owner action, while a normally stopping run remains `stopping` until it exits.
+Proof provided: the supervisor regression covers forced reconciliation and the
+installed t-minus-t replay reaches its paused handoff. Apply/revert: an
+in-memory reconciliation timer is scheduled only after a graceful stop exceeds
+its initial wait; removing it restores the previous indefinite stopping state.
+
+#### Schema Migration Decision
+
+No persisted-schema change is expected.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/serve-supervisor.test.ts
+  src/web/surfaces/project/__tests__/WorkTab.focused.svelte.test.ts
+  --reporter=dot` passes 28 tests. The supervisor regression proves an
+  unresponsive paused run is reconciled after the grace window without another
+  owner action.
+- Installed t-minus-t proof, 2026-08-30: after `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` returned
+  `stale:false` with zero startup errors. Resume rendered immediate `Starting
+  work`, confirmed `Work is underway`, and a later visible Pause returned to
+  `Work paused` with one `Resume work` action in two seconds.
+
+### Finding: Resume must visibly acknowledge a successful start immediately
+
+- [x] User job: after the owner clicks `Resume work`, the focused Work card
+  immediately acknowledges that Guildhall has accepted the command. It must not
+  continue to look paused until a later poll happens to arrive.
+- Live finding, 2026-08-30: t-minus-t's start endpoint switched its shared
+  packet to `running` within the first second, but the clicked Work view still
+  rendered the old paused card at 900ms. A fresh view caught up after the
+  scheduled refresh. The command worked, but the owner had no immediate visual
+  confirmation.
+
+#### Contract Touch Decision
+
+Work id: `focused-work-start-acknowledgement-2026-08-30`. Touched contract:
+the local focused-Work transition state after a successful typed start command.
+The shared run/decision projection remains the authority for durable running
+state; the local marker only communicates accepted command progress until that
+snapshot confirms or rejects it. Required proof: a successful start hides the
+stale paused action immediately, a later confirmed run keeps the working state,
+and a stopped snapshot observed after running clears the local marker. Apply/
+revert: client-only transient state.
+
+#### Schema Migration Decision
+
+No persisted-schema change.
+
 #### Validation
 
 - `InboxTab.svelte.test.ts` passes 11 tests. Its no-separate-decisions case
@@ -62935,7 +63018,7 @@ consistently before deriving compact surface output.
 
 ### Finding: Focused Work must not offer empty browsing
 
-- [ ] User job: when Work is focused on the only current task and that task is
+- [x] User job: when Work is focused on the only current task and that task is
   already running, the owner sees the current handoff and the global `Pause`
   control. Guildhall does not add `Browse work` merely to reveal no additional
   current work.

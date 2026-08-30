@@ -141,6 +141,42 @@ describe('focused Work flow', () => {
     expect(screen.queryByRole('button', { name: 'Open task' })).toBeNull()
   })
 
+  it('acknowledges a successful resume before the shared running snapshot arrives', async () => {
+    const user = userEvent.setup()
+    const paused = reviewTask({ id: 'task-starting', displayKey: 'LOO-149', title: 'Resume this exact work', status: 'in_progress' })
+    setRoute(`/projects/looma-knit/work?task=${paused.id}`)
+    const pausedDetail = projectDetail([paused], {
+      startReadiness: { canStart: true, code: 'paused_live_work', focusTaskId: paused.id, focusTaskTitle: paused.title, focusKind: 'paused_work' },
+      actionModel: {
+        primaryAction: {
+          taskId: paused.id,
+          code: 'paused_live_work',
+          operation: 'start_focused',
+          detail: 'Progress is saved. Resume continues this task from its current workspace.',
+          href: `/work?task=${paused.id}`,
+        },
+      },
+    })
+    const rendered = render(WorkTab, { props: { detail: pausedDetail } })
+
+    await user.click(await screen.findByRole('button', { name: 'Resume work' }))
+    expect(await screen.findByRole('heading', { name: 'Starting work' })).toBeInTheDocument()
+    expect(screen.getByText('Guildhall accepted the command and is starting this task.')).toBeInTheDocument()
+    expect(screen.getByText('Starting')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume work' })).toBeNull()
+
+    await rendered.rerender({ detail: projectDetail([paused], {
+      run: { status: 'running', mode: 'one_task' },
+      actionModel: { primaryAction: null },
+      startReadiness: { canStart: true, code: 'ready_work' },
+    }) })
+    expect(await screen.findByRole('heading', { name: 'Work is underway' })).toBeInTheDocument()
+    expect(screen.getByText('Working')).toBeInTheDocument()
+
+    await rendered.rerender({ detail: pausedDetail })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume work' })).toBeInTheDocument())
+  })
+
   it('keeps saved implementation in its automated-review handoff after a stopped run', async () => {
     const review = reviewTask({ id: 'task-review-run', displayKey: 'TMT-4', title: 'Review the saved extension change', status: 'review' })
     setRoute(`/projects/t-minus-t/work?task=${review.id}`)

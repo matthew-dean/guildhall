@@ -446,6 +446,31 @@ describe('OrchestratorSupervisor', () => {
     }
   })
 
+  it('settles an unresponsive pause into a resumable state without another owner action', async () => {
+    vi.useFakeTimers()
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
+    const supervisor = new OrchestratorSupervisor({
+      resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
+      runOrchestrator: async () => {
+        await new Promise<void>(() => {})
+        return STOP_SUMMARY
+      },
+    })
+
+    try {
+      const run = supervisor.start({ workspaceId: 'w', workspacePath })
+      expect(await supervisor.stop('w', { waitMs: 0, reason: 'owner_pause' })).toBe(false)
+      expect(run.status).toBe('stopping')
+
+      await vi.advanceTimersByTimeAsync(3_000)
+
+      expect(run.status).toBe('stopped')
+    } finally {
+      vi.useRealTimers()
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
   it('trims persisted recent events so reconnect hydration stays bounded', async () => {
     const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
     process.env.GUILDHALL_DATA_DIR = path.join(workspacePath, '.guildhall-data')
