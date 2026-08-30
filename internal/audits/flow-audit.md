@@ -62067,9 +62067,10 @@ contracts: the project-scoped design-system persistence location and the
 release-readiness blocker aggregation rule. Both design-system readers and
 writers now resolve `.guildhall`, `memory`, and `project-state` inputs through
 one shared project-system-state helper; standalone compatibility directories
-retain their direct-path behavior. Readiness merges projected and live blockers
-by blocker id so either source can add current evidence without duplicating the
-same blocker. Considered but not touched: the persisted design-system JSON
+retain their direct-path behavior. Readiness uses saved rows to bound included
+release membership, re-derives blocker existence from current tasks, overlays
+live detail by blocker id, and unions owner-blocking task identities. Considered
+but not touched: the persisted design-system JSON
 shape, release blocker schema, API response shape, task state schema, and
 projection versioning. Required proof: a successful design-system POST is
 immediately visible to readiness, projected and live blockers coexist, the
@@ -62086,7 +62087,7 @@ provide a non-project memory root; no stored record is rewritten.
 
 #### Validation
 
-- `pnpm test:release`: 14 files, 322 tests passed.
+- `pnpm test:release`: 14 files, 324 tests passed.
 - `pnpm typecheck` and `pnpm build` passed.
 
 ### Finding: Landed work without proof must advance to verification, not retry implementation
