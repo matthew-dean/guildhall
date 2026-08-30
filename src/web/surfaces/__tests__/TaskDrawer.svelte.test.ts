@@ -198,8 +198,12 @@ describe('TaskDrawer', () => {
 
   it('does not render an inert Action tab when the task has no current action content', async () => {
     const payload = drawerPayload({ threadTurns: [] })
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
+      if (url.startsWith('/api/project/task/task-repair/start')) {
+        expect(init?.method).toBe('POST')
+        return json({ ok: true })
+      }
       if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
       if (url.startsWith('/api/project')) return json(projectDetail())
       return json({})
@@ -2357,6 +2361,11 @@ describe('TaskDrawer', () => {
     await screen.findByText('One repair is ready')
     expect(screen.getByText('Keep the component roadmap synchronized.')).toBeInTheDocument()
     expect(screen.queryByText('Project needs your decision first')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Repair spec' }))
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/task/task-repair/start'))).toBe(true)
+    })
+    expect(path.href).not.toBe('/projects/looma-knit/task/task-repair')
   })
 
   it('keeps a shared spec-repair task out of approval in focused and full detail', async () => {

@@ -460,9 +460,13 @@
     })
   }
 
-  function openProjectDecision(): void {
+  async function openProjectDecision(): Promise<void> {
     const targetTaskId = projectPrimaryAction?.taskId
     if (!targetTaskId) return
+    if (projectPrimaryAction?.operation === 'repair_spec') {
+      await runProject('start', targetTaskId)
+      return
+    }
     nav(currentTaskHref(targetTaskId, scopedProjectId()), {
       backgroundPath: drawerBackgroundPath(),
     })
