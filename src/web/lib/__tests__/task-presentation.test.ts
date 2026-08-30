@@ -65,6 +65,37 @@ describe('taskStagePresentation', () => {
     expect(stage.key).toBe('spec_review')
   })
 
+  it('presents coordinator-owned spec review as queued work instead of an owner action', () => {
+    const stage = taskStagePresentation({
+      id: 'task-coordinator-review',
+      title: 'Coordinator review',
+      status: 'spec_review',
+      specReviewGate: { authority: 'coordinator' },
+    }, { runStatus: 'stopped' })
+
+    expect(stage).toEqual({
+      label: 'Queued',
+      tone: 'neutral',
+      key: 'queued',
+    })
+  })
+
+  it('presents an unlisted spec review as queued when shared owner readiness names no review', () => {
+    const stage = taskStagePresentation({
+      id: 'task-unlisted-review',
+      title: 'Unlisted review',
+      status: 'spec_review',
+    }, {
+      ownerReviewTaskIds: [],
+    })
+
+    expect(stage).toEqual({
+      label: 'Queued',
+      tone: 'neutral',
+      key: 'queued',
+    })
+  })
+
   it('presents Guildhall-owned queued work with the agent/running tone', () => {
     const stage = taskStagePresentation({
       id: 'task-ready',

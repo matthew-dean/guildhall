@@ -20,6 +20,7 @@
     runBusyTaskId?: string | null
     runActiveTaskId?: string | null
     proofMissingTaskIds?: readonly string[]
+    ownerReviewTaskIds?: readonly string[]
     handoffStateByTaskId?: ReadonlyMap<string, string | undefined>
     runError?: string | null
     actionOnly?: boolean
@@ -38,6 +39,7 @@
     runBusyTaskId = null,
     runActiveTaskId = null,
     proofMissingTaskIds = [],
+    ownerReviewTaskIds,
     handoffStateByTaskId = emptyHandoffStateByTaskId,
     runError = null,
     actionOnly = false,
@@ -45,6 +47,7 @@
   }: Props = $props()
 
   const proofMissingSet = $derived(new Set(proofMissingTaskIds))
+  const ownerReviewTaskIdSet = $derived(new Set(ownerReviewTaskIds ?? []))
   const visibleTasks = $derived(tasks.filter(isVisibleLogicalTask))
   const hierarchy = $derived(buildWorkHierarchy(visibleTasks))
   const tasksById = $derived(new Map(visibleTasks.map(task => [task.id, task])))
@@ -183,11 +186,19 @@
   }
 
   function taskStatusLabel(task: Task): string {
-    return taskStagePresentation(task, { tasks, handoffState: handoffStateByTaskId.get(task.id) }).label
+    return taskStagePresentation(task, {
+      tasks,
+      ownerReviewTaskIds: ownerReviewTaskIds ?? undefined,
+      handoffState: handoffStateByTaskId.get(task.id),
+    }).label
   }
 
   function taskStatusTone(task: Task): ChipTone {
-    return chipTone(taskStagePresentation(task, { tasks, handoffState: handoffStateByTaskId.get(task.id) }).tone)
+    return chipTone(taskStagePresentation(task, {
+      tasks,
+      ownerReviewTaskIds: ownerReviewTaskIds ?? undefined,
+      handoffState: handoffStateByTaskId.get(task.id),
+    }).tone)
   }
 
   function chipTone(tone: TaskPresentationTone): ChipTone {
@@ -199,9 +210,15 @@
   }
 
   function openButtonLabel(task: Task): string {
-    if (task.status === 'spec_review' && handoffStateByTaskId.get(task.id) !== 'spec_shaping') return 'Review spec'
+    if (isOwnerSpecReview(task)) return 'Review spec'
     if (task.status === 'import_draft') return 'Review task brief'
     return 'Open task'
+  }
+
+  function isOwnerSpecReview(task: Task): boolean {
+    return task.status === 'spec_review' &&
+      handoffStateByTaskId.get(task.id) !== 'spec_shaping' &&
+      (ownerReviewTaskIds === undefined || ownerReviewTaskIdSet.has(task.id))
   }
 
   async function runSelected(): Promise<void> {

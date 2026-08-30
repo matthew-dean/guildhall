@@ -2153,6 +2153,37 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('does not expose approval for a selected review row absent from shared owner readiness', async () => {
+    openDrawerOn('spec')
+    project.detail = {
+      ...projectDetail(),
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-other',
+        focusKind: 'paused_work',
+      },
+    }
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'spec_review'
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(project.detail)
+      return json({})
+    }))
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Add link editor controls inside the existing editor toolbar.')
+    expect(screen.queryByRole('button', { name: /approve spec/i })).toBeNull()
+    expect(screen.queryByText('Review spec')).toBeNull()
+  })
+
   it('switches from an approved spec to the shared next action', async () => {
     openDrawerOn('overview')
     const reviewPayload = drawerPayload({ threadTurns: [] })
@@ -2571,6 +2602,7 @@ describe('TaskDrawer', () => {
         canStart: false,
         code: 'required_migration_pending',
         message: 'Guildhall needs to update this project before work can continue.',
+        reviewTaskIds: ['task-link-editor'],
       },
     }
     project.detail = blockedProject

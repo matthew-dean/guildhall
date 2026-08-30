@@ -61304,3 +61304,44 @@ execution projections; no durable task or project data changes.
   `LOO-1CWL9M` once as `Paused` with one `Resume this work item` button and
   `15 other current items`; it showed no `Draft task brief` control. At 390px,
   the action remained above the fold with no page-level horizontal overflow.
+
+### Finding: Queue labels must respect typed approval ownership
+
+- [ ] User job: when the current action is paused work, an owner can browse
+  later items without being told to review specifications that Guildhall owns.
+  List state must distinguish an owner decision from queued coordinator work.
+- Finding, 2026-08-30: real Looma + Knit showed ten `Review spec` rows while
+  the shared action was paused work and no owner review IDs were present. A
+  full task detail correctly marked a recovered spec `authority: coordinator`,
+  while the compact queue intentionally omitted its gate detail. The Work list
+  ignored the authoritative shared owner-review ID list and rendered the raw
+  `spec_review` lifecycle status as a false owner action.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-coordinator-review-queue-label-2026-08-30`. Touched
+contract: shared task-stage presentation. The explicit owner-review task IDs
+from the shared readiness model are the authority for a Work-list `Review spec`
+label; a `spec_review` task absent from that list is queued work. A typed
+coordinator gate remains a direct-detail safeguard. Considered but not touched:
+approval mutation authority, queue ordering, and owner review readiness. The
+same shared ID list also governs the selected-work and Task Drawer surfaces so
+a click cannot recreate the rejected approval action. Required proof: an
+unlisted review row has a non-actionable queued label while an explicitly
+listed owner review keeps `Review spec`.
+
+#### Schema Migration Decision
+
+No schema migration. This consumes the existing typed spec-review gate from
+the effective task projection and changes no stored approval data.
+
+- [x] Regression and installed proof, 2026-08-30: task-presentation,
+  WorkTab, WorkTreePreview, and TaskDrawer regressions prove that an explicit
+  empty owner-review list keeps a selected legacy `spec_review` item queued
+  and removes its approval control, while payloads without that list preserve
+  legacy owner-review compatibility. After a fresh build, install, restart,
+  and `stale:false`, real Looma + Knit Work at 1280px showed the one paused
+  `Resume this work item` action, zero `Review spec` labels, and selected
+  `LOO-EBUYE7` as queued rather than a second approval. The same queue will be
+  remained unclipped at 1024px and 390px; the one resume action stayed above
+  the mobile fold, and selecting that row offered `Open task`, not approval.

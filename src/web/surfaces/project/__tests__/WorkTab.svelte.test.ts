@@ -134,6 +134,50 @@ describe('WorkTab', () => {
     expect(screen.queryByText('Recent progress')).toBeNull()
   })
 
+  it('does not turn an unlisted review row into a second owner decision', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?view=queue')
+    path.value = '/projects/looma-knit/work?view=queue'
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-paused', title: 'Resume the current work', status: 'in_progress' }),
+          task({ id: 'task-stale-review', title: 'A stale review row', status: 'spec_review' }),
+        ], {
+          startReadiness: {
+            canStart: true,
+            code: 'paused_live_work',
+            focusTaskId: 'task-paused',
+            focusKind: 'paused_work',
+          },
+          actionModel: {
+            primaryAction: {
+              taskId: 'task-paused',
+              label: 'Work paused',
+              detail: 'Resume the current work.',
+              buttonLabel: 'Resume this work item',
+              href: '/work?task=task-paused',
+              tone: 'accent',
+            },
+          },
+          orientationSpine: {
+            scopeRows: [
+              { taskId: 'task-paused', scope: 'included' },
+              { taskId: 'task-stale-review', scope: 'included' },
+            ],
+          },
+        }),
+      },
+    })
+
+    const staleReview = await screen.findByRole('button', { name: /inspect work a stale review row/i })
+    expect(staleReview).toHaveTextContent('Queued')
+    await userEvent.click(staleReview)
+
+    const inspector = await screen.findByLabelText('Selected work inspector')
+    expect(within(inspector).queryByText('Review spec')).toBeNull()
+    expect(within(inspector).queryByRole('button', { name: 'Review spec' })).toBeNull()
+  })
+
   it('keeps a stale focused route from overriding the shared project action', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-coordinator-review')
     path.value = '/projects/looma-knit/work?task=task-coordinator-review'

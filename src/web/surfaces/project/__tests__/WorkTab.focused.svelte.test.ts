@@ -65,7 +65,7 @@ describe('focused Work flow', () => {
     const user = userEvent.setup()
     const review = reviewTask()
     render(WorkTab, { props: { detail: projectDetail([review], {
-      startReadiness: { canStart: false, focusTaskId: review.id, focusKind: 'spec_review' },
+      startReadiness: { canStart: false, focusTaskId: review.id, focusKind: 'spec_review', reviewTaskIds: [review.id] },
       actionModel: { primaryAction: { taskId: review.id, href: `/work?task=${review.id}` } },
     }) } })
 
@@ -187,8 +187,12 @@ describe('focused Work flow', () => {
     const draft = reviewTask({
       id: 'task-draft', displayKey: 'LOO-147', title: 'An unrelated imported draft', status: 'import_draft',
     })
+    const coordinatorReview = reviewTask({
+      id: 'task-coordinator-review', displayKey: 'LOO-148', title: 'Coordinator review', status: 'spec_review',
+      specReviewGate: { authority: 'coordinator' },
+    })
     setRoute(`/projects/looma-knit/work?task=${paused.id}`)
-    render(WorkTab, { props: { detail: projectDetail([paused, draft], {
+    render(WorkTab, { props: { detail: projectDetail([paused, draft, coordinatorReview], {
       startReadiness: { canStart: true, code: 'paused_live_work', focusTaskId: paused.id, focusTaskTitle: paused.title, focusKind: 'paused_work' },
       actionModel: {
         primaryAction: {
@@ -200,7 +204,10 @@ describe('focused Work flow', () => {
       },
       orientationSpine: {
         summary: { headline: 'Stage 1: Release hardening' },
-        scopeRows: [{ taskId: paused.id, scope: 'included' }],
+        scopeRows: [
+          { taskId: paused.id, scope: 'included' },
+          { taskId: coordinatorReview.id, scope: 'included' },
+        ],
       },
     }) } })
 
@@ -210,5 +217,7 @@ describe('focused Work flow', () => {
     expect(screen.getByRole('button', { name: 'Resume this work item' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Draft task brief' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Inspect work Resume this exact work' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Inspect work Coordinator review' })).toHaveTextContent('Queued')
+    expect(screen.getByRole('button', { name: 'Inspect work Coordinator review' })).not.toHaveTextContent('Review spec')
   })
 })

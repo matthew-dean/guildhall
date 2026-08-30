@@ -39,6 +39,9 @@ interface TaskPresentationInput {
   requestKind?: string
   requestStage?: string
   spec?: string
+  specReviewGate?: {
+    authority?: string
+  } | null
   acceptanceCriteria?: AcceptanceCriterion[]
   productBrief?: ProductBrief
   openQuestions?: AgentQuestion[]
@@ -50,6 +53,7 @@ export interface TaskPresentationOptions {
   tasks?: TaskDependencyLite[]
   focusTaskId?: string | null
   focusKind?: string | null
+  ownerReviewTaskIds?: readonly string[] | null
   // Project scope is the authoritative workflow handoff. A compact task
   // status can remain `spec_review` while Guildhall repairs an invalid spec.
   handoffState?: string | null
@@ -161,6 +165,12 @@ export function taskStagePresentation(
         ? { key: 'queued', label: 'Queued', tone: 'running' }
         : { key: 'paused', label: 'Paused', tone: 'neutral' }
     case 'spec_review':
+      if (
+        input.specReviewGate?.authority === 'coordinator' ||
+        (options.ownerReviewTaskIds !== null && options.ownerReviewTaskIds !== undefined && !options.ownerReviewTaskIds.includes(taskId(input) ?? ''))
+      ) {
+        return { key: 'queued', label: 'Queued', tone: 'neutral' }
+      }
       return { key: 'spec_review', label: 'Review spec', tone: 'warn' }
     case 'ready':
       if (needsWorkerHandoffSpecCleanup({ ...input, taskStatus: status })) {

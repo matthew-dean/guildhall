@@ -720,10 +720,19 @@
     : null)
   const isSpecRepair = $derived(scopeHandoffState === 'spec_shaping')
   const focusedSpecRepair = $derived(task?.status === 'spec_review' && isSpecRepair && !fullRecordRequested)
-  // Status alone does not grant the owner an approval. Legacy review rows
-  // default to owner authority; an explicit coordinator gate must remain
-  // runnable by Guildhall instead of presenting a false owner decision.
-  const ownerSpecReview = $derived(task?.specReviewGate?.authority !== 'coordinator')
+  // The shared readiness model owns approvals. Older routes without that
+  // model retain their compatibility behavior, but an explicit empty list
+  // means no selected review row can invent an owner decision.
+  const ownerReviewTaskIds = $derived(
+    project.detail?.startReadiness
+      ? project.detail.startReadiness.reviewTaskIds ?? []
+      : undefined,
+  )
+  const ownerSpecReview = $derived(
+    ownerReviewTaskIds
+      ? Boolean(task?.id && ownerReviewTaskIds.includes(task.id))
+      : task?.specReviewGate?.authority !== 'coordinator',
+  )
   const focusedSpecReview = $derived(task?.status === 'spec_review' && ownerSpecReview && !isSpecRepair && !fullRecordRequested)
   const openEscalations = $derived(task ? activeEscalations(task) : [])
   const completionEscalations = $derived(task ? unresolvedCompletionEscalations(task) : [])

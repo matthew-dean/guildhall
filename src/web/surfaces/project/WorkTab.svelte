@@ -660,6 +660,7 @@
       tasks,
       focusTaskId: detail.startReadiness?.focusTaskId,
       focusKind: detail.startReadiness?.focusKind,
+      ownerReviewTaskIds: detail.startReadiness?.reviewTaskIds ?? [],
       handoffState: handoffStateByTaskId.get(task.id),
     })
   }
@@ -784,9 +785,12 @@
   }
 
   function isOwnerSpecReview(task: Task): boolean {
-    return task.status === 'spec_review' &&
-      task.specReviewGate?.authority !== 'coordinator' &&
-      !hasSpecRepair(task)
+    if (task.status !== 'spec_review' || hasSpecRepair(task)) return false
+    const ownerReviewTaskIds = detail.startReadiness
+      ? detail.startReadiness.reviewTaskIds ?? []
+      : undefined
+    if (ownerReviewTaskIds) return ownerReviewTaskIds.includes(task.id)
+    return task.specReviewGate?.authority !== 'coordinator'
   }
 
   function isFocusedWorkRunning(task: Task): boolean {
@@ -1164,6 +1168,7 @@
           runBusyTaskId={runWorkBusyId}
           runActiveTaskId={effectiveRunActiveId}
           proofMissingTaskIds={[...proofMissingTaskIds]}
+          ownerReviewTaskIds={detail.startReadiness ? detail.startReadiness.reviewTaskIds ?? [] : undefined}
           {handoffStateByTaskId}
           runError={runWorkError}
           actionOnly={queueMode}
