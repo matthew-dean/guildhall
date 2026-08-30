@@ -61270,7 +61270,7 @@ from falling back to non-authoritative presentation data.
 
 ### Finding: Work lists must preserve the active owner decision
 
-- [ ] User job: after choosing `Browse work` from the current-work handoff, an
+- [x] User job: after choosing `Browse work` from the current-work handoff, an
   owner sees the same named paused item and the same executable next action.
   A queue cannot promote an unrelated draft, duplicate the current item, or
   describe the paused item as working.
@@ -61307,7 +61307,7 @@ execution projections; no durable task or project data changes.
 
 ### Finding: Queue labels must respect typed approval ownership
 
-- [ ] User job: when the current action is paused work, an owner can browse
+- [x] User job: when the current action is paused work, an owner can browse
   later items without being told to review specifications that Guildhall owns.
   List state must distinguish an owner decision from queued coordinator work.
 - Finding, 2026-08-30: real Looma + Knit showed ten `Review spec` rows while
@@ -61342,6 +61342,6 @@ the effective task projection and changes no stored approval data.
   legacy owner-review compatibility. After a fresh build, install, restart,
   and `stale:false`, real Looma + Knit Work at 1280px showed the one paused
   `Resume this work item` action, zero `Review spec` labels, and selected
-  `LOO-EBUYE7` as queued rather than a second approval. The same queue will be
-  remained unclipped at 1024px and 390px; the one resume action stayed above
+  `LOO-EBUYE7` as queued rather than a second approval. The queue remained
+  unclipped at 1024px and 390px; the one resume action stayed above
   the mobile fold, and selecting that row offered `Open task`, not approval.
