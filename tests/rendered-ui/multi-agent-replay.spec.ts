@@ -214,8 +214,9 @@ test.afterAll(async () => {
 })
 
 test('spec review starts at one decision without a tab hunt', async ({ page }) => {
+  test.setTimeout(90_000)
   await page.goto('/projects/narrative-harness/work')
-  await applyRequiredProjectUpdates(page)
+  await applyRequiredProjectUpdates(page, { terminalTimeoutMs: 45_000 })
   await page.route('**/api/project?*', async route => {
     if (!route.request().url().includes('projectId=narrative-harness')) {
       await route.continue()

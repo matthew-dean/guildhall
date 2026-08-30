@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test'
 
 export async function applyRequiredProjectUpdates(
   page: Page,
-  options: { expectUpdate?: boolean } = {},
+  options: { expectUpdate?: boolean; terminalTimeoutMs?: number } = {},
 ): Promise<void> {
   const reviewUpdate = page.getByRole('button', { name: 'Review project update' })
   if (options.expectUpdate) {
@@ -29,7 +29,13 @@ export async function applyRequiredProjectUpdates(
 
     const complete = modal.getByText('Migration complete.', { exact: true })
     const continuing = modal.getByText('Update applied. Another project update is required.', { exact: true })
-    await expect(complete.or(continuing)).toBeVisible()
+    const migrationError = modal.getByRole('alert').filter({ hasText: /^Migration error/ })
+    await expect(complete.or(continuing).or(migrationError)).toBeVisible({
+      timeout: options.terminalTimeoutMs,
+    })
+    if (await migrationError.isVisible()) {
+      throw new Error(`Project migration failed: ${await migrationError.textContent()}`)
+    }
     if (await complete.isVisible()) {
       await modal.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click()
       await expect(modal).toHaveCount(0)

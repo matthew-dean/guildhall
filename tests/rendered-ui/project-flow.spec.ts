@@ -135,6 +135,9 @@ const projectSurfaceRoutes = [
     name: 'service thread',
     path: '/projects/api-broker/thread',
     assertions: async (page) => {
+      const response = await page.request.get('/api/project/thread?projectId=api-broker')
+      expect(response.ok()).toBe(true)
+      expect((await response.json()).currentThreadFreshness).toBe('current')
       await expect(page.getByRole('complementary', { name: 'Thread list' })).toBeVisible()
       await expect(page.getByRole('region', { name: 'Selected thread' })).toBeVisible()
       await expect(page.getByTitle('API Broker')).toBeVisible()
