@@ -494,7 +494,13 @@
         busy = false
       }
     }
-    if (await post('approve-spec', body)) approveSpecOpen = false
+    if (await post('approve-spec', body)) {
+      approveSpecOpen = false
+      // The task record is current after `post`, but the drawer's next branch
+      // belongs to the shared project action. Refresh it before rendering so a
+      // completed approval never strands the owner in the old spec document.
+      await project.refresh(scopedProjectId())
+    }
   }
 
   function handleResolveEscalation(escalation: Escalation, mode: 'retry' | 'resolve' = 'resolve') {

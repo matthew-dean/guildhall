@@ -2091,6 +2091,53 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('switches from an approved spec to the shared next action', async () => {
+    openDrawerOn('overview')
+    const reviewPayload = drawerPayload({ threadTurns: [] })
+    reviewPayload.task.status = 'spec_review'
+    const readyPayload = drawerPayload({ threadTurns: [] })
+    readyPayload.task.status = 'ready'
+    readyPayload.task.openQuestions = []
+    const afterApprovalProject = {
+      ...projectDetail(),
+      actionModel: {
+        primaryAction: {
+          label: 'Continue ContextMenu work',
+          buttonLabel: 'Resume',
+          href: '/projects/looma-knit/work?task=task-link-editor',
+          tone: 'accent',
+          taskId: 'task-link-editor',
+        },
+      },
+    }
+    let taskReads = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) return json({ ok: true })
+      if (url.startsWith('/api/project/task/task-link-editor')) {
+        taskReads += 1
+        return json(taskReads === 1 ? reviewPayload : readyPayload)
+      }
+      if (url.startsWith('/api/project')) return json(afterApprovalProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Approve this spec?')
+    await userEvent.click(screen.getByRole('button', { name: 'Approve spec' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Approve', exact: true }))
+
+    expect(await screen.findByText('Ready to continue')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume only this work item' })).toBeInTheDocument()
+    expect(screen.queryByText('Approve this spec?')).toBeNull()
+  })
+
   it('keeps the approval modal open when spec approval fails', async () => {
     openDrawerOn('spec', { fullRecord: true })
     const payload = drawerPayload()
