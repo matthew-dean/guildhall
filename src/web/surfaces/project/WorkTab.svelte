@@ -419,7 +419,9 @@
   })
   const focusedCardTitle = $derived.by(() => {
     if (focusedWork && isFocusedWorkRunning(focusedWork)) return 'Work is underway'
-    if (focusedWork && detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === focusedWork.id) return 'Worker needs a fresh pass'
+    if (focusedWork && detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
+      return detail.actionModel.primaryAction.ownerHeading ?? 'Worker needs a fresh pass'
+    }
     if (focusedWork && detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === focusedWork.id) return 'Work paused'
     if (focusedWork && isFocusedRunnableWork(focusedWork)) return 'Ready to continue'
     if (focusedWork && (effectiveStatusTone(focusedWork) === 'warn' || effectiveStatusTone(focusedWork) === 'danger')) {

@@ -205,7 +205,7 @@ export interface ProjectSummaryProjection {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
-    progressState?: 'partial_work_saved' | 'worker_retry_recommended'
+    progressState?: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss'
   }
   blockers: Array<{
     id: string
@@ -1220,7 +1220,7 @@ function pausedWorkProgressState(
   start: Pick<ProjectScopeProjection['start'], 'code' | 'focusTaskId'>,
   tasks: readonly { id: string; status?: string | null }[],
   taskRuntimes: readonly ProjectStateDatabaseTaskRuntime[] | null | undefined,
-): { progressState: 'partial_work_saved' | 'worker_retry_recommended' } | Record<string, never> {
+): { progressState: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss' } | Record<string, never> {
   if (start.code !== 'paused_live_work' || !start.focusTaskId) return {}
   const focusedTask = tasks.find(task => task.id === start.focusTaskId)
   if (focusedTask?.status !== 'in_progress') return {}
@@ -1228,6 +1228,13 @@ function pausedWorkProgressState(
   const recovery = isRecord(runtime?.payload) && isRecord(runtime.payload.workerRecovery)
     ? runtime.payload.workerRecovery
     : null
+  const observation = isRecord(recovery?.worktreeObservation)
+    ? recovery.worktreeObservation
+    : null
+  // A later clean observation is more specific than a stale pause-time dirty
+  // marker. The owner must not be told saved work exists after the worker
+  // discarded the worktree edits that marker originally observed.
+  if (observation?.state === 'lost') return { progressState: 'worker_edit_loss' }
   if (
     (typeof recovery?.dirtyTimeoutRetries === 'number' && recovery.dirtyTimeoutRetries > 0) ||
     (typeof recovery?.ownerPauseWithSavedWorkAt === 'string' && recovery.ownerPauseWithSavedWorkAt.trim().length > 0)

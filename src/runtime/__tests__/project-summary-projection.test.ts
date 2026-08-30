@@ -2120,6 +2120,41 @@ describe('project-summary-projection', () => {
     })
   })
 
+  it('makes discarded worker edits a direct retry and never calls them saved work', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-worker-edit-loss-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const projection = writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 't-minus-t',
+      queue: queue([task('one', 'in_progress')]),
+      taskRuntimes: [{
+        taskId: 'one',
+        payload: {
+          workerRecovery: {
+            ownerPauseWithSavedWorkAt: now,
+            worktreeObservation: {
+              state: 'lost',
+              observedAt: now,
+              files: ['packages/extension/src/extension.ts'],
+            },
+          },
+        },
+      }],
+      generatedAt: now,
+    })
+
+    expect(projection.decision?.execution).toMatchObject({
+      state: 'paused',
+      code: 'worker_recovery',
+      progressState: 'worker_edit_loss',
+    })
+    expect(projection.actionModel?.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      ownerHeading: 'Worker discarded its edits',
+      buttonLabel: 'Retry worker',
+      detail: 'Guildhall saw this worker\'s edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.',
+    })
+  })
+
   it('persists compact execution and runtime state without replacing task facts', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-supplemental-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')

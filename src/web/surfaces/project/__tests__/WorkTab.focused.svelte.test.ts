@@ -164,6 +164,29 @@ describe('focused Work flow', () => {
     expect(screen.queryByText('Paused')).toBeNull()
   })
 
+  it('keeps an observed worker edit loss to one visible retry action', async () => {
+    const paused = reviewTask({ id: 'task-edit-loss', displayKey: 'TMT-4', title: 'Open supported documents as TypeScript', status: 'in_progress' })
+    setRoute(`/projects/t-minus-t/work?task=${paused.id}`)
+    render(WorkTab, { props: { detail: projectDetail([paused], {
+      startReadiness: { canStart: true, code: 'paused_live_work', focusTaskId: paused.id, focusTaskTitle: paused.title, focusKind: 'paused_work', progressState: 'worker_edit_loss' },
+      actionModel: {
+        primaryAction: {
+          taskId: paused.id,
+          code: 'worker_recovery',
+          ownerHeading: 'Worker discarded its edits',
+          operation: 'start_focused',
+          detail: 'Guildhall saw this worker\'s edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.',
+          buttonLabel: 'Retry worker',
+          href: `/work?task=${paused.id}`,
+        },
+      },
+    }) } })
+
+    expect(await screen.findByRole('heading', { name: 'Worker discarded its edits' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry worker' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume work' })).toBeNull()
+  })
+
   it('only exposes the legacy inventory after an explicit Browse work action', async () => {
     const user = userEvent.setup()
     const review = reviewTask()

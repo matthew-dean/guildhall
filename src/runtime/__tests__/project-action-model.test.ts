@@ -1827,6 +1827,30 @@ describe('buildProjectActionModel', () => {
     expect(model.runControl).toMatchObject({ label: 'Retry worker', startEnabled: true })
   })
 
+  it('turns observed worker edit loss into the same one-step retry', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Open supported documents as TypeScript',
+        actionHref: '/work?task=task-current',
+        progressState: 'worker_edit_loss',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'worker_recovery',
+      ownerHeading: 'Worker discarded its edits',
+      taskId: 'task-current',
+      buttonLabel: 'Retry worker',
+      detail: 'Guildhall saw this worker\'s edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.',
+      operation: 'start_focused',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Retry worker', startEnabled: true })
+  })
+
   it('keeps the retry action after the persisted decision code replaces paused work', () => {
     const model = buildProjectActionModel({
       startReadiness: {

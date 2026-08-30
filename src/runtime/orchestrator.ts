@@ -2900,6 +2900,46 @@ export class Orchestrator {
     })
   }
 
+  /**
+   * Keep a bounded, typed account of worktree churn inside the current worker
+   * pass. A clean result after the worker previously made this worktree dirty
+   * is a recovery fact, not a line of model prose or an activity transcript.
+   */
+  private async observeWorkerWorktreeAtToolBoundary(task: Task): Promise<void> {
+    if (task.status !== 'in_progress') return
+    const worktreePath = task.worktreePath?.trim()
+    if (!worktreePath) return
+    const status = await this.gitDriver.statusSummary(resolveRuntimePath(worktreePath))
+    if (status.repository === false) return
+
+    const current = await this.readWorkerRecovery(task.id)
+    const observation = current.worktreeObservation
+    if (!status.clean) {
+      const files = status.samplePaths
+        .filter(file => !isIgnorableCheckpointPath(file))
+        .slice(0, 12)
+      if (
+        observation?.state !== 'dirty' ||
+        !sameStringSet(observation.files, files)
+      ) {
+        await this.patchWorkerRecovery(task.id, {
+          worktreeObservation: { state: 'dirty', observedAt: this.now(), files },
+        })
+      }
+      return
+    }
+
+    if (observation?.state === 'dirty') {
+      await this.patchWorkerRecovery(task.id, {
+        worktreeObservation: {
+          state: 'lost',
+          observedAt: this.now(),
+          files: observation.files,
+        },
+      })
+    }
+  }
+
   private async resetWorkerRecoveryCounters(
     taskId: string,
     fields: readonly ('noProgressAttempts' | 'dirtyTimeoutRetries' | 'likelyTargetTimeoutRetries' | 'noVisibleProgressTimeoutRetries')[],
@@ -4381,7 +4421,13 @@ export class Orchestrator {
       if (agent.name === 'worker-agent') {
         // A new worker pass owns the next pause snapshot. Do not carry an
         // earlier owner-pause marker into a later clean pass.
-        await this.patchWorkerRecovery(task.id, { ownerPauseWithSavedWorkAt: undefined })
+        const recovery = await this.readWorkerRecovery(task.id)
+        await this.patchWorkerRecovery(task.id, {
+          ownerPauseWithSavedWorkAt: undefined,
+          ...(recovery.worktreeObservation?.state === 'dirty'
+            ? { worktreeObservation: undefined }
+            : {}),
+        })
       }
       externalAbort?.addEventListener('abort', abortListener)
       const result = typeof agent.generateWithEvents === 'function'
@@ -4406,6 +4452,12 @@ export class Orchestrator {
               async (event) => {
                 this.livenessTracker.touch(agent.name)
                 resetInactivityTimeout()
+                if (
+                  agent.name === 'worker-agent' &&
+                  (event.type === 'tool_execution_started' || event.type === 'tool_execution_completed')
+                ) {
+                  await this.observeWorkerWorktreeAtToolBoundary(task)
+                }
                 const backendEvent = streamEventToBackendEvent(event, {
                   taskId: task.id,
                   agentName: agent.name,

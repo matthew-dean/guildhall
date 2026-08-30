@@ -9,7 +9,7 @@ export interface ProjectActionStartReadiness {
   focusTaskTitle?: string
   focusKind?: string
   count?: number
-  progressState?: 'partial_work_saved' | 'worker_retry_recommended'
+  progressState?: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss'
   executionScope?: {
     id: string
     label: string
@@ -168,6 +168,7 @@ export type ProjectActionOwnerHeading =
   | 'Project update required'
   | 'Spec repair needed'
   | 'Worker needs a fresh pass'
+  | 'Worker discarded its edits'
   | 'Work paused'
   | 'Work is underway'
   | 'Ready to start'
@@ -202,8 +203,8 @@ function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): Pro
   }
 }
 
-function presentOwnerAction(action: Omit<ProjectAction, 'ownerHeading'>): ProjectAction {
-  return { ...action, ownerHeading: ownerHeadingForAction(action) }
+function presentOwnerAction(action: ProjectAction): ProjectAction {
+  return { ...action, ownerHeading: action.ownerHeading ?? ownerHeadingForAction(action) }
 }
 
 export interface ProjectRunControlModel {
@@ -339,7 +340,7 @@ function workHrefForTask(taskId: string | undefined): string {
 }
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
-  if (readiness.progressState === 'worker_retry_recommended') return 'Retry worker'
+  if (readiness.progressState === 'worker_retry_recommended' || readiness.progressState === 'worker_edit_loss') return 'Retry worker'
   if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Open task'
   if (readiness.code === 'required_migration_pending') return 'Review project update'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
@@ -372,7 +373,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (stopping) return 'Stopping'
   if (running) return 'Pause'
   if (readiness?.code === 'ready_work') return 'Start'
-  if (readiness?.progressState === 'worker_retry_recommended') return 'Retry worker'
+  if (readiness?.progressState === 'worker_retry_recommended' || readiness?.progressState === 'worker_edit_loss') return 'Retry worker'
   if (!readiness || readiness.canStart) return 'Resume'
   if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'required_migration_pending') return 'Migrate'
@@ -645,10 +646,13 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const specRepair = readiness.focusKind === 'spec_repair'
   const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
   const workerRetryRecommended = readiness.progressState === 'worker_retry_recommended'
+  const workerEditLoss = readiness.progressState === 'worker_edit_loss'
   const operation = readiness.canStart && readiness.focusTaskId && runnableWork
     ? (specRepair ? 'repair_spec' : 'start_focused')
     : undefined
-  const label = workerRetryRecommended
+  const label = workerEditLoss
+    ? 'Worker discarded its edits'
+    : workerRetryRecommended
     ? 'Worker needs a fresh pass'
     : specRepair
     ? 'Repair this spec'
@@ -660,7 +664,9 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const taskLabel = ownerReview || runnableWork ? readiness.focusTaskTitle?.trim() : undefined
   // The selected task is the decision. A review-queue count is operational
   // context, not an explanation that competes with that task on every surface.
-  const detail = workerRetryRecommended
+  const detail = workerEditLoss
+    ? `Guildhall saw this worker's edits disappear before a handoff. Retry starts a fresh pass from the saved task plan.`
+    : workerRetryRecommended
     ? 'The last two worker passes ended without a durable change. Retry starts a fresh pass using this task\'s current plan.'
     : blockedWork
     ? 'This task stopped and needs its recovery action before it can continue.'
@@ -680,12 +686,13 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
       : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
     tone: readiness.code === 'required_migration_pending'
       ? 'danger'
-      : workerRetryRecommended
+      : workerRetryRecommended || workerEditLoss
         ? 'warn'
       : readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
         ? 'accent'
         : 'warn',
-    code: workerRetryRecommended ? 'worker_recovery' : readiness.code,
+    code: workerRetryRecommended || workerEditLoss ? 'worker_recovery' : readiness.code,
+    ...(workerEditLoss ? { ownerHeading: 'Worker discarded its edits' as const } : {}),
     ...(readiness.focusTaskId ? { taskId: readiness.focusTaskId } : {}),
     ...(operation ? { operation } : {}),
   }

@@ -62165,7 +62165,7 @@ does not remove or alter task worktree changes.
 
 ### Finding: A worker that loses its edits cannot look like ordinary progress
 
-- [ ] User job: when an active task's isolated worktree goes from changed back
+- [x] User job: when an active task's isolated worktree goes from changed back
   to clean without a review, proof, or completion transition, the owner sees
   a truthful recovery state rather than a generic working or resume message.
 - Finding, 2026-08-30: during the real t-minus-t `task-004` run, the worker
@@ -62188,3 +62188,51 @@ does not remove or alter task worktree changes.
   review transition, and route that fact through the existing shared recovery
   action model. The owner should get one executable recovery action, not an
   activity transcript or a new diagnostic surface.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-worker-edit-loss-recovery-2026-08-30`. Touched contracts:
+the normalized task runtime recovery record, worker stream-event handling,
+paused-work summary projection, and shared owner action model. The runtime
+records only the latest non-ignored worktree observation: `dirty` with a
+bounded file sample, or `lost` when a later worker tool boundary finds that
+same task worktree clean before review, proof, or completion. The action model
+maps `lost` to one focused `Retry worker` command. Considered but not touched:
+provider prose, task definitions, task status, checkpoints, release scope,
+worktree content, and page-local action ranking. Required proof: a worker
+stream that observes dirty then clean records `lost`; a paused focus surfaces
+one retry action; a stale saved-work marker cannot override it. Apply/revert:
+the observation is presentation/recovery state only and does not mutate the
+worktree or alter task lifecycle records.
+
+#### Schema Migration Decision
+
+Persisted schema touched: optional `workerRecovery.worktreeObservation` in the
+normalized task runtime overlay, with `state` (`dirty` or `lost`), timestamp,
+and at most twelve observed paths. Scope: backward-compatible runtime recovery
+state. Existing records lack the field and remain ordinary pauses. No mandatory
+migration is required before run; the compatibility reader treats absence as
+no observation. Fixtures cover a dirty-to-clean worker stream and a legacy
+runtime payload. Rollback ignores the optional fact; it neither restores nor
+removes any task-worktree content.
+
+#### Validation
+
+- Stream-boundary regression: a worker's typed `edit-file` completion observed
+  an isolated worktree with two changed files, then its next typed tool
+  completion observed it clean. The normalized runtime record retained only
+  `worktreeObservation: { state: lost, files: [...] }`; no provider text was
+  read to make that decision.
+- Projection/action/UI proof: 118 focused tests passed across the summary,
+  shared action model, and focused Work view. The recovery heading is
+  `Worker discarded its edits`, the only command is `Retry worker`, and a
+  stale owner-pause saved-work marker cannot override the loss state.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` passed. The model-independence fixtures emit their known
+  non-repository Git stderr while all 127 assertions pass.
+- Installed t-minus-t proof, 2026-08-30: `pnpm dev:install`, `guildhall stop`,
+  and `guildhall start` completed; `/api/stale-server` reported `stale:false`,
+  two projects refreshed, and zero startup errors. The real current task
+  remains on its already-persisted no-progress retry state. Guildhall did not
+  invent another destructive worker attempt merely to manufacture a lost-edit
+  display case.

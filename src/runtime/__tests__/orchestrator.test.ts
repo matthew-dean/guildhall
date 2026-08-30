@@ -18652,6 +18652,56 @@ describe('Orchestrator worker no-progress escalation', () => {
     )).toBe(true)
   })
 
+  it('records a dirty-to-clean worker stream as lost worktree edits', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-edit-loss')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-edit-loss',
+        title: 'Open supported documents as TypeScript',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: 'Add the supported-document command and prove it.',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        return { text: '' }
+      },
+      async generateWithEvents(_prompt, onEvent) {
+        gitDriver.setStatusSummary(worktreePath, {
+          clean: false,
+          changedCount: 2,
+          samplePaths: ['packages/extension/src/extension.ts', 'packages/extension/package.json'],
+        })
+        await onEvent({ type: 'tool_execution_completed', tool_name: 'edit-file', output: 'edited', is_error: false })
+        gitDriver.setStatusSummary(worktreePath, { clean: true, samplePaths: [] })
+        await onEvent({ type: 'tool_execution_completed', tool_name: 'shell', output: 'cleaned', is_error: false })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const outcome = await orch.tick({ dispatchLimit: 1 })
+
+    expect(outcome.kind).toBe('processed')
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-edit-loss']?.workerRecovery).toMatchObject({
+      worktreeObservation: {
+        state: 'lost',
+        files: ['packages/extension/src/extension.ts', 'packages/extension/package.json'],
+      },
+    })
+  })
+
   it('persists no-progress counts across separate worker runs without likely targets', async () => {
     await writeQueue([
       mkTask({
