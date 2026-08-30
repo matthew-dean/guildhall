@@ -1138,6 +1138,11 @@
       }
       setTimeout(() => void project.refresh(scopedProjectId()), 500)
       setTimeout(() => void project.refresh(scopedProjectId()), 1800)
+      // A cross-task repair can finish in one focused pass. Refresh the
+      // drawer packet alongside the project cache so its stale action does
+      // not remain clickable until the ordinary polling interval.
+      setTimeout(() => void load(), 500)
+      setTimeout(() => void load(), 1800)
     } catch (err) {
       runError = friendlyFetchError(err)
     } finally {
@@ -1389,7 +1394,7 @@
             <span class="drawer-project-decision-detail">{projectPrimaryAction.detail}</span>
           {/if}
           <div class="drawer-project-decision-actions">
-            <Button variant="primary" size="sm" onclick={openProjectDecision}>{projectPrimaryAction.buttonLabel}</Button>
+            <Button variant="primary" size="sm" disabled={busy || runBusy} onclick={openProjectDecision}>{projectPrimaryAction.buttonLabel}</Button>
             <Button variant="secondary" size="sm" onclick={openFullTaskRecord}>View this task record</Button>
           </div>
         </UtilityPanel>
