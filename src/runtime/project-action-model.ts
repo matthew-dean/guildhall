@@ -162,10 +162,19 @@ export interface ProjectActionScopeAuthorityRequest {
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
 export type ProjectActionOperation = 'start_focused' | 'repair_spec'
+export type ProjectActionOwnerHeading =
+  | 'What needs your attention'
+  | 'Project update required'
+  | 'Spec repair needed'
+  | 'Work paused'
+  | 'Work is underway'
+  | 'Ready to continue'
+  | 'Release is ready'
 
 export interface ProjectAction {
   source: ProjectActionSource
   label: string
+  ownerHeading?: ProjectActionOwnerHeading
   taskLabel?: string
   detail?: string
   content?: string
@@ -176,6 +185,22 @@ export interface ProjectAction {
   taskId?: string
   inboxKind?: string
   operation?: ProjectActionOperation
+}
+
+function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): ProjectActionOwnerHeading {
+  if (action.operation === 'repair_spec') return 'Spec repair needed'
+  switch (action.code) {
+    case 'required_migration_pending': return 'Project update required'
+    case 'paused_live_work': return 'Work paused'
+    case 'running': return 'Work is underway'
+    case 'ready_work': return 'Ready to continue'
+    case 'release_ready': return 'Release is ready'
+    default: return 'What needs your attention'
+  }
+}
+
+function presentOwnerAction(action: Omit<ProjectAction, 'ownerHeading'>): ProjectAction {
+  return { ...action, ownerHeading: ownerHeadingForAction(action) }
 }
 
 export interface ProjectRunControlModel {
@@ -847,7 +872,8 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     })
   }
 
-  const primaryAction = candidates[0] ?? null
+  const selectedPrimaryAction = candidates[0] ?? null
+  const primaryAction = selectedPrimaryAction ? presentOwnerAction(selectedPrimaryAction) : null
   const secondaryActions = candidates
     .slice(1)
     .filter(action => {

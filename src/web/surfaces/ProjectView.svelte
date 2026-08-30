@@ -42,16 +42,24 @@
     failed?: Array<ProjectMigrationStatusItem & { error?: string }>
   }
 
-  const loadProjectOverviewTab = () => import('./project/ProjectOverviewTab.svelte')
-  const loadThreadTab = () => import('./project/ThreadTab.svelte')
-  const loadNeedsYouTab = () => import('./project/NeedsYouTab.svelte')
-  const loadWorkTab = () => import('./project/WorkTab.svelte')
-  const loadWorkspaceImportTab = () => import('./project/WorkspaceImportTab.svelte')
-  const loadProjectAttachFlow = () => import('./project/ProjectAttachFlow.svelte')
-  const loadReleaseTab = () => import('./project/ReleaseTab.svelte')
-  const loadSettingsTab = () => import('./project/SettingsTab.svelte')
-  const loadProjectMapTab = () => import('./project/ProjectMapTab.svelte')
-  const loadProjectUpdateGate = () => import('./project/ProjectUpdateGate.svelte')
+  function loadOnce<T>(loader: () => Promise<T>): () => Promise<T> {
+    let module: Promise<T> | null = null
+    return () => module ??= loader()
+  }
+
+  // Owner routes refresh while the project summary changes. An await block must
+  // keep the same import promise through those updates or it can remain on its
+  // loading shell indefinitely.
+  const loadProjectOverviewTab = loadOnce(() => import('./project/ProjectOverviewTab.svelte'))
+  const loadThreadTab = loadOnce(() => import('./project/ThreadTab.svelte'))
+  const loadNeedsYouTab = loadOnce(() => import('./project/NeedsYouTab.svelte'))
+  const loadWorkTab = loadOnce(() => import('./project/WorkTab.svelte'))
+  const loadWorkspaceImportTab = loadOnce(() => import('./project/WorkspaceImportTab.svelte'))
+  const loadProjectAttachFlow = loadOnce(() => import('./project/ProjectAttachFlow.svelte'))
+  const loadReleaseTab = loadOnce(() => import('./project/ReleaseTab.svelte'))
+  const loadSettingsTab = loadOnce(() => import('./project/SettingsTab.svelte'))
+  const loadProjectMapTab = loadOnce(() => import('./project/ProjectMapTab.svelte'))
+  const loadProjectUpdateGate = loadOnce(() => import('./project/ProjectUpdateGate.svelte'))
 
   interface ShellAttentionNotice {
     id: string

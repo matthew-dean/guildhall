@@ -62,6 +62,7 @@ describe('ProjectOverviewTab owner decision', () => {
       actionModel: {
         primaryAction: {
           code: 'running',
+          ownerHeading: 'Work is underway',
           label: 'Build the next primitive',
           detail: 'Guildhall is working on "Build the next primitive".',
           buttonLabel: 'Open Work',
@@ -125,6 +126,7 @@ describe('ProjectOverviewTab owner decision', () => {
             href: '/work?task=task-091',
             tone: 'accent',
             code: 'ready_work',
+            ownerHeading: 'Ready to continue',
           },
         },
       }) as any,
@@ -157,6 +159,7 @@ describe('ProjectOverviewTab owner decision', () => {
             tone: 'accent',
             code: 'ready_work',
             operation: 'repair_spec',
+            ownerHeading: 'Spec repair needed',
           },
         },
       }) as any,

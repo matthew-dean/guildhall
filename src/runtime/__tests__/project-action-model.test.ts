@@ -1771,7 +1771,11 @@ describe('buildProjectActionModel', () => {
       runStatus: 'stopped',
     })
 
-    expect(model.primaryAction).toMatchObject({ code: 'paused_live_work', taskId: 'task-current' })
+    expect(model.primaryAction).toMatchObject({
+      code: 'paused_live_work',
+      taskId: 'task-current',
+      ownerHeading: 'Work paused',
+    })
     expect(model.ownerInput).toEqual({ active: false })
     expect(model.workSummary?.awaitingApproval).toBe(0)
   })

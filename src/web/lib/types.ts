@@ -1466,10 +1466,19 @@ export interface ProjectAvailability {
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
 export type ProjectActionOperation = 'start_focused' | 'repair_spec'
+export type ProjectActionOwnerHeading =
+  | 'What needs your attention'
+  | 'Project update required'
+  | 'Spec repair needed'
+  | 'Work paused'
+  | 'Work is underway'
+  | 'Ready to continue'
+  | 'Release is ready'
 
 export interface ProjectAction {
   source?: ProjectActionSource | string
   label?: string
+  ownerHeading?: ProjectActionOwnerHeading | string
   taskLabel?: string
   detail?: string
   content?: string

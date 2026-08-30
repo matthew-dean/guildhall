@@ -61004,6 +61004,50 @@ reconciliation; existing task and run records remain unchanged.
 - [ ] Remaining surface proof: compare the authoritative execution state with
   Work, drawer, Thread, release, inbox, and status during a real one-task run;
   the saved `planExecution` fallback must never be presented as current work.
+- Finding, 2026-08-30: with the same paused action-model record, Overview,
+  Thread, and Release locally called it `What needs your attention`, while
+  Inbox truthfully said `Nothing needs your decision`. Resume is a work
+  control, not an unresolved decision, so the owner received contradictory
+  urgency based solely on which route they opened.
+
+#### Contract Touch Decision
+
+Work id: `looma-knit-owner-action-presentation-2026-08-30`. Touched contract:
+the shared project action model. Its primary action must carry the canonical
+owner-facing state heading, computed once from its typed code, and every owner
+route must present that field rather than locally interpreting action code or
+tone. Considered but not touched: task ranking, inbox membership, run control,
+and persisted task state. Required proof: paused work reads `Work paused` on
+Overview, Thread, and Release, while Inbox continues to reserve its empty state
+for the absence of a decision.
+
+#### Schema Migration Decision
+
+No persisted-schema migration. `ownerHeading` is an additive API presentation
+field computed from the current shared snapshot; older readers retain their
+existing generic fallback until they receive a fresh project packet.
+
+- [x] Regression and installed API proof, 2026-08-30: the runtime action
+  builder now emits `ownerHeading: Work paused` for paused focused work, and
+  Overview, Thread, and Release consume that shared presentation field rather
+  than reinterpreting action code or tone. Runtime and surface regressions pass;
+  after build, install, restart, and `stale:false`, the real Looma + Knit
+  project API returned the same `paused_live_work` action with that heading.
+  The direct browser replay remains open below.
+- Follow-up finding, 2026-08-30: after a fresh installed restart, the cold
+  Overview route settled but cold Thread, Release, and Inbox remained on their
+  `Loading project...` shells even though the shared project, Thread, and Inbox
+  APIs all returned 200 with the paused action. ProjectView created a new
+  dynamic-import promise from its template on every reactive render, allowing
+  a summary refresh to replace an in-flight owner-surface import indefinitely.
+- [x] Regression repair, 2026-08-30: ProjectView now memoizes each lazy owner
+  surface import for the life of the shell, so refreshes preserve the pending
+  import rather than replacing it. ProjectView route tests pass alongside the
+  shared-action regressions.
+- [ ] Remaining installed browser proof: rerun cold Thread, Release, and Inbox
+  after the import-cache repair. The browser harness timed out while navigating
+  before it could return DOM or console evidence, so the API and unit proof do
+  not substitute for a real owner-route replay.
 - Follow-up finding, 2026-08-30: after the owner resumed the real docs/storybook
   task, Work correctly withheld stale inventory while its focused snapshot
   refreshed, but replaced the entire page with `Guildhall is working`. The

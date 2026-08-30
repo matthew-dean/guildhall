@@ -3797,7 +3797,7 @@
     <div class="thread-body">
       {@render capabilityRequestDecisions()}
       {#if showProjectDecisionFirst}
-        <Card title="What needs your attention" titleTag="h2" tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
+        <Card title={ownerAction?.ownerHeading ?? 'What needs your attention'} titleTag="h2" tone={ownerAction?.tone === 'danger' ? 'danger' : ownerAction?.tone === 'warn' ? 'warn' : 'accent'} variant="callout" railStrength="strong">
           <div class="thread-project-decision">
             <div>
               <h3>{ownerAction?.label ?? 'Project needs your decision'}</h3>
