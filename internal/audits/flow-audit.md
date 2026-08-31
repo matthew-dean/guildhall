@@ -64839,4 +64839,6 @@ execution readiness, and action fields; only their shared precedence changes.
   and continues through `task-090`. After `pnpm dev:install`,
   `/api/stale-server` reported `stale:false`. At 1280x720 and 390x844, the
   real Overview rendered one enabled `Run verification` button for `NAR-087`
-  with `scrollWidth === clientWidth`.
+  with `scrollWidth === clientWidth`. The installed focused Work, Release, and
+  Thread routes then showed the same task, explanation, and one enabled
+  `Run verification` action without a competing owner command.
