@@ -59,8 +59,13 @@ jobs:
 
       - name: Verify release gates
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$version" = "$GITHUB_REF_NAME" ]; then
+            version="$(node -p "require('./package.json').version")"
+          fi
           pnpm typecheck
           pnpm docs:check-help-sync
+          pnpm docs:check-release -- "$version"
           pnpm docs:build
           pnpm lint:deps
           pnpm test:release

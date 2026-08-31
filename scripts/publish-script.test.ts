@@ -36,6 +36,10 @@ async function createMinimalReleaseFixture(tmp: string): Promise<void> {
   await fs.copyFile(path.join(root, 'scripts/resolve-runtime-image-digest.mjs'), path.join(tmp, 'scripts/resolve-runtime-image-digest.mjs'))
   await fs.copyFile(path.join(root, 'scripts/version-docs.mjs'), path.join(tmp, 'scripts/version-docs.mjs'))
   await fs.copyFile(path.join(root, 'scripts/docs-generation.mjs'), path.join(tmp, 'scripts/docs-generation.mjs'))
+  await fs.copyFile(
+    path.join(root, 'scripts/check-release-documentation.mjs'),
+    path.join(tmp, 'scripts/check-release-documentation.mjs'),
+  )
   await fs.writeFile(
     path.join(tmp, 'scripts/build-macos-package.mjs'),
     'console.log("fake macOS package")\n',
@@ -57,7 +61,8 @@ async function createMinimalReleaseFixture(tmp: string): Promise<void> {
       '',
     ].join('\n'),
   )
-  await fs.writeFile(path.join(tmp, 'docs/guide/quick-start.md'), '# Quick start\n')
+  await fs.writeFile(path.join(tmp, 'README.md'), 'Install GUILDHALL_VERSION=0.4.0\n')
+  await fs.writeFile(path.join(tmp, 'docs/guide/quick-start.md'), 'Install GUILDHALL_VERSION=0.4.0\n')
   await fs.writeFile(
     path.join(tmp, 'src/web/generated/help-topics.json'),
     JSON.stringify({ start: { href: '/help/start' } }),
@@ -105,7 +110,10 @@ describe('release publish script', () => {
         ].join('\n'),
       )
       const fakePnpm = path.join(fakeBin, 'pnpm')
-      await writeExecutable(fakePnpm, '#!/bin/sh\nexit 1\n')
+      await writeExecutable(
+        fakePnpm,
+        '#!/bin/sh\nif [ "$1" = "typecheck" ]; then exit 1; fi\nexit 0\n',
+      )
 
       await runGit(tmp, ['init', '-b', 'main'])
       await runGit(tmp, ['config', 'user.name', 'Guildhall Test'])
@@ -552,6 +560,19 @@ describe('release publish script', () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-publish-script-'))
     try {
       await createMinimalReleaseFixture(tmp)
+      await fs.writeFile(
+        path.join(tmp, 'docs/index.md'),
+        '<p class="gh-home-version">Current docs: <a href="/releases/0.4.0">0.4.0</a>.</p>\n',
+      )
+      await fs.writeFile(
+        path.join(tmp, 'docs/releases/index.md'),
+        [
+          'The current stable release is [Guildhall 0.4.0](./0.4.0); older snapshots remain',
+          'available under [Versions](/versions/0.4.0/guide/quick-start).',
+          '',
+          '- [0.5.0 (next patch)](./0.5.0) - ready for release.',
+        ].join('\n'),
+      )
       const operationLog = path.join(tmp, 'release-order.log')
 
       const fakeBin = path.join(tmp, 'fake-bin')
@@ -601,11 +622,21 @@ describe('release publish script', () => {
 
       const manifest = JSON.parse(await fs.readFile(path.join(tmp, 'package.json'), 'utf8'))
       const releaseTag = await execFileP('git', ['tag', '--list', 'v0.5.0'], { cwd: tmp })
+      const docsHome = await fs.readFile(path.join(tmp, 'docs/index.md'), 'utf8')
+      const releasesIndex = await fs.readFile(path.join(tmp, 'docs/releases/index.md'), 'utf8')
+      const readme = await fs.readFile(path.join(tmp, 'README.md'), 'utf8')
+      const quickStart = await fs.readFile(path.join(tmp, 'docs/guide/quick-start.md'), 'utf8')
 
       expect(result.status).toBe(0)
       expect(result.output).toContain('skipping npm publish because GitHub release artifacts cannot be verified')
       expect(manifest.version).toBe('0.5.0')
       expect(releaseTag.stdout.trim()).toBe('v0.5.0')
+      expect(docsHome).toContain('href="/releases/0.5.0">0.5.0</a>')
+      expect(releasesIndex).toContain('Guildhall 0.5.0](./0.5.0)')
+      expect(releasesIndex).toContain('/versions/0.5.0/guide/quick-start')
+      expect(releasesIndex).not.toContain('(next patch)')
+      expect(readme).toContain('GUILDHALL_VERSION=0.5.0')
+      expect(quickStart).toContain('GUILDHALL_VERSION=0.5.0')
       await expect(fs.stat(operationLog)).rejects.toThrow()
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })

@@ -94,6 +94,17 @@ completed count, and no required next action.
 
 ![Guildhall 0.13.x showing a shipped release with all scoped work complete.](../assets/ui-audit/0-13-0/release-shipped.webp)
 
+## Release evidence
+
+The publisher checks the release note, the immutable docs snapshot, and fresh
+installed-app screenshots before it creates the package. The notes tell people
+what changed; the snapshot preserves the documentation that shipped; the
+screenshots show the owner path that was actually tested.
+
+That check runs again in the tagged release workflow. A release cannot quietly
+lose its explanation or its visual proof between a local publish and the
+artifact that people install.
+
 ## Start the next release
 
 Shipping does not close the project. When another planned release exists, return

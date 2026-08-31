@@ -179,6 +179,8 @@ if (flags.dryRun) {
     log(`Cutting docs version ${nextVersion} from current docs...`)
     run('node', ['scripts/version-docs.mjs', nextVersion])
   }
+  log(`Checking release notes, screenshots, and docs snapshot for ${nextVersion}...`)
+  run('pnpm', ['docs:check-release', '--', nextVersion])
 }
 
 const releaseHelpDocsEnv = flags.dryRun
@@ -370,25 +372,54 @@ function writeJson(path, obj) {
 function updatePublicDocsVersion(version) {
   const homePath = join(ROOT, 'docs/index.md')
   const releasesPath = join(ROOT, 'docs/releases/index.md')
+  const installerDocs = [
+    join(ROOT, 'README.md'),
+    join(ROOT, 'docs/guide/quick-start.md'),
+  ]
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
   replaceFileText(homePath, (raw) => raw
     .replace(/\/(?:guildhall\/)?versions\/\d+\.\d+\.\d+(-[\w.]+)?\//g, `/versions/${version}/`)
-    .replace(/Guildhall \d+\.\d+\.\d+(-[\w.]+)?/g, `Guildhall ${version}`))
+    .replace(/Guildhall \d+\.\d+\.\d+(-[\w.]+)?/g, `Guildhall ${version}`)
+    .replace(
+      /(<p class="gh-home-version">Current docs: <a href="\/(?:guildhall\/)?releases\/)\d+\.\d+\.\d+(-[\w.]+)?(\">)\d+\.\d+\.\d+(-[\w.]+)?/,
+      `$1${version}$3${version}`,
+    ))
 
   replaceFileText(releasesPath, (raw) => raw
     .replace(/\/versions\/\d+\.\d+\.\d+(-[\w.]+)?\//g, `/versions/${version}/`)
     .replace(/Guildhall \d+\.\d+\.\d+(-[\w.]+)?/g, `Guildhall ${version}`)
-    .replace(new RegExp(`(^- \\[${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\][^\\n]*) \\(Upcoming\\.\\)$`, 'm'), '$1'))
+    .replace(
+      /(The current stable release is \[Guildhall \d+\.\d+\.\d+(-[\w.]+)?\]\(\.\/)\d+\.\d+\.\d+(-[\w.]+)?/,
+      `$1${version}`,
+    )
+    .replace(
+      /(available under \[Versions\]\(\/versions\/)\d+\.\d+\.\d+(-[\w.]+)?\//,
+      `$1${version}/`,
+    )
+    .replace(
+      new RegExp(`(^- \\[${escapedVersion}) \\((?:Upcoming|next patch)\\)(\\]\\(\\./${escapedVersion}\\)[^\\n]*)$`, 'm'),
+      '$1$2',
+    ))
+
+  for (const path of installerDocs) {
+    if (!existsSync(path)) continue
+    replaceFileText(path, (raw) => raw
+      .replace(/GUILDHALL_VERSION=\d+\.\d+\.\d+(-[\w.]+)?/g, `GUILDHALL_VERSION=${version}`))
+  }
 
   log(`Updated public docs pointers to ${version}.`)
 }
 
 function trackReleaseArtifacts(version) {
   const trackedFiles = [
+    join(ROOT, 'README.md'),
     join(ROOT, 'docs/index.md'),
+    join(ROOT, 'docs/guide/quick-start.md'),
     join(ROOT, 'docs/releases/index.md'),
   ]
   for (const file of trackedFiles) {
+    if (!existsSync(file)) continue
     releaseArtifactRollback.files.set(file, readFileSync(file, 'utf-8'))
   }
   const versionDir = join(ROOT, 'docs/versions', version)

@@ -7,6 +7,33 @@ help_summary: |
 
 <!-- markdownlint-disable MD003 -->
 
+## 2026-08-31 0.13.2 public release evidence
+
+- [x] User job: before installing a release, a reader can find its explanation,
+  current docs, and a real visual record of the owner path. Publishing must
+  fail instead of leaving one of those things stale or absent.
+- [x] Add the `0.13.2` release note's owner-review handoff evidence, captured
+  from the installed local app on t-minus-t at 1280x800. Overview shows one
+  named task and **Resume review**; focused Work shows the same task and
+  **Continue review**.
+- [x] Cut the immutable `docs/versions/0.13.2` snapshot and update the public
+  release, homepage, and pinned installer references together.
+- [x] Make `docs:check-release <version>` require the release note, its
+  capture manifest, at least two screenshots, and the corresponding snapshot.
+  The publish command and tagged GitHub release workflow both run it.
+- [x] Add regression coverage for the evidence gate and for all public release
+  pointers, including rollback after a failed pre-publish gate.
+- Validation: installed `0.13.2` service restarted with `/api/stale-server`
+  reporting `stale:false`; desktop captures were visually inspected; targeted
+  release script tests passed 23/23; `pnpm typecheck`, `pnpm docs:build`,
+  `pnpm lint:deps`, `pnpm model:independence`, and
+  `pnpm docs:check-release -- 0.13.2` passed. The full `pnpm test:release`
+  suite also completed before the final pointer-regression assertion was added;
+  that assertion is covered by the final targeted release-script run.
+- Contract/schema decision: no persisted project contract or schema changed.
+  This is release-artifact integrity: public pointers and evidence are derived
+  from the selected release version and are restored on a pre-publish failure.
+
 ## 2026-08-30 LFS-safe repository freshness polling
 
 - Work id: `lfs-safe-repository-polling`.
