@@ -15789,16 +15789,18 @@ describe('Orchestrator.run — full loops', () => {
     gitDriver.setHeadSha(worktreePath, 'landed-commit')
     gitDriver.setAncestor(tmpDir, 'landed-commit', 'main', true)
     const worker = stubAgent('worker-agent')
+    const reviewer = stubAgent('reviewer-agent')
     const orch = new Orchestrator({
       config: baseConfig(),
-      agents: agentSet({ worker }),
+      agents: agentSet({ worker, reviewer }),
       gitDriver,
     })
 
     await orch.tick()
 
     const task = (await readQueue()).tasks[0]!
-    expect(task.status).not.toBe('in_progress')
+    expect(task.status).toBe('review')
+    expect(task.assignedTo).toBe('reviewer-agent')
     expect(task.mergeRecord).toMatchObject({
       result: 'merged',
       fromBranch: 'guildhall/task-external-landing',
@@ -15807,6 +15809,58 @@ describe('Orchestrator.run — full loops', () => {
     })
     expect(task.notes.some(note => note.content.includes('moved the task to review'))).toBe(true)
     expect(worker.calls).toHaveLength(0)
+    expect(reviewer.calls).toHaveLength(0)
+  })
+
+  it('keeps recovered merged work with missing proof in review before worker dispatch', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-merged-proof-pending')
+    await writeQueue([
+      mkTask({
+        id: 'task-merged-proof-pending',
+        status: 'in_progress',
+        assignedTo: 'reviewer-agent',
+        updatedAt: '2026-08-31T19:12:40.433Z',
+        workerRecovery: {
+          noProgressAttempts: 1,
+          dirtyTimeoutRetries: 0,
+        },
+        worktreePath,
+        branchName: 'guildhall/task-merged-proof-pending',
+        baseBranch: 'main',
+        acceptanceCriteria: [{
+          id: 'ac-review',
+          description: 'A reviewer approves the landed implementation.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        mergeRecord: {
+          fromBranch: 'guildhall/task-merged-proof-pending',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'merged',
+          commitSha: 'landed-commit',
+          mergedAt: '2026-08-31T19:11:22.483Z',
+        },
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker, reviewer }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    await orch.tick()
+
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).toBe('review')
+    expect(task.assignedTo).toBe('reviewer-agent')
+    expect((await readManagedQueue()).tasks[0]?.status).toBe('review')
+    expect(task.notes.some((note) => note.content.includes('remaining acceptance proof'))).toBe(true)
+    expect(worker.calls).toHaveLength(0)
+    expect(reviewer.calls).toHaveLength(0)
   })
 
   it('retries cleanup for a completed merged task after a transient removal failure', async () => {

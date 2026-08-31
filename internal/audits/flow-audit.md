@@ -64366,6 +64366,46 @@ diagnostic finding only.
 No persisted-schema change. Diagnose whether existing runtime and handoff
 facts are mis-projected before adding any state.
 
+### Finding: Landed work with pending proof must enter review, never rerun implementation
+
+- [x] User job: when Guildhall detects that a task's implementation is already
+  contained in its landing branch, the owner sees one truthful review/verify
+  action. It must not show the task as active worker work or spend another
+  worker pass on an already-landed change.
+- Live finding, 2026-08-31: after resuming t-minus-t `TMI-006`, landing
+  reconciliation recorded a merged task branch and stated that it had moved
+  the task to review. The current task projection nevertheless remained
+  `in_progress` with `reviewer-agent` ownership, while Overview and Work said
+  that Guildhall was running the task. The worker then made a no-progress pass
+  against that already-landed work. This is a lifecycle and ownership conflict
+  in shared state, not a Work-view presentation issue.
+
+#### Contract Touch Decision
+
+Work id: `landed-proof-pending-review-2026-08-31`. Touched contracts: the
+shared landing reconciliation lifecycle and the task runtime ownership overlay.
+When durable merge evidence exists and completion proof is still missing, the
+task must be in `review` and assigned to the reviewer lane. Considered but not
+touched: task definition schema, Git merge execution, proof schema, task
+cards, route-local action ranking, and model prose. Required proof: a
+persisted merged-but-unverified task is reopened to review before task picking;
+the worker is not dispatched and the effective task's status/assignee agree.
+Proof provided: focused orchestrator coverage verifies both first-time and
+recovered merged-but-unverified states; each persists raw definition status
+`review`, reviewer ownership, and makes no agent call during reconciliation.
+Installed-app replay on T-minus-T `TMI-006` produced `in_progress -> review`
+through `landing-reconciliation`; `/api/project` then reported `review` and
+`reviewer-agent`, and the 1280px Work route showed `REVIEW READY` with a visible
+`Resume review` action and no horizontal overflow. The broader orchestrator
+suite remains tracked below as a separate release blocker.
+Apply/revert: applying turns a stale active claim into review; reverting allows
+already-landed work to run through the worker lane again.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing merge-record, status, proof, and runtime
+assignee facts are sufficient; the repair reconciles them before dispatch.
+
 ### Finding: Review must mean reviewable implementation exists
 
 - [x] User job: when Guildhall says a task is ready for review, the owner can

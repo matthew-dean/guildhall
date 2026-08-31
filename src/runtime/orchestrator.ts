@@ -3205,6 +3205,19 @@ export class Orchestrator {
     if (weakRecoverySpecRepair) return weakRecoverySpecRepair
     const landingRepair = await this.reconcileCompletedTaskLanding(queueBefore)
     if (landingRepair.changed) await this.writeQueue(queueBefore)
+    if (landingRepair.reviewHandoffTask) {
+      await this.persistLandingReviewHandoff(landingRepair.reviewHandoffTask)
+      return {
+        kind: 'processed',
+        taskId: landingRepair.reviewHandoffTask.id,
+        agent: 'landing-reconciliation',
+        beforeStatus: 'in_progress',
+        afterStatus: 'review',
+        transitioned: true,
+        note: 'Guildhall found already-landed work that still needs review proof. It is ready for review and will not run another worker pass.',
+        revisionCount: landingRepair.reviewHandoffTask.revisionCount,
+      }
+    }
     const pendingPrRepair = await this.reconcilePendingPrLanding(queueBefore)
     if (pendingPrRepair.changed) await this.writeQueue(queueBefore)
     const completedWorktreeCleanup = await this.reconcileCompletedWorktreeCleanup(queueBefore)
@@ -11189,8 +11202,12 @@ export class Orchestrator {
    * merge record is not actually done yet: commit any dirty snapshot, land the
    * branch, then clean up the disposable worktree.
    */
-  private async reconcileCompletedTaskLanding(queue: TaskQueue): Promise<{ changed: boolean }> {
+  private async reconcileCompletedTaskLanding(queue: TaskQueue): Promise<{
+    changed: boolean
+    reviewHandoffTask?: Task
+  }> {
     let changed = false
+    let reviewHandoffTask: Task | undefined
     const worktreeMode = await this.resolveWorktreeModeSafe()
     const landingStrategy = await this.resolveLandingStrategySafe()
     const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
@@ -11321,8 +11338,41 @@ export class Orchestrator {
           task.updatedAt = now
           queue.lastUpdated = now
           changed = true
+          reviewHandoffTask = task
           continue
         }
+      }
+
+      // A previous reconciliation may have already recorded durable landing
+      // evidence before an older active queue projection is written back.
+      // Treat that recovered state exactly like the first landing detection:
+      // implementation is over, while proof still belongs to review.
+      const landedButProofPending =
+        task.status === 'in_progress' &&
+        task.mergeRecord?.result === 'merged' &&
+        taskDoneButProofMissing({ ...task, status: 'done' })
+      if (landedButProofPending) {
+        const now = this.now()
+        transitionTaskStatus({
+          task,
+          event: 'request_review',
+          actor: 'landing-reconciliation',
+          evidenceRefs: ['task:git-story:merged-proof-pending'],
+          now,
+        })
+        task.assignedTo = 'reviewer-agent'
+        delete task.blockReason
+        task.notes.push({
+          agentId: 'landing-reconciliation',
+          role: 'git-story',
+          content: 'Kept already-landed work in review because its remaining acceptance proof cannot be produced by another worker pass.',
+          timestamp: now,
+        })
+        task.updatedAt = now
+        queue.lastUpdated = now
+        changed = true
+        reviewHandoffTask = task
+        continue
       }
 
       const alreadyLanded =
@@ -11457,7 +11507,7 @@ export class Orchestrator {
       changed = true
       await this.maybeCleanupWorktree(task, worktreeMode)
     }
-    return { changed }
+    return { changed, ...(reviewHandoffTask ? { reviewHandoffTask } : {}) }
   }
 
   /**
@@ -11929,6 +11979,41 @@ export class Orchestrator {
     this.queueWriteBaseline = cloneTaskQueue(result.queue as TaskQueue)
     this.effectiveQueueWriteBaseline = cloneTaskQueue(queue)
     await this.persistSanitizedTaskState(result.removedByTask)
+  }
+
+  /**
+   * Landing reconciliation starts from a rich effective task, where merge
+   * evidence and runtime ownership are overlaid on a compact definition. A
+   * generic queue write may validly route those overlay changes without a
+   * definition delta. Persist the lifecycle transition once more as a
+   * point mutation so the task's durable status cannot lag its reviewer lane.
+   */
+  private async persistLandingReviewHandoff(task: Task): Promise<void> {
+    const tasksPath = this.tasksPath()
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const updatedAt = task.updatedAt
+    const result = writePromotedTaskDetailMutation(tasksPath, task.id, {
+      projectId: path.basename(projectRoot),
+      projectRoot,
+      lastUpdated: updatedAt,
+      mutate: currentTask => ({
+        ...currentTask,
+        status: 'review',
+        updatedAt,
+        completedAt: undefined,
+      }),
+      mutateRuntime: currentRuntime => ({
+        ...(currentRuntime ?? {}),
+        taskId: task.id,
+        assignedTo: 'reviewer-agent',
+        updatedAt,
+      }),
+    })
+    if (!result) {
+      throw new Error(`Could not persist landed review handoff for ${task.id}`)
+    }
+    this.queueRevision = result.committedRevision
+    this.projectRevision = result.committedRevision
   }
 
   private async persistSanitizedTaskState(
