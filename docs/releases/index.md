@@ -12,8 +12,8 @@ are published separately under [Next](/next/guide/) so unreleased work can be
 documented without promising it to users who installed the current npm package.
 
 Historical release notes stay versioned with their docs snapshot. The current
-stable release is [Guildhall 0.13.1](./0.13.1); older snapshots remain
-available under [Versions](/versions/0.13.1/guide/quick-start).
+stable release is [Guildhall 0.13.2](./0.13.1); older snapshots remain
+available under [Versions](/versions/0.13.2/guide/quick-start).
 
 - [0.13.2 (next patch)](./0.13.2) - stable release decisions, truthful proof
   counts, migration-first navigation, and a reliable final verification gate.

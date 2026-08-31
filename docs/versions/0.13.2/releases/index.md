@@ -7,9 +7,11 @@ title: Releases
 Guildhall release notes explain what each version can do, how we checked it,
 and what still has limits.
 
-This is the version-pinned docs snapshot for Guildhall 0.13.1. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).
+This is the version-pinned docs snapshot for Guildhall 0.13.2. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).
 
-- [0.13.1 (next patch)](./0.13.1) - truthful shipped-state receipts, recoverable project refreshes, compact task references, and tag-safe publish recovery.
+- [0.13.2 (next patch)](./0.13.2) - stable release decisions, truthful proof
+  counts, migration-first navigation, and a reliable final verification gate.
+- [0.13.1](./0.13.1) - truthful shipped-state receipts, recoverable project refreshes, compact task references, and tag-safe publish recovery.
 - [0.13.0](./0.13.0) - shared release decisions, explicit owner reviews, historical shipped scope, and automated release artifacts.
 - [0.12.0](./0.12.0) - revisioned project-state storage, compact read projections, bounded history, and release-cycle product validation.
 - [0.11.0](./0.11.0) - project orientation, semantic workspace import, release-readiness hardening, and completed release type contracts.
