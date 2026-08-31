@@ -88,6 +88,63 @@ describe('buildProjectOrientationSpine', () => {
     expect(reconciled.summary.nextAction).toBe('Review completed scope.')
   })
 
+  it('does not let a stale historical release label rename current unscoped work', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'current-work-after-release',
+      now: '2026-08-31T00:00:00.000Z',
+      scope: {
+        id: 'current-work',
+        label: 'Current work',
+        kind: 'proposed_feature_set',
+        source: 'owner_approved',
+        nodeIds: ['work:task-006'],
+        deferredNodeIds: [],
+      },
+      releases: [{
+        id: '0.0.1',
+        label: '0.0.1',
+        kind: 'release',
+        state: 'shipped',
+        source: 'owner_approved',
+        nodeIds: ['work:task-001'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [{ id: 'task-006', title: 'Ship a small 0.0.2', status: 'review' }],
+    })
+
+    const currentScope = {
+      id: 'current-work',
+      label: 'Current work',
+      kind: 'proposed_feature_set' as const,
+      source: 'owner_approved' as const,
+      nodeIds: ['work:task-006'],
+      deferredNodeIds: [],
+    }
+    const reconciled = reconcileOrientationSpineWithReleaseTruth({
+      ...spine,
+      selectedRelease: null,
+      selectedTaskScope: currentScope,
+      scope: currentScope,
+      summary: {
+        ...spine.summary,
+        selectedReleaseLabel: '0.0.1',
+        selectedScopeLabel: '0.0.1',
+        headline: '0.0.1 is ready to continue.',
+      },
+    }, {
+      state: 'active',
+      counts: { total: 1, done: 0, unfinished: 1, deferred: 0, proofBlocked: 0 },
+    })
+
+    expect(reconciled.selectedRelease).toBeNull()
+    expect(reconciled.summary).toMatchObject({
+      selectedReleaseLabel: null,
+      selectedScopeLabel: 'Current work',
+      headline: 'Current work is in progress.',
+    })
+  })
+
   it('does not let stale task proof contracts reopen a release already marked ready', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'proof-authority',

@@ -352,9 +352,11 @@ export function reconcileOrientationSpineWithReleaseTruth(
     id: blocker.id ?? blocker.title ?? blocker.label ?? 'release-blocker',
     label: blocker.label ?? blocker.title ?? blocker.id ?? 'Current release needs attention.',
   }))
-  const label = truth.state === 'ready'
-    ? spine.selectedRelease?.label ?? spine.summary.selectedScopeLabel ?? 'Current scope'
-    : spine.summary.selectedScopeLabel ?? spine.selectedRelease?.label ?? 'Current scope'
+  // Current task scope is the only orientation authority when there is no
+  // selected release. A persisted summary can legitimately retain historical
+  // release context, but it must not rename new unscoped work as that release.
+  const currentScopeLabel = spine.selectedTaskScope?.label ?? spine.scope?.label
+  const label = spine.selectedRelease?.label ?? currentScopeLabel ?? spine.summary.selectedScopeLabel ?? 'Current scope'
   const selectedReleaseLifecycleState = truth.lifecycleState
     ?? (spine.selectedRelease?.state === 'shipped' ? 'shipped' as const : undefined)
   const selectedReleaseIsShipped = selectedReleaseLifecycleState === 'shipped'
@@ -433,7 +435,7 @@ export function reconcileOrientationSpineWithReleaseTruth(
         : truth.state === 'blocked'
           ? `${label} needs attention.`
           : `${label} is in progress.`,
-      selectedReleaseLabel: spine.selectedRelease?.label ?? spine.summary.selectedReleaseLabel,
+      selectedReleaseLabel: spine.selectedRelease?.label ?? null,
       selectedScopeLabel: label,
       includedCount: truth.counts.total,
       includedWorkCount: truth.counts.total,

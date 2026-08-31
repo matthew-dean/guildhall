@@ -8009,22 +8009,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // The saved spine is the Overview authority. Its selected-scope summary
     // is already materialized with the full task set; rebuilding it from the
     // deliberately absent inventory would turn real membership into zero.
+    const liveOrientationTruth = orientationReleaseTruthFromSummary(projection.releaseSummary, scopeQueue)
     const reconciledLiveSummarySpine = reconcileOrientationSpineWithReleaseTruth(
       surfaceOrientationSource,
-      {
-        ...orientationReleaseTruthFromSummary(projection.releaseSummary, scopeQueue),
-      },
+      liveOrientationTruth,
     )
-    // The saved decision/spine is the shared authority for status and next
-    // action. Work can request a denser task inventory, but that inventory is
-    // intentionally compact and cannot reinterpret readiness, approval, or
-    // progress differently from Overview and Map.
-    const liveSummarySpine = reconciledLiveSummarySpine as unknown as Record<string, unknown>
-    const initialOrientationSpine = input.surface === 'overview'
-      ? compactOrientationSpineForOverviewSurface(liveSummarySpine)
-      : input.surface === 'map'
-        ? compactOrientationSpineForMapSurface(liveSummarySpine)
-        : compactOrientationSpineForWorkSurface(liveSummarySpine)
     // A stored orientation snapshot can lag after task decomposition or
     // release selection changes. Its charter and narrative are still useful,
     // but the selected scope is owned by the same compact database snapshot
@@ -8037,17 +8026,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // surfaces must navigate and count the execution scope that already
     // suppresses a decomposed parent in favor of its materialized children.
     const compactScope = executionScope ?? overviewState?.scope ?? compactState?.scope ?? null
-    const baseOrientationSpine = compactScope
+    const scopedOrientationSpine = compactScope
       ? {
-          ...initialOrientationSpine,
-          selectedRelease: compactScope.kind === 'release' && initialOrientationSpine.selectedRelease
+          ...reconciledLiveSummarySpine,
+          selectedRelease: compactScope.kind === 'release' && reconciledLiveSummarySpine.selectedRelease
             ? {
-                ...initialOrientationSpine.selectedRelease,
+                ...reconciledLiveSummarySpine.selectedRelease,
                 nodeIds: [...compactScope.nodeIds],
                 deferredNodeIds: [...compactScope.deferredNodeIds],
               }
             : null,
-          releases: (Array.isArray(initialOrientationSpine.releases) ? initialOrientationSpine.releases : []).map(release => compactScope.kind === 'release' && release.id === compactScope.id
+          releases: reconciledLiveSummarySpine.releases.map(release => compactScope.kind === 'release' && release.id === compactScope.id
             ? {
                 ...release,
                 nodeIds: [...compactScope.nodeIds],
@@ -8057,10 +8046,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
           selectedTaskScope: compactScope as unknown as OrientationScope,
           scope: compactScope as unknown as OrientationScope,
         }
-      : initialOrientationSpine
+      : reconciledLiveSummarySpine
+    // Scope is overlaid from the same compact snapshot that owns release
+    // membership. Reconcile after that overlay so a stale cached summary
+    // cannot keep naming an old release once the live scope is current work.
+    const baseOrientationSpine = reconcileOrientationSpineWithReleaseTruth(
+      scopedOrientationSpine as unknown as ProjectOrientationSpine,
+      liveOrientationTruth,
+    )
     const overviewTaskIds = input.surface === 'overview'
       ? overviewTaskIdsForSurface({
-          orientationSpine: baseOrientationSpine as Record<string, unknown>,
+          orientationSpine: baseOrientationSpine as unknown as Record<string, unknown>,
           releaseReadiness: compactReleaseReadiness,
           actionModel: summary.actionModel,
           selectedTaskId: input.requestedTaskId,
@@ -8140,7 +8136,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return enrichTaskForServe(project.path, record, effective)
         }))
       : responseTasks as Array<Record<string, unknown>>
-    const selectedScopeTaskIds = selectedOrientationScopeTaskIds(baseOrientationSpine as Record<string, unknown>)
+    const selectedScopeTaskIds = selectedOrientationScopeTaskIds(baseOrientationSpine as unknown as Record<string, unknown>)
     const scopeRows = executionScopeRows(responseTasks.flatMap(task => {
       const scopeRow = (task as { scopeRow?: unknown }).scopeRow
       if (!scopeRow || typeof scopeRow !== 'object' || Array.isArray(scopeRow)) return []
@@ -8181,10 +8177,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }]
     }))
     const surfaceOrientationSpine = input.surface === 'overview'
-      ? compactOrientationSpineForOverviewSurface(baseOrientationSpine as Record<string, unknown>)
+      ? compactOrientationSpineForOverviewSurface(baseOrientationSpine as unknown as Record<string, unknown>)
       : input.surface === 'work'
-        ? compactOrientationSpineForWorkSurface(baseOrientationSpine as Record<string, unknown>)
-        : compactOrientationSpineForMapSurface(baseOrientationSpine as Record<string, unknown>)
+        ? compactOrientationSpineForWorkSurface(baseOrientationSpine as unknown as Record<string, unknown>)
+        : compactOrientationSpineForMapSurface(baseOrientationSpine as unknown as Record<string, unknown>)
     let orientationSpine = storedSpine && input.surface !== 'map'
       ? {
           ...surfaceOrientationSpine,

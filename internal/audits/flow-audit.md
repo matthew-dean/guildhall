@@ -64458,6 +64458,57 @@ review verdict records; rollback maps future rows back to `review_retry`.
   viewport had `scrollWidth === clientWidth`. The action was not launched
   during this visual replay, so no provider work or project state changed.
 
+### Finding: Historical releases must not name current unscoped work
+
+- [x] User job: when a project has current work but no selected active release,
+  the owner sees `Current work` and the task Guildhall has selected. A shipped
+  historical release must never be presented as the active scope or make a
+  future release task look like part of an already shipped release.
+- Live finding, 2026-08-31: T-minus-T's only current task is `task-006`,
+  `Ship a small 0.0.2`, and the authoritative spine records
+  `selectedTaskScope: Current work` with no `selectedRelease`. Its persisted
+  summary nevertheless said `0.0.1 is ready to continue` and labelled both
+  selected release and selected scope `0.0.1`; that release is durably
+  shipped and does not include `task-006`. The actual action was correct
+  (`Resume review` for `task-006`), but the project/release orientation was
+  contradictory before the owner could act.
+
+#### Contract Touch Decision
+
+Work id: `historical-release-scope-reconciliation-2026-08-31`. Touched
+contract: the shared orientation-spine reconciliation result used by Overview,
+Work, Thread, Inbox, Release, and task detail. When no selected release is
+present, current task scope owns the displayed scope label and the displayed
+release label is null. Considered but not touched: task/release membership,
+release lifecycle, start-readiness ranking, task state, route-local copy, and
+stored source history. Required proof: a stale summary carrying an old release
+cannot override a current unscoped task scope, and the installed T-minus-T
+surfaces agree on the repaired orientation. Apply/revert: applying removes the
+misleading historical label; reverting permits stale summary state to name
+current work.
+
+#### Schema Migration Decision
+
+No persisted schema change. The repair derives an existing cached summary from
+the authoritative selected scope at read/reconciliation time; compatibility
+readers continue to accept old snapshots and repair them on refresh.
+
+#### Evidence
+
+- The orientation-spine regression seeds a stale `0.0.1` summary beside an
+  authoritative `Current work` scope and proves reconciliation returns no
+  selected-release label, `Current work`, and `Current work is in progress`.
+- `pnpm typecheck` and `pnpm lint:contracts` pass. The complete
+  orientation-spine suite has one pre-existing unrelated failure in its
+  durable-completion fixture; the new focused regression passes.
+- Installed replay, 2026-08-31: after build/install/restart,
+  `/api/stale-server` reported `stale:false`. T-minus-T Overview, Work,
+  Thread, Inbox, Release, and task-detail API reads all agreed on no selected
+  release, `Current work`, `task-006`, and `Resume review`. The real focused
+  Work page at 1280x800, 1024x800, and 390x844 showed only `TMI-006`, its
+  review handoff, and one `Resume review` command; every viewport had
+  `scrollWidth === clientWidth`.
+
 ### Finding: Review must mean reviewable implementation exists
 
 - [x] User job: when Guildhall says a task is ready for review, the owner can
