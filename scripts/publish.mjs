@@ -56,6 +56,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import {
   assertRuntimeReleaseReady,
@@ -283,7 +284,7 @@ if (flags.pushRemote) {
 const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
 
 log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})...`)
-run('npm', publishArgs)
+await publishToNpm(publishArgs)
 
 log(`\n✓ Published guildhall@${nextVersion}`)
 
@@ -469,6 +470,54 @@ function runCaptureOptional(cmd, argv) {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return result
+}
+
+async function publishToNpm(publishArgs) {
+  const firstAttempt = runNpmPublish(publishArgs)
+  if (firstAttempt.status === 0) return
+  if (!npmRequiresOtp(firstAttempt)) {
+    die(`Command failed: npm ${publishArgs.join(' ')}`)
+  }
+
+  const otp = await readNpmOtp()
+  log('Retrying npm publish with the supplied one-time password...')
+  const retry = runNpmPublish([...publishArgs, `--otp=${otp}`])
+  if (retry.status !== 0) {
+    die(`Command failed: npm ${publishArgs.join(' ')} --otp=<redacted>`)
+  }
+}
+
+function runNpmPublish(publishArgs) {
+  const result = spawnSync('npm', publishArgs, {
+    cwd: ROOT,
+    env: process.env,
+    encoding: 'utf-8',
+    stdio: ['inherit', 'pipe', 'pipe'],
+  })
+  if (result.stdout) process.stdout.write(result.stdout)
+  if (result.stderr) process.stderr.write(result.stderr)
+  return result
+}
+
+function npmRequiresOtp(result) {
+  return result.status !== 0 && /\bEOTP\b|one-time password/i.test(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)
+}
+
+async function readNpmOtp() {
+  const configuredOtp = process.env.GUILDHALL_NPM_OTP?.trim()
+  if (configuredOtp) return configuredOtp
+  if (!process.stdin.isTTY) {
+    die('npm requires a one-time password. Re-run this command in an interactive terminal or set GUILDHALL_NPM_OTP for this one publish attempt.')
+  }
+
+  const prompt = createInterface({ input: process.stdin, output: process.stderr })
+  try {
+    const otp = (await prompt.question('[publish] Enter the current 6-digit code from your npm authenticator app: ')).trim()
+    if (!otp) die('npm one-time password was empty; release not published.')
+    return otp
+  } finally {
+    prompt.close()
+  }
 }
 
 async function resolveRuntimeImageDigest(version, branch) {
@@ -843,7 +892,10 @@ function waitForReleaseArtifacts(version) {
 
 function releaseAssetExists(version, assetName) {
   const url = `https://github.com/matthew-dean/guildhall/releases/download/v${version}/${assetName}`
-  const result = spawnSync('curl', ['-fsIL', '--max-time', '20', url], {
+  // GitHub's large release assets can reject a redirected HEAD request even
+  // after the asset is live. A one-byte range GET follows the same download
+  // path without transferring the installer.
+  const result = spawnSync('curl', ['-fsL', '--range', '0-0', '--max-time', '20', '-o', '/dev/null', url], {
     cwd: ROOT,
     stdio: 'ignore',
   })

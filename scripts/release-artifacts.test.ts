@@ -162,6 +162,19 @@ describe('release artifact contract', () => {
     expect(workflow.indexOf('Resolve runtime image digest')).toBeLessThan(workflow.indexOf('Build macOS package'))
   })
 
+  it('checks release assets with a redirected byte-range request', () => {
+    const publish = read('scripts/publish.mjs')
+
+    expect(publish).toContain("['-fsL', '--range', '0-0', '--max-time', '20', '-o', '/dev/null', url]")
+    expect(publish).not.toContain("['-fsIL', '--max-time', '20', url]")
+  })
+
+  it('explains that publish recovery needs an authenticator code', () => {
+    const publish = read('scripts/publish.mjs')
+
+    expect(publish).toContain('Enter the current 6-digit code from your npm authenticator app')
+  })
+
   it('keeps package install lazy by not pulling runtime images from installer paths', () => {
     const installer = read('scripts/install.sh')
     const macosPackage = read('scripts/build-macos-package.mjs')
