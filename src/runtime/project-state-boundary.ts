@@ -712,14 +712,21 @@ function projectScopeFromSavedState(input: {
   summary: ProjectSummaryProjection | null
   scopeRows: readonly ProjectStateDatabaseScopeRow[]
 }): ProjectScope | null {
+  const savedScope = input.summary?.scope
   const selectedRelease = input.selectedReleaseId
     ? input.releases.find(release => release.id === input.selectedReleaseId) ?? null
     : null
-  const savedScope = input.summary?.scope
-  const id = selectedRelease?.id ?? savedScope?.id
+  // A shipped release can remain selected as historical context after the
+  // owner creates the next request. The fresh summary's provisional scope is
+  // then the only current execution boundary; never let that historical id
+  // erase the new work while building a compact product surface.
+  const preferSavedScope = input.summary?.freshness === 'current' &&
+    savedScope?.kind === 'proposed_feature_set' &&
+    savedScope.source === 'owner_approved'
+  const id = preferSavedScope ? savedScope?.id : selectedRelease?.id ?? savedScope?.id
   if (!id) return null
 
-  if (selectedRelease) {
+  if (selectedRelease && !preferSavedScope) {
     // Release membership is a durable queue relation. Execution scope rows may
     // expand parent work into runnable child/proof rows, but they must not
     // rewrite the selected release identity or membership read model.
@@ -737,6 +744,7 @@ function projectScopeFromSavedState(input: {
   const executionRows = input.summary?.freshness === 'current'
     ? executionScopeRows(input.scopeRows)
     : []
+  const provisionalCurrentWork = id === 'current-work'
   return {
     id,
     label: savedScope?.label ?? id,
@@ -745,9 +753,11 @@ function projectScopeFromSavedState(input: {
     nodeIds: executionRows
       .filter(row => row.scope === 'included')
       .map(row => taskScopeNodeId(row.taskId)),
-    deferredNodeIds: executionRows
-      .filter(row => row.scope === 'deferred')
-      .map(row => taskScopeNodeId(row.taskId)),
+    deferredNodeIds: provisionalCurrentWork
+      ? []
+      : executionRows
+        .filter(row => row.scope === 'deferred')
+        .map(row => taskScopeNodeId(row.taskId)),
     ...(savedScope?.proofStyle ? { proofStyle: savedScope.proofStyle } : {}),
   }
 }

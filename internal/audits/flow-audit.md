@@ -64285,3 +64285,52 @@ diagnostic finding only.
 #### Schema Migration Decision
 
 No persisted-schema change.
+
+### Finding: Starting the next release must make the new work current
+
+- [x] User job: after a shipped release, the owner chooses `Start next
+  release`, submits one bounded request, and immediately sees that new work as
+  the current scope. The prior release remains readable history; it cannot
+  keep Overview, Work, Thread, Inbox, and Release claiming that there is
+  nothing to do while a new task exists.
+- Live finding, 2026-08-31: t-minus-t's shipped `0.0.1` correctly offered
+  `Start next release`. The owner submitted a bounded `0.0.2` context-menu
+  request, and the authoritative project state then reported six tasks with
+  one active task. Its selected scope and action model nevertheless remained
+  `0.0.1` / `release_shipped`, leaving Thread on `Nothing current`. The new
+  task was hidden because the selected-scope fallback chose a historical
+  shipped release.
+
+#### Contract Touch Decision
+
+Work id: `owner-started-next-release-scope-2026-08-31`. Touched contracts:
+the shared project-scope selector and the summary's derived release-naming
+fact. Once no active, planned, or ready named release remains, unassigned
+non-shelved work that does not belong to historical release membership forms
+the typed, owner-approved `current-work` proposed feature set. Considered but
+not touched: task creation, request routing, task status, release persistence,
+release membership, scheduler selection, and route-local presentation.
+Required proof: a shipped release's already-member task remains historical,
+while a newly created unassigned task is the only included current work across
+the shared summary. Apply/revert: changes only the derived selected scope;
+creating or naming a release still uses the existing lifecycle endpoints.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The provisional current-work scope is derived from
+existing task and release-membership facts and is rebuilt by the normal
+summary writer.
+
+#### Validation
+
+- Focused scope, summary, and project-state-boundary suites pass 127/127; the
+  selector regression uses a shipped release with materialized membership plus
+  a new unassigned exploring task, proving only the new task is in
+  `current-work`. The same test proves its summary is `unreleased` with one
+  task and zero deferred historical work.
+- Installed t-minus-t replay: after rebuild, `dev:install`, restart, and
+  `stale:false`, the API agreed on `current-work`, `task-006`, one task,
+  `unreleased`, and the sole `Start work` action. Overview showed `Ready to
+  start` with that button, Work listed only `TMI-006`, and Thread showed the
+  same button rather than `Nothing current`; all were inspected at the
+  desktop viewport with no clipped visible content.

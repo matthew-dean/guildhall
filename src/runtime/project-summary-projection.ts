@@ -35,6 +35,7 @@ import {
   executionScopeRows,
   normalizeProjectScopeRowReadModel,
   projectScopeRowNeedsOwnerInput,
+  selectedProjectScopeForQueue,
   summarizeProjectScopeRelease,
   summarizeProjectScopeOutsideWork,
   summarizeProjectScopeStart,
@@ -865,11 +866,11 @@ export function buildProjectSummaryProjection(
         }
       : {}),
   }))
-  const releaseNamingScope = !releaseSummary.release && selectedScope === null &&
-    orientationSpine.selectedTaskScope?.kind === 'proposed_feature_set' &&
-    (orientationSpine.selectedTaskScope.deferredNodeIds?.length ?? 0) > 0
-    ? orientationSpine.selectedTaskScope
-    : selectedScope
+  const releaseNamingScope = !releaseSummary.release &&
+    selectedScope?.kind === 'proposed_feature_set' &&
+    selectedScope.source === 'owner_approved'
+    ? selectedScope
+    : null
   const sourceCapabilityCatalog = summarizeSourceCapabilityCatalog(input.sourceCapabilities)
   const recentWork = recentWorkForTasks(tasks)
   const initialDecision = buildProjectDecisionProjection({
@@ -920,12 +921,12 @@ export function buildProjectSummaryProjection(
     message: nextAction.message,
     ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
     ...(ownerReview?.taskIds.length ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
-    executionScope: releaseNamingScope
+    executionScope: selectedScope
       ? {
-          id: releaseNamingScope.id,
-          label: releaseNamingScope.label,
-          kind: releaseNamingScope.kind,
-          source: releaseNamingScope.source,
+          id: selectedScope.id,
+          label: selectedScope.label,
+          kind: selectedScope.kind,
+          source: selectedScope.source,
           taskCount: releaseSummary.counts.total,
           deferredTaskCount: releaseSummary.counts.deferred,
         }
@@ -1010,15 +1011,15 @@ export function buildProjectSummaryProjection(
       ownerBlocked: scopeProjection.counts.ownerBlocked,
       proofBlocked: scopeProjection.counts.proofBlocked,
     },
-    scope: releaseNamingScope
+    scope: selectedScope
       ? {
-          id: releaseNamingScope.id,
-          label: releaseNamingScope.label,
-          kind: releaseNamingScope.kind,
-          source: releaseNamingScope.source,
+          id: selectedScope.id,
+          label: selectedScope.label,
+          kind: selectedScope.kind,
+          source: selectedScope.source,
           included: releaseSummary.counts.total,
           deferred: releaseSummary.counts.deferred,
-          ...(releaseNamingScope.proofStyle ? { proofStyle: releaseNamingScope.proofStyle } : {}),
+          ...(selectedScope.proofStyle ? { proofStyle: selectedScope.proofStyle } : {}),
         }
       : null,
     orientation: input.orientation ?? null,
@@ -1255,32 +1256,13 @@ function pausedWorkProgressState(
 
 function indexedStartReadiness(
   rows: readonly IndexedSummaryScopeRow[],
-  releases: readonly Record<string, unknown>[],
-  selectedReleaseId: string | null,
+  selectedScope: ProjectScope | null,
   tasks: readonly ProjectStateDatabaseTask[],
 ): ProjectScopeProjection['start'] {
   const setupTask = tasks.find(task =>
     ['task-meta-intake', 'task-workspace-import'].includes(task.id) &&
     !['done', 'pending_pr', 'archived', 'cancelled'].includes(String(task.status ?? '')),
   )
-  const selectedRelease = releases.find(release => release.id === selectedReleaseId)
-  const selectedScope = selectedRelease
-    ? {
-        id: selectedReleaseId ?? String(selectedRelease.id),
-        label: String(selectedRelease.label ?? selectedRelease.id),
-        kind: selectedRelease.kind === 'milestone' ? 'milestone' as const : 'release' as const,
-        source: indexedScopeSource(selectedRelease.source),
-        nodeIds: Array.isArray(selectedRelease.nodeIds)
-          ? selectedRelease.nodeIds.filter((value): value is string => typeof value === 'string')
-          : [],
-        deferredNodeIds: Array.isArray(selectedRelease.deferredNodeIds)
-          ? selectedRelease.deferredNodeIds.filter((value): value is string => typeof value === 'string')
-          : [],
-        ...(indexedProofStyle(selectedRelease.proofStyle)
-          ? { proofStyle: indexedProofStyle(selectedRelease.proofStyle) }
-          : {}),
-      }
-    : null
   return summarizeProjectScopeStart(
     rows as unknown as ProjectScopeRow[],
     selectedScope,
@@ -1382,6 +1364,11 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const selectedProofStyle = selectedReleaseProofStyle(releases, selectedReleaseId)
   const taskOverrides = new Map((input.taskOverrides ?? []).map(task => [task.id, task]))
   const tasks = inventory.tasks.map(task => taskOverrides.get(task.id) ?? task)
+  const indexedSelectedScope = selectedProjectScopeForQueue({
+    tasks: tasks.map(indexedTaskForScopeProjection),
+    releases: releases as ProjectRelease[],
+    ...(selectedReleaseId ? { selectedReleaseId } : {}),
+  })
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const rebuiltScopeRows = rebuildScopeRowsFromIndexedState({
     releases,
@@ -1451,7 +1438,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
   // available review identical to the shared decision packet.
   const scopedStart = applyOwnerInputToStartReadiness(
     applyOwnerReviewToStartReadiness(
-      indexedStartReadiness(rows, releases, selectedReleaseId, tasks),
+      indexedStartReadiness(rows, indexedSelectedScope, tasks),
       ownerReview,
     ),
     base.ownerInput,
@@ -1470,7 +1457,9 @@ export function buildProjectSummaryProjectionFromIndexedState(
     ...(start.focusKind ? { focusKind: start.focusKind } : {}),
     ...(start.progressState ? { progressState: start.progressState } : {}),
   }
-  const selectedReleaseRow = releases.find(release => release.id === selectedReleaseId) ?? null
+  const selectedReleaseRow = indexedSelectedScope?.kind === 'release'
+    ? releases.find(release => release.id === indexedSelectedScope.id) ?? null
+    : null
   // The saved summary is the current release read model. Preserve its
   // metadata while refreshing counts from indexed rows so a read cannot
   // rename a release merely because a lower-level scope row carries a
@@ -1481,8 +1470,9 @@ export function buildProjectSummaryProjectionFromIndexedState(
     : selectedReleaseRow
   const indexedRelease = summarizeProjectScopeRelease(indexedScopeRowsAsProjectScopeRows(rows))
   const taskReleaseBlockers = indexedRelease.blockers
-  const canonicalReleaseMembership = selectedReleaseId
-    ? readProjectStateDatabaseReleaseMembership(tasksPath, selectedReleaseId)
+  const selectedReleaseScopeId = selectedRelease ? String(selectedRelease.id) : null
+  const canonicalReleaseMembership = selectedReleaseScopeId
+    ? readProjectStateDatabaseReleaseMembership(tasksPath, selectedReleaseScopeId)
     : null
   const selectedReleaseTaskIds = selectedRelease
     ? releaseMembershipTaskIds(selectedRelease, 'nodeIds')
@@ -1491,9 +1481,9 @@ export function buildProjectSummaryProjectionFromIndexedState(
     ? new Set(canonicalReleaseMembership.included)
     : selectedReleaseTaskIds.length > 0
     ? new Set(selectedReleaseTaskIds)
-    : selectedReleaseId
+    : selectedReleaseScopeId
     ? new Set(rows
-        .filter(row => row.scope === 'included' && tasksById.get(row.taskId)?.releaseIds.includes(selectedReleaseId))
+        .filter(row => row.scope === 'included' && tasksById.get(row.taskId)?.releaseIds.includes(selectedReleaseScopeId))
         .map(row => row.taskId))
     : new Set<string>()
   const releaseMembershipRows = releaseMemberTaskIds.size > 0
@@ -1505,7 +1495,11 @@ export function buildProjectSummaryProjectionFromIndexedState(
     parentTaskId: row.parentTaskId ?? undefined,
   })))
   const releaseIncluded = releaseExecutionRows.length
-  const releaseDeferred = deferredRows.length
+  // Unreleased current work is a new owner-approved boundary, not a view of
+  // every historical task that happens to be deferred. Showing those old
+  // tasks beside the new request makes a one-task next release look like a
+  // six-task obligation.
+  const releaseDeferred = selectedRelease ? deferredRows.length : 0
   const releaseSummary: ProjectSummaryReleaseSummary = {
     scopeMode: selectedRelease ? 'named_release' : 'unreleased',
     release: selectedRelease
@@ -1538,10 +1532,9 @@ export function buildProjectSummaryProjectionFromIndexedState(
     blockers: taskReleaseBlockers,
     updatedAt: generatedAt,
   }
-  const orientationScope = base.orientationSpine?.selectedTaskScope ?? base.orientationSpine?.scope ?? null
-  const releaseNamingScope = !selectedRelease && orientationScope?.kind === 'proposed_feature_set' &&
-    (orientationScope.deferredNodeIds?.length ?? 0) > 0
-    ? orientationScope
+  const releaseNamingScope = !selectedRelease && indexedSelectedScope?.kind === 'proposed_feature_set' &&
+    indexedSelectedScope.source === 'owner_approved'
+    ? indexedSelectedScope
     : null
   const initialDecision = buildProjectDecisionProjection({
     projectRevision: current.projectRevision,
@@ -1585,7 +1578,18 @@ export function buildProjectSummaryProjectionFromIndexedState(
     }
   }
   const rawCounts = summarizeRawTaskCounts(tasks)
-  const baseScope = base.scope ?? (releaseNamingScope
+  const selectedScopeSummary = indexedSelectedScope
+    ? {
+        id: indexedSelectedScope.id,
+        label: indexedSelectedScope.label,
+        kind: indexedSelectedScope.kind,
+        source: indexedSelectedScope.source,
+        included: releaseSummary.counts.total,
+        deferred: releaseSummary.counts.deferred,
+        ...(indexedSelectedScope.proofStyle ? { proofStyle: indexedSelectedScope.proofStyle } : {}),
+      }
+    : null
+  const baseScope = selectedScopeSummary ?? base.scope ?? (releaseNamingScope
     ? {
         id: releaseNamingScope.id,
         label: releaseNamingScope.label,
@@ -1657,6 +1661,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     generatedAt,
     releaseSummary,
     rows,
+    selectedScope: indexedSelectedScope,
     nextAction,
     // The action model may refine a stale execution focus to the task that
     // can actually continue. Keep the persisted orientation pin on that same
@@ -1726,6 +1731,7 @@ function synchronizeIndexedOrientationSpine(
     generatedAt: string
     releaseSummary: ProjectSummaryReleaseSummary
     rows: readonly IndexedSummaryScopeRow[]
+    selectedScope: ProjectScope | null
     nextAction: ProjectSummaryProjection['nextAction']
     focus?: ProjectDecisionTaskRef
     currentProofByTaskId: ReadonlyMap<string, IndexedCurrentProof>
@@ -1738,7 +1744,7 @@ function synchronizeIndexedOrientationSpine(
     ...(blocker.code ? { code: blocker.code } : {}),
     ...(blocker.owningTaskId ? { owningNodeId: `work:${blocker.owningTaskId}` } : {}),
   }))
-  const releaseId = input.releaseSummary.release?.id ?? spine.selectedRelease?.id ?? null
+  const releaseId = input.releaseSummary.release?.id ?? null
   const releasePatch = input.releaseSummary.release
   const patchRelease = (release: (typeof spine.releases)[number]): (typeof spine.releases)[number] => release.id === releaseId
     ? {
@@ -1756,7 +1762,7 @@ function synchronizeIndexedOrientationSpine(
         state: releasePatch?.state as OrientationReleaseState ?? release.state,
       } as (typeof spine.releases)[number]
     : release
-  const selectedRelease = (spine.selectedRelease && spine.selectedRelease.id === releaseId
+  const selectedRelease = (releaseId && spine.selectedRelease && spine.selectedRelease.id === releaseId
     ? {
         ...spine.selectedRelease,
         ...(releasePatch
@@ -1768,13 +1774,18 @@ function synchronizeIndexedOrientationSpine(
           : {}),
         state: releasePatch?.state as OrientationReleaseState ?? spine.selectedRelease.state,
       }
-    : spine.selectedRelease) as typeof spine.selectedRelease
-  const rowById = new Map(input.rows.map(row => [row.taskId, row]))
-  const scopeRows = spine.scopeRows.map(row => {
-    const current = rowById.get(row.taskId)
-    if (!current) return row
+    : null) as typeof spine.selectedRelease
+  const scopeRows = input.rows.map(current => {
+    const prior = spine.scopeRows.find(row => row.taskId === current.taskId)
     return {
-      ...row,
+      ...(prior ?? {
+        taskId: current.taskId,
+        nodeId: `work:${current.taskId}`,
+        title: current.title,
+        eligibilityReason: current.eligibilityReason,
+        hierarchyRole: current.hierarchyRole,
+        sourceRefs: [...current.sourceRefs],
+      }),
       scope: current.scope,
       status: current.status,
       handoffState: current.handoffState,
@@ -1788,12 +1799,12 @@ function synchronizeIndexedOrientationSpine(
     }
   })
   const counts = input.releaseSummary.counts
-  const label = input.releaseSummary.release?.label ?? spine.summary.selectedScopeLabel ?? 'Current scope'
-  const selectedScope = (spine.selectedTaskScope ?? spine.scope) as ProjectScope | null
+  const label = input.selectedScope?.label ?? input.releaseSummary.release?.label ?? 'Current scope'
+  const selectedScope = input.selectedScope
   const outsideWork = summarizeProjectScopeOutsideWork(input.rows as unknown as ProjectScopeRow[], selectedScope)
   const progress = {
     ...spine.summary.progress,
-    scopeId: releaseId,
+    scopeId: selectedScope?.id ?? releaseId ?? 'current-work',
     total: counts.total + counts.deferred,
     done: counts.done,
     ready: counts.ready,
@@ -1864,11 +1875,13 @@ function synchronizeIndexedOrientationSpine(
     ...spine,
     updatedAt: input.generatedAt,
     selectedRelease,
+    selectedTaskScope: selectedScope,
+    scope: selectedScope,
     releases: spine.releases.map(patchRelease),
     summary: {
       ...spine.summary,
       headline,
-      selectedReleaseLabel: input.releaseSummary.release?.label ?? spine.summary.selectedReleaseLabel,
+      selectedReleaseLabel: input.releaseSummary.release?.label ?? null,
       selectedScopeLabel: label,
       includedCount: counts.total,
       includedWorkCount: counts.total,
@@ -2972,7 +2985,7 @@ function buildReleaseSummary(input: {
   // progress denominator is the same collapsed execution list used by Work.
   const included = executionRows.length
   const done = executionRows.filter(row => row.handoffState === 'done').length
-  const deferred = input.scopeProjection.counts.deferred
+  const deferred = release ? input.scopeProjection.counts.deferred : 0
   const releaseMetadata = release
     ? {
         id: release.id,
@@ -2983,7 +2996,7 @@ function buildReleaseSummary(input: {
       }
     : null
   return {
-    scopeMode: input.scopeProjection.selectedScope ? 'named_release' : 'unreleased',
+    scopeMode: release ? 'named_release' : 'unreleased',
     release: releaseMetadata,
     state: input.scopeProjection.release.state,
     counts: {

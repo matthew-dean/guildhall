@@ -373,19 +373,39 @@ function releaseIncludesTask(release: ProjectRelease, task: Task): boolean {
 export function selectedProjectScopeForQueue(
   queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>,
 ): ProjectScope | null {
-  // Task membership is evidence for an explicit intake/migration writer, not
-  // permission for a read to manufacture a release container. Projects with
-  // no named release intentionally use the unscoped current-work view.
   const releases = queue.releases ?? []
   if (releases.length === 0) return null
-  const selectedReleaseId = queue.selectedReleaseId
-  const release =
-    releases.find(candidate => candidate.id === selectedReleaseId) ??
+  const explicit = releases.find(candidate => candidate.id === queue.selectedReleaseId)
+  const currentRelease =
+    (explicit && explicit.state !== 'shipped' && explicit.state !== 'deferred' ? explicit : undefined) ??
     releases.find(candidate => candidate.state === 'active') ??
     releases.find(candidate => candidate.state === 'planned') ??
-    releases[0]
-  if (!release) return null
-  return releaseToProjectScope(release, queue.tasks)
+    releases.find(candidate => candidate.state === 'ready')
+  if (currentRelease) return releaseToProjectScope(currentRelease, queue.tasks)
+
+  // A request created after the last release shipped must immediately become
+  // current work. Keeping the old shipped release selected hides the newly
+  // created task and leaves every owner route claiming there is nothing to do.
+  const ownerStartedTasks = queue.tasks.filter(task =>
+    !['shelved', 'archived', 'cancelled'].includes(task.status) &&
+    (task.releaseIds?.length ?? 0) === 0 &&
+    !releases.some(release => releaseIncludesTask(release, task)),
+  )
+  if (ownerStartedTasks.length > 0) {
+    return {
+      id: 'current-work',
+      label: 'Current work',
+      kind: 'proposed_feature_set',
+      source: 'owner_approved',
+      nodeIds: ownerStartedTasks.map(task => taskScopeNodeId(task.id)),
+      deferredNodeIds: [],
+    }
+  }
+
+  // With no current work, retaining the most recent historical scope makes
+  // shipped-release records readable without inventing a new release.
+  const historicalRelease = explicit ?? releases[0]
+  return historicalRelease ? releaseToProjectScope(historicalRelease, queue.tasks) : null
 }
 
 export function releaseToProjectScope(release: ProjectRelease, tasks: readonly Task[]): ProjectScope {

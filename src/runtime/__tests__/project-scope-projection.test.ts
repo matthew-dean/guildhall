@@ -164,6 +164,43 @@ describe('buildProjectScopeProjection', () => {
     expect(selected).toBeNull()
   })
 
+  it('makes owner-started work current after the selected release shipped', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: '0.0.1',
+      releases: [{
+        id: '0.0.1',
+        label: '0.0.1',
+        kind: 'release',
+        state: 'shipped',
+        source: 'owner_approved',
+        nodeIds: ['work:task-shipped'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        task({ id: 'task-shipped', title: 'Shipped work', status: 'done', releaseIds: ['0.0.1'] }),
+        task({ id: 'task-next', title: 'Next release work', status: 'exploring' }),
+      ],
+    })
+
+    expect(projection.selectedScope).toMatchObject({
+      id: 'current-work',
+      kind: 'proposed_feature_set',
+      source: 'owner_approved',
+      nodeIds: ['work:task-next'],
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-next')).toMatchObject({
+      scope: 'included',
+      eligibilityReason: 'included',
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-shipped')).toMatchObject({
+      scope: 'deferred',
+      eligibilityReason: 'deferred',
+    })
+  })
+
   it('does not widen materialized release membership from stale task release ids', () => {
     const projection = buildProjectScopeProjection({
       version: 1,

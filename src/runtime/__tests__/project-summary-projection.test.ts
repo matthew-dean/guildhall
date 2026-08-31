@@ -155,6 +155,78 @@ describe('project-summary-projection', () => {
     expect(projection.actionModel).toMatchObject({ primaryAction: null })
   })
 
+  it('keeps an owner-started next-release task current in rich and indexed summaries', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-next-release-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('task-shipped', 'done', { releaseIds: ['0.0.1'] }),
+      task('task-next', 'exploring', { description: 'Shape the next bounded release.' }),
+    ], {
+      selectedReleaseId: '0.0.1',
+      releases: [{
+        id: '0.0.1',
+        label: '0.0.1',
+        kind: 'release',
+        state: 'shipped',
+        source: 'owner_approved',
+        nodeIds: ['work:task-shipped'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'next-release', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    const full = buildProjectSummaryProjection({
+      projectId: 'next-release',
+      projectRoot: temp,
+      queue: taskQueue,
+      generatedAt: now,
+    })
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, { summary: full })
+    const indexed = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'next-release',
+      generatedAt: now,
+    })
+
+    expect(full.scope).toMatchObject({
+      id: 'current-work',
+      kind: 'proposed_feature_set',
+      source: 'owner_approved',
+      included: 1,
+    })
+    expect(indexed?.scope).toMatchObject({
+      id: 'current-work',
+      kind: 'proposed_feature_set',
+      source: 'owner_approved',
+      included: 1,
+      deferred: 0,
+    })
+    expect(full.releaseSummary).toMatchObject({
+      scopeMode: 'unreleased',
+      release: null,
+      counts: { total: 1, deferred: 0 },
+    })
+    expect(indexed?.releaseSummary).toMatchObject({
+      scopeMode: 'unreleased',
+      release: null,
+      counts: { total: 1, deferred: 0 },
+    })
+    expect(indexed?.orientationSpine?.scope).toMatchObject({
+      id: 'current-work',
+      kind: 'proposed_feature_set',
+      nodeIds: ['work:task-next'],
+    })
+    expect(indexed?.orientationSpine?.scopeRows.find(row => row.taskId === 'task-next')).toMatchObject({
+      scope: 'included',
+      handoffState: 'not_shaped',
+    })
+    for (const projection of [full, indexed]) {
+      expect(projection?.actionModel?.primaryAction).toMatchObject({ taskId: 'task-next', code: 'ready_work' })
+      expect(projection?.decision.primaryAction).toEqual({ kind: 'open_work', targetId: 'task-next', reasonCode: 'ready_work' })
+    }
+  })
+
   it('hydrates a legacy decision from the selected release lifecycle before action reconciliation', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',

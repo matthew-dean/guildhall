@@ -8040,14 +8040,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const baseOrientationSpine = compactScope
       ? {
           ...initialOrientationSpine,
-          selectedRelease: initialOrientationSpine.selectedRelease
+          selectedRelease: compactScope.kind === 'release' && initialOrientationSpine.selectedRelease
             ? {
                 ...initialOrientationSpine.selectedRelease,
                 nodeIds: [...compactScope.nodeIds],
                 deferredNodeIds: [...compactScope.deferredNodeIds],
               }
-            : initialOrientationSpine.selectedRelease,
-          releases: (Array.isArray(initialOrientationSpine.releases) ? initialOrientationSpine.releases : []).map(release => release.id === compactScope.id
+            : null,
+          releases: (Array.isArray(initialOrientationSpine.releases) ? initialOrientationSpine.releases : []).map(release => compactScope.kind === 'release' && release.id === compactScope.id
             ? {
                 ...release,
                 nodeIds: [...compactScope.nodeIds],
