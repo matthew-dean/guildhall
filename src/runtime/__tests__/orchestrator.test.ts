@@ -12972,6 +12972,52 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('keeps a clean landed review handoff in review', async () => {
+    const worktreePath = path.join(tmpDir, 'landed-review-handoff')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const task = mkTask({
+      id: 'landed-review-surface',
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      worktreePath,
+      branchName: 'guildhall/task-landed-review-surface',
+      baseBranch: 'main',
+      spec: VALID_SPEC,
+      mergeRecord: {
+        fromBranch: 'guildhall/task-landed-review-surface',
+        toBranch: 'main',
+        strategy: 'cherry_pick_local',
+        result: 'merged',
+        commitSha: 'landed-commit',
+        mergedAt: '2026-08-31T19:11:22.483Z',
+      },
+      notes: [{
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        ...withMachineSelfCritique(
+          '**Self-critique:**\n\nThe implementation is ready for review.',
+          { changedFiles: ['packages/extension/package.json'] },
+        ),
+        timestamp: '2026-08-31T19:11:22.483Z',
+      }],
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await (orch as unknown as {
+      recoverStaleReviewHandoff(task: Task): Promise<unknown>
+    }).recoverStaleReviewHandoff(task)
+
+    expect(out).toBeNull()
+    const saved = (await readQueue()).tasks.find(candidate => candidate.id === task.id)
+    expect(saved?.status).toBe('review')
+    expect(saved?.assignedTo).toBe('reviewer-agent')
+  })
+
   it('reruns every automated command after a task enters a new lifecycle', async () => {
     const projectPath = tmpDir
     await fs.writeFile(path.join(projectPath, 'package.json'), JSON.stringify({

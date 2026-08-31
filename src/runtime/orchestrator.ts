@@ -379,7 +379,7 @@ function taskHasConcreteProjectProofCommand(task: Task): boolean {
 
 function landedTaskWorkRequiresProjectCheckoutProof(task: Task): boolean {
   if (!isProofSetupTask(task)) return false
-  if (!['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')) return false
+  if (!taskHasDurableLocalLanding(task)) return false
   const commands = task.acceptanceCriteria
     .map((criterion) => typeof criterion.command === 'string' ? comparableCommand(criterion.command) : null)
     .filter((command): command is string => Boolean(command))
@@ -400,8 +400,12 @@ function proofRecoveryNeedsFreshWorktree(task: Task): boolean {
     runtime?: { proofRecovery?: { freshWorktree?: unknown } }
   }).runtime?.proofRecovery
   if (recovery?.freshWorktree === true) return true
-  if (!['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')) return false
+  if (!taskHasDurableLocalLanding(task)) return false
   return task.gateResults.some(gate => gate.executionRoot === 'project_checkout' && gate.passed === false)
+}
+
+function taskHasDurableLocalLanding(task: Task): boolean {
+  return ['merged', 'pushed', 'push_failed_degraded'].includes(task.mergeRecord?.result ?? '')
 }
 
 function currentVerificationLifecycleReopenedAt(task: Task): number {
@@ -9727,7 +9731,7 @@ export class Orchestrator {
   private async recoverStaleReviewHandoff(task: Task): Promise<TickOutcome | null> {
     if (task.status !== 'review' || !this.hasReviewProofPacket(task)) return null
 
-    const hasCommittedTaskWork = await this.taskWorktreeHasCommittedProgress(task)
+    const hasCommittedTaskWork = await this.hasReviewableTaskImplementationSurface(task)
     const worktreePath = task.worktreePath?.trim()
     const hasTaskWorktreeChanges =
       Boolean(worktreePath) &&
@@ -9739,7 +9743,7 @@ export class Orchestrator {
       const current = queue.tasks.find((candidate) => candidate.id === task.id)
       if (!current || current.status !== 'review' || !this.hasReviewProofPacket(current)) return null
 
-      const currentHasCommittedWork = await this.taskWorktreeHasCommittedProgress(current)
+      const currentHasCommittedWork = await this.hasReviewableTaskImplementationSurface(current)
       const currentWorktreePath = current.worktreePath?.trim()
       const currentHasWorktreeChanges =
         Boolean(currentWorktreePath) &&
@@ -13674,6 +13678,14 @@ export class Orchestrator {
     } catch {
       return false
     }
+  }
+
+  private async hasReviewableTaskImplementationSurface(task: Task): Promise<boolean> {
+    // Once Guildhall has durably landed the task branch, the project checkout
+    // is the review target. A clean disposable worktree is expected after that
+    // landing and must not be mistaken for lost implementation.
+    if (taskHasDurableLocalLanding(task) && !proofRecoveryNeedsFreshWorktree(task)) return true
+    return this.taskWorktreeHasCommittedProgress(task)
   }
 
   private checkpointTouchedFilesFromMetadata(

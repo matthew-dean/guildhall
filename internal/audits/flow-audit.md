@@ -64552,6 +64552,59 @@ No persisted-schema change. Existing worktree metadata, branch/base metadata,
 task evidence, and lifecycle statuses are sufficient; this repairs their
 admission ordering.
 
+### Finding: A landed review must not be reopened as worker work
+
+- [x] User job: when the owner chooses `Resume review` for a task whose work
+  Guildhall has already recorded as landed, the scheduler must dispatch review
+  or remain honestly waiting for review. It must never reinterpret the clean
+  post-merge worktree as missing implementation and send the task back through
+  a worker pass.
+- Live finding, 2026-08-31: T-minus-T `TMI-006` had a durable
+  `mergeRecord.result: merged` for commit `c42a34d` and was correctly shown as
+  `REVIEW READY` with `Resume review`. Starting that exact action invoked
+  stale-review recovery instead: the recovery code only accepted a dirty
+  worktree or a branch commit ahead of `main`, so the clean merged worktree
+  looked empty and transitioned `review -> in_progress` under
+  `coordinator-remediation`. The resulting owner view changed to `Resume
+  work`, even though implementation was already in the landing branch.
+
+#### Contract Touch Decision
+
+Work id: `landed-review-durability-2026-08-31`. Touched contract: the shared
+review implementation-surface predicate used by scheduler recovery and
+review-handoff restoration. A successful persisted landing (`merged`,
+`pushed`, or degraded push after local landing) is a reviewable implementation
+surface unless typed proof recovery explicitly requires a fresh worktree.
+Considered but not touched: task status enum, merge-record schema, review
+verdict schema, provider prose, task acceptance criteria, owner-action copy,
+and release selection. Required proof: a clean merged task remains in review
+and reaches the reviewer; a clean unmerged claimed handoff still returns to
+the worker. Apply/revert: applying preserves a truthful review handoff after
+landing; reverting recreates the false worker remediation loop.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The existing merge record is already authoritative
+landing evidence and is used elsewhere for completion and checkout-gate
+routing. This repair makes review recovery consume that same fact.
+
+#### Evidence
+
+- Focused stale-review recovery regressions pass: a clean unmerged claimed
+  handoff returns to `in_progress`, while a clean task with
+  `mergeRecord.result: merged` remains in `review` and retains reviewer
+  ownership.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence` pass.
+- Installed replay, 2026-08-31: after build/install/restart,
+  `/api/stale-server` reported `stale:false`. A bounded T-minus-T run first
+  repaired the previous false worker state through
+  `in_progress -> review via landing-reconciliation`. The next bounded review
+  run kept `TMI-006` in review; its reviewer returned an invalid structured
+  result, so Guildhall recorded a typed review failure and showed one honest
+  `Capture proof` action rather than reopening implementation. At 1280px the
+  focused Work route showed `Proof needs recovery`, `TMI-006`, `PROOF NEEDED`,
+  its concrete reason, and `Capture proof`; `scrollWidth === clientWidth`.
+
 #### Remaining Regression Work
 
 - [ ] `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts` is currently
