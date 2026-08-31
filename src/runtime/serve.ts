@@ -17653,10 +17653,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const promotedState: { error?: { message: string; status: 400 | 409 }; noop?: boolean } = {}
       {
         const now = new Date().toISOString()
+        const clearsRuntimeAssignee =
+          (action === 'hold' || action === 'pause' || action === 'resume-hold') &&
+          typeof (await readProjectTaskCurrentStateAtBoundary(project.path, id)).task?.assignedTo === 'string'
         let promotedNote: Record<string, unknown> | undefined
         const promoted = writePromotedTaskDetailMutation(tasksPath, id, {
           projectId: project.id,
           projectRoot: project.path,
+          ...(clearsRuntimeAssignee
+            ? {
+                mutateRuntime: runtime => ({ ...runtime, assignedTo: null, updatedAt: now }),
+              }
+            : {}),
           mutate: task => {
             if (action === 'hold' || action === 'pause') {
               const run = supervisor.get(project.id)
@@ -17679,6 +17687,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 heldBy: 'human',
               }
               task.status = 'blocked'
+              delete task.assignedTo
               task.blockReason = holdReason ? `On hold: ${holdReason}` : 'On hold by human.'
               promotedNote = {
                 agentId: 'system:human',
@@ -17693,6 +17702,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 return null
               }
               task.status = hold.previousStatus ?? 'ready'
+              delete task.assignedTo
               delete task.hold
               delete task.blockReason
               promotedNote = {
@@ -17789,6 +17799,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           heldBy: 'human',
         }
         task.status = 'blocked'
+        delete task.assignedTo
         task.blockReason = reason ? `On hold: ${reason}` : 'On hold by human.'
         notes.push({
           agentId: 'system:human',
@@ -17802,6 +17813,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json({ error: 'task is not on hold' }, 400)
         }
         task.status = hold.previousStatus ?? 'ready'
+        delete task.assignedTo
         delete task.hold
         delete task.blockReason
         notes.push({ agentId: 'system:human', role: 'human', content: 'Task returned from hold.', timestamp: now })
@@ -17830,6 +17842,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       task.updatedAt = now
       queue.lastUpdated = now
       writeProjectTaskQueueWithSummary(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
+      if (action === 'hold' || action === 'pause' || action === 'resume-hold') {
+        await upsertTaskRuntimeState(project.path, id, {
+          assignedTo: null,
+          updatedAt: now,
+        })
+        writeProjectSummaryProjectionFromIndexedState(tasksPath, { projectId: project.id })
+      }
       return c.json({ ok: true, status: task.status })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

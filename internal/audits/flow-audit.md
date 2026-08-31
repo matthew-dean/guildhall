@@ -64984,3 +64984,27 @@ proof evidence through their current authoritative boundaries.
   assigned to `worker-agent`, despite no service or worker remaining. This is
   a lifecycle-summary defect, not an invitation for a stale worker recovery to
   start silently.
+
+#### Contract Touch Decision
+
+Work id: `pause-clears-stale-assignment-2026-08-31`. Touched contract: the
+shared task hold/pause transition and its runtime ownership overlay. Pausing
+or resuming a held task clears any prior worker assignment, so the next
+explicit Start chooses a current lane rather than inheriting a dead worker.
+Considered but not touched: supervisor stop persistence, proof state, task
+status names, and action ranking. Required proof: the task and runtime overlay
+both have no assignee after pause and after resume. Apply/revert: applying
+makes the displayed paused state truthful; reverting restores the false live
+worker claim.
+
+#### Schema Migration Decision
+
+No persisted schema change. Existing nullable task and runtime assignee fields
+are cleared through their current authoritative write boundary.
+
+#### Evidence
+
+- Installed T-minus-T proof, 2026-08-31: pausing `task-006` after its stopped
+  worker run produced `status: blocked`, `assignedTo: null`,
+  `runtimeAssignedTo: null`, and a current decision projection. The task is
+  now explicitly paused rather than falsely claiming a worker is active.
