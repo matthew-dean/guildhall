@@ -865,6 +865,11 @@ export function buildProjectSummaryProjection(
         }
       : {}),
   }))
+  const releaseNamingScope = !releaseSummary.release && selectedScope === null &&
+    orientationSpine.selectedTaskScope?.kind === 'proposed_feature_set' &&
+    (orientationSpine.selectedTaskScope.deferredNodeIds?.length ?? 0) > 0
+    ? orientationSpine.selectedTaskScope
+    : selectedScope
   const sourceCapabilityCatalog = summarizeSourceCapabilityCatalog(input.sourceCapabilities)
   const recentWork = recentWorkForTasks(tasks)
   const initialDecision = buildProjectDecisionProjection({
@@ -873,6 +878,7 @@ export function buildProjectSummaryProjection(
     release: {
       ...releaseSummary,
       ...(releaseSummary.release?.state ? { lifecycleState: releaseSummary.release.state } : {}),
+      hasReleaseNamingScope: Boolean(releaseNamingScope && !releaseSummary.release),
     },
     ownerInput: input.ownerInput,
     ownerReview,
@@ -914,12 +920,12 @@ export function buildProjectSummaryProjection(
     message: nextAction.message,
     ...(typeof decisionStart.count === 'number' ? { count: decisionStart.count } : {}),
     ...(ownerReview?.taskIds.length ? { reviewTaskIds: [...ownerReview.taskIds] } : {}),
-    executionScope: selectedScope
+    executionScope: releaseNamingScope
       ? {
-          id: selectedScope.id,
-          label: selectedScope.label,
-          kind: selectedScope.kind,
-          source: selectedScope.source,
+          id: releaseNamingScope.id,
+          label: releaseNamingScope.label,
+          kind: releaseNamingScope.kind,
+          source: releaseNamingScope.source,
           taskCount: releaseSummary.counts.total,
           deferredTaskCount: releaseSummary.counts.deferred,
         }
@@ -1004,15 +1010,15 @@ export function buildProjectSummaryProjection(
       ownerBlocked: scopeProjection.counts.ownerBlocked,
       proofBlocked: scopeProjection.counts.proofBlocked,
     },
-    scope: selectedScope
+    scope: releaseNamingScope
       ? {
-          id: selectedScope.id,
-          label: selectedScope.label,
-          kind: selectedScope.kind,
-          source: selectedScope.source,
+          id: releaseNamingScope.id,
+          label: releaseNamingScope.label,
+          kind: releaseNamingScope.kind,
+          source: releaseNamingScope.source,
           included: releaseSummary.counts.total,
           deferred: releaseSummary.counts.deferred,
-          ...(selectedScope.proofStyle ? { proofStyle: selectedScope.proofStyle } : {}),
+          ...(releaseNamingScope.proofStyle ? { proofStyle: releaseNamingScope.proofStyle } : {}),
         }
       : null,
     orientation: input.orientation ?? null,
@@ -1532,6 +1538,11 @@ export function buildProjectSummaryProjectionFromIndexedState(
     blockers: taskReleaseBlockers,
     updatedAt: generatedAt,
   }
+  const orientationScope = base.orientationSpine?.selectedTaskScope ?? base.orientationSpine?.scope ?? null
+  const releaseNamingScope = !selectedRelease && orientationScope?.kind === 'proposed_feature_set' &&
+    (orientationScope.deferredNodeIds?.length ?? 0) > 0
+    ? orientationScope
+    : null
   const initialDecision = buildProjectDecisionProjection({
     projectRevision: current.projectRevision,
     queueRevision: current.queueRevision,
@@ -1540,6 +1551,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     release: {
       ...releaseSummary,
       ...(releaseSummary.release?.state ? { lifecycleState: releaseSummary.release.state } : {}),
+      hasReleaseNamingScope: Boolean(releaseNamingScope),
     },
     ownerInput: base.ownerInput,
     ownerReview,
@@ -1573,6 +1585,36 @@ export function buildProjectSummaryProjectionFromIndexedState(
     }
   }
   const rawCounts = summarizeRawTaskCounts(tasks)
+  const baseScope = base.scope ?? (releaseNamingScope
+    ? {
+        id: releaseNamingScope.id,
+        label: releaseNamingScope.label,
+        kind: releaseNamingScope.kind,
+        source: releaseNamingScope.source,
+        included: releaseSummary.counts.total,
+        deferred: releaseSummary.counts.deferred,
+        ...(releaseNamingScope.proofStyle ? { proofStyle: releaseNamingScope.proofStyle } : {}),
+      }
+    : null)
+  const actionScope = selectedRelease
+    ? {
+        id: String(selectedRelease.id),
+        label: String(selectedRelease.label ?? selectedRelease.id),
+        kind: String(selectedRelease.kind ?? 'release'),
+        source: typeof selectedRelease.source === 'string' ? selectedRelease.source : undefined,
+        taskCount: releaseSummary.counts.total,
+        deferredTaskCount: releaseSummary.counts.deferred,
+      }
+    : baseScope
+      ? {
+          id: baseScope.id,
+          label: baseScope.label,
+          kind: baseScope.kind,
+          source: baseScope.source,
+          taskCount: baseScope.included,
+          deferredTaskCount: baseScope.deferred,
+        }
+      : undefined
   const actionModel = buildProjectActionModel({
     startReadiness: {
       ...decisionStart,
@@ -1583,16 +1625,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       ...(nextAction.focusKind ? { focusKind: nextAction.focusKind } : {}),
       ...(nextAction.progressState ? { progressState: nextAction.progressState } : {}),
       ...(nextAction.count ? { count: nextAction.count } : {}),
-      executionScope: selectedRelease
-        ? {
-            id: String(selectedRelease.id),
-            label: String(selectedRelease.label ?? selectedRelease.id),
-            kind: String(selectedRelease.kind ?? 'release'),
-            source: typeof selectedRelease.source === 'string' ? selectedRelease.source : undefined,
-            taskCount: releaseSummary.counts.total,
-            deferredTaskCount: releaseSummary.counts.deferred,
-          }
-        : undefined,
+      executionScope: actionScope,
     },
     ownerInput: base.ownerInput && base.ownerInput.openCount > 0
       ? {
@@ -1619,7 +1652,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
           ? { proofStyle: indexedProofStyle(selectedRelease.proofStyle) }
           : {}),
       }
-    : null
+    : baseScope
   const currentOrientationSpine = synchronizeIndexedOrientationSpine(base.orientationSpine, {
     generatedAt,
     releaseSummary,

@@ -711,13 +711,14 @@ export interface ProjectDecisionProjection {
     state: 'ready' | 'not_ready' | 'unavailable' | 'conflicted'
     lifecycleState?: string
     releaseId?: string
+    hasReleaseNamingScope?: boolean
     blockerTaskIds: string[]
     proofBlockerTaskIds: string[]
   }
   ownerInput: { state: 'none' | 'required'; requestId?: string }
   ownerReview: { state: 'none' | 'required'; taskId?: string; taskIds?: string[] }
   primaryAction: {
-    kind: 'open_work' | 'resume' | 'review_proof' | 'answer_owner_input' | 'review_spec' | 'review_release' | 'resolve_conflict' | 'none'
+    kind: 'open_work' | 'resume' | 'review_proof' | 'answer_owner_input' | 'review_spec' | 'review_release' | 'name_release' | 'resolve_conflict' | 'none'
     targetId?: string
     reasonCode: string
   }
@@ -733,6 +734,7 @@ export interface ProjectDecisionProjectionInput {
     scopeMode: 'named_release' | 'unreleased' | 'unavailable'
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
     release: { id: string } | null
+    hasReleaseNamingScope?: boolean
     lifecycleState?: string
     blockers: Array<{ owningTaskId?: string; code?: string }>
   }
@@ -948,6 +950,8 @@ function primaryActionForDecision(input: {
             ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
             : execution.state === 'complete' && release.state === 'ready' && Boolean(release.releaseId) && release.lifecycleState !== 'shipped'
               ? { kind: 'review_release' as const, targetId: release.releaseId, reasonCode: 'release_ready' }
+              : execution.state === 'complete' && release.state === 'ready' && !release.releaseId && release.hasReleaseNamingScope === true
+                ? { kind: 'name_release' as const, reasonCode: 'release_setup' }
               : release.proofBlockerTaskIds.length > 0
                 ? { kind: 'review_proof' as const, targetId: release.proofBlockerTaskIds[0], reasonCode: 'proof_evidence_missing' }
                 : { kind: 'none' as const, reasonCode: execution.code }
@@ -1139,6 +1143,7 @@ export function buildProjectDecisionProjection(input: ProjectDecisionProjectionI
           : 'not_ready' as const,
     ...(input.release.release?.id ? { releaseId: input.release.release.id } : {}),
     ...(input.release.lifecycleState ? { lifecycleState: input.release.lifecycleState } : {}),
+    ...(input.release.hasReleaseNamingScope ? { hasReleaseNamingScope: true } : {}),
     blockerTaskIds,
     proofBlockerTaskIds,
   }

@@ -1069,6 +1069,47 @@ describe('buildProjectActionModel', () => {
       runStatus: 'stopped',
     })
     expect(unscopedTerminal.primaryAction).toBeNull()
+
+    const unnamedScopeTerminal = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Current task scope has no runnable work remaining.',
+        executionScope: {
+          id: 'current-work',
+          label: 'Current task scope',
+          kind: 'proposed_feature_set',
+        },
+      },
+      tasks: [{ id: 'task-done', title: 'Done task', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(unnamedScopeTerminal.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Name this release',
+      buttonLabel: 'Name release',
+      href: '/release',
+      code: 'release_setup',
+      ownerHeading: 'Name this release',
+    })
+
+    const unrelatedTerminalScope = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'The selected task is complete.',
+        executionScope: {
+          id: 'task-done',
+          label: 'Done task',
+          kind: 'task',
+        },
+      },
+      tasks: [{ id: 'task-done', title: 'Done task', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(unrelatedTerminalScope.primaryAction).toBeNull()
   })
 
   it('does not surface a decomposed containing parent as the primary task action', () => {

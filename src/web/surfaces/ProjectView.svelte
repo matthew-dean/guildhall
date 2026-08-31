@@ -1980,7 +1980,7 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
               </div>
             {:then module}
               {@const ReleaseTab = module.default}
-              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} projectDetail={detail} onRunTask={(taskId) => start('one_task', taskId)} onRunRepositoryAction={runRepositoryAction} {busy} />
+            <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} projectSummary={detail?.releaseSummary} projectDetail={detail} onRunTask={(taskId) => start('one_task', taskId)} onRunRepositoryAction={runRepositoryAction} onReleaseCreated={() => project.refresh(activeProjectId, 'release')} {busy} />
             {/await}
         {:else if currentView === 'settings'}
           {#await loadSettingsTab()}

@@ -10,6 +10,7 @@
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import Button from '../../lib/Button.svelte'
+  import Modal from '../../lib/Modal.svelte'
   import { taskDisplayKey } from '../../lib/identifier-labels.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
@@ -44,6 +45,7 @@
       kind?: string
       label?: string
       description?: string | null
+      nodeIds?: string[]
     }
     openEscalations: ReleaseItem[]
     incompleteBriefs?: ReleaseItem[]
@@ -104,9 +106,10 @@
     projectDetail?: ProjectDetail | null
     onRunTask?: (taskId: string) => void | Promise<void>
     onRunRepositoryAction?: (taskId: string, operation: Extract<ProjectActionOperation, 'push_branch' | 'open_pull_request'>) => void | Promise<void>
+    onReleaseCreated?: () => void | Promise<void>
     busy?: boolean
   }
-  let { subView = null, activeProjectId = null, projectSummary = null, projectDetail = null, onRunTask, onRunRepositoryAction, busy = false }: Props = $props()
+  let { subView = null, activeProjectId = null, projectSummary = null, projectDetail = null, onRunTask, onRunRepositoryAction, onReleaseCreated, busy = false }: Props = $props()
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
@@ -115,6 +118,10 @@
   let closeBusy = $state(false)
   let closeError = $state<string | null>(null)
   let ownerActionBusy = $state(false)
+  let createReleaseOpen = $state(false)
+  let createReleaseBusy = $state(false)
+  let createReleaseError = $state<string | null>(null)
+  let releaseName = $state('')
 
   $effect(() => {
     let disposed = false
@@ -204,6 +211,11 @@
   }
 
   async function openOwnerAction() {
+    if (ownerAction?.code === 'release_setup') {
+      createReleaseError = null
+      createReleaseOpen = true
+      return
+    }
     if (
       (ownerAction?.operation === 'push_branch' || ownerAction?.operation === 'open_pull_request') &&
       ownerAction.taskId &&
@@ -229,6 +241,47 @@
       return
     }
     if (ownerAction?.href) nav(projectActionHref(ownerAction.href, activeProjectId))
+  }
+
+  function releaseIdForName(value: string): string {
+    return value
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+  }
+
+  async function createRelease() {
+    const label = releaseName.trim()
+    const releaseId = releaseIdForName(label)
+    const taskIds = (data?.scope?.nodeIds ?? [])
+      .filter(nodeId => nodeId.startsWith('work:'))
+      .map(nodeId => nodeId.slice('work:'.length))
+    if (!label || !releaseId || taskIds.length === 0 || createReleaseBusy) {
+      createReleaseError = 'Enter a release name to continue.'
+      return
+    }
+    createReleaseBusy = true
+    createReleaseError = null
+    try {
+      const response = await projectFetch('/api/project/release/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ releaseId, label, taskIds, proofStyle: 'mixed' }),
+      }, activeProjectId)
+      const payload = await response.json().catch(() => ({})) as Record<string, unknown>
+      if (!response.ok) throw new Error(typeof payload.error === 'string' ? payload.error : 'Could not create this release.')
+      const summaryResponse = await projectFetch('/api/project/release-readiness/summary', { cache: 'no-store' }, activeProjectId)
+      const summary = await summaryResponse.json().catch(() => null) as Partial<ReleasePayload> | null
+      if (summary && !summary.error) data = { ...data!, ...summary }
+      createReleaseOpen = false
+      await onReleaseCreated?.()
+    } catch (err) {
+      createReleaseError = err instanceof Error ? err.message : String(err)
+    } finally {
+      createReleaseBusy = false
+    }
   }
 
   function openGitDecision(taskId: string) {
@@ -604,8 +657,29 @@
         {/if}
       </FrameCard>
     {/if}
-  </div>
+</div>
 {/if}
+
+<Modal
+  open={createReleaseOpen}
+  title="Name release"
+  size="sm"
+  closeDisabled={createReleaseBusy}
+  onClose={() => { createReleaseOpen = false }}
+>
+  <form class="release-name-form" onsubmit={(event) => { event.preventDefault(); void createRelease() }}>
+    <label for="release-name">Release name</label>
+    <input id="release-name" bind:value={releaseName} placeholder="0.0.1" autocomplete="off" disabled={createReleaseBusy} />
+    <p>{(data?.scope?.nodeIds ?? []).filter(nodeId => nodeId.startsWith('work:')).length} completed tasks will be included.</p>
+    {#if createReleaseError}<p class="release-name-error" role="alert">{createReleaseError}</p>{/if}
+  </form>
+  {#snippet footer()}
+    <Button variant="secondary" disabled={createReleaseBusy} onclick={() => { createReleaseOpen = false }}>Cancel</Button>
+    <Button variant="primary" disabled={createReleaseBusy || !releaseName.trim()} onclick={() => void createRelease()}>
+      {createReleaseBusy ? 'Creating…' : 'Create release'}
+    </Button>
+  {/snippet}
+</Modal>
 
 <style>
   .release-shell {
@@ -757,6 +831,39 @@
 
   .notice-link:hover {
     background: color-mix(in srgb, var(--gh-color-feedback-warn) 14%, transparent);
+  }
+
+  .release-name-form {
+    display: grid;
+    gap: var(--gh-space-2);
+  }
+
+  .release-name-form label {
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    font-weight: var(--gh-type-weight-strong);
+  }
+
+  .release-name-form input {
+    min-inline-size: 0;
+    min-block-size: var(--gh-control-height-default);
+    padding: var(--gh-control-padding-block) var(--gh-control-padding-inline);
+    border: 1px solid var(--gh-color-border-strong);
+    border-radius: var(--gh-radius-control);
+    background: var(--bg-sunken);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .release-name-form p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
+  }
+
+  .release-name-form .release-name-error {
+    color: var(--danger);
   }
 
   @media (max-width: 720px) {

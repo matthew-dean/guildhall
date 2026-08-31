@@ -62148,6 +62148,59 @@ existing action model and release-close endpoint.
   review was deliberately not launched against that unrelated in-progress
   work.
 
+### Finding: A complete unnamed scope needs one release-naming decision
+
+- [x] User job: when the selected scope is proven and complete but has not yet
+  been given a release identity, the owner sees one `Name release` action.
+  Release asks only for that name, records the existing scoped task membership,
+  and then advances to the normal ready-to-ship state. The owner must never
+  need a hidden API call or a generic new-work intake just to make completed
+  work into a releasable product boundary.
+- Live t-minus-t finding, 2026-08-31: before `0.0.1` was created through the
+  existing API, the API correctly reported the two-task current scope as
+  complete and ready but the shared action model was empty. Overview said
+  `Nothing needs your attention`; the only product control was unrelated
+  `New thread`, although `/api/project/release/create` already supported the
+  needed persisted release envelope.
+
+#### Contract Touch Decision
+
+Work id: `bounded-scope-release-naming-2026-08-31`. Touched contracts: the
+shared terminal action model, the persisted project decision packet, indexed
+summary scope retention, and the Release route's owner action presentation.
+Considered but not touched: release membership schema, release-close
+authorization, task lifecycle, release readiness calculation, generic intake,
+and route-local action ranking. Required proof: only a bounded unnamed scope
+with known later work receives `name_release`; arbitrary unscoped terminal
+work remains calm. Release uses the current scope's typed `work:` members and
+the existing create endpoint, then refreshes the shared project detail.
+Apply/revert: this adds a typed owner choice without automatically creating a
+release; reverting removes the command but does not modify existing releases.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The decision packet adds a derived
+`hasReleaseNamingScope` fact and existing release envelopes remain the sole
+stored lifecycle authority.
+
+#### Validation
+
+- Focused action, decision, summary, and Release UI suites passed 181/181;
+  they cover the typed `name_release` decision, the no-fake-action unscoped
+  terminal case, and the active-project `release/create` request body.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` passed.
+- Installed-app proof passed: `pnpm build`, `pnpm dev:install`, `guildhall
+  stop && guildhall start`, and `/api/stale-server` reported `stale: false`.
+  The real t-minus-t shipped route and Narrative Harness review route loaded
+  without horizontal overflow; t-minus-t was checked at 1440px, 900px, and
+  390px wide, and the browser reported no console errors.
+- The real t-minus-t predecessor state was captured before this repair: its
+  complete current scope had two included tasks and three deferred tasks, but
+  no action. It is now the shipped `0.0.1` release, so replaying the unnamed
+  state would require destructive project-state rollback. The new dialog is
+  therefore covered by deterministic UI interaction and the existing real
+  create/ship proof, not a fabricated rollback.
+
 ### Finding: A failed automated review must name the failure, not impersonate ordinary work
 
 - [x] User job: after starting a saved review, an owner can immediately tell

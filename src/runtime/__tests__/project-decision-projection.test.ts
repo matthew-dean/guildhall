@@ -153,6 +153,29 @@ describe('project decision projection', () => {
     })
   })
 
+  it('offers release naming only for a bounded completed scope', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-31T17:00:00.000Z',
+      start: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'The completed scope has no runnable work remaining.',
+      },
+      release: {
+        scopeMode: 'unreleased',
+        release: null,
+        state: 'ready',
+        hasReleaseNamingScope: true,
+        blockers: [],
+      },
+    })
+
+    expect(decision.primaryAction).toEqual({
+      kind: 'name_release',
+      reasonCode: 'release_setup',
+    })
+  })
+
   it('keeps shipped lifecycle terminal ahead of stale owner review and input', () => {
     const decision = buildProjectDecisionProjection({
       generatedAt: '2026-08-08T01:00:00.000Z',

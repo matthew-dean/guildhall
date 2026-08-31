@@ -141,6 +141,65 @@ describe('ReleaseTab', () => {
     )
   })
 
+  it('names a completed unnamed scope without sending the owner through new-work intake', async () => {
+    const onReleaseCreated = vi.fn()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/project/release/create')) {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          releaseId: '0.0.1',
+          label: '0.0.1',
+          taskIds: ['task-004', 'task-005'],
+          proofStyle: 'mixed',
+          projectId: 't-minus-t',
+        })
+        return json({ ok: true, created: true, release: { id: '0.0.1', label: '0.0.1', state: 'active' } })
+      }
+      return json({
+        ...readyPayload,
+        ready: true,
+        scope: {
+          id: 'current-work',
+          label: 'Current task scope',
+          nodeIds: ['work:task-004', 'work:task-005'],
+        },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.replaceState({}, '', '/projects/t-minus-t/release')
+    path.value = '/projects/t-minus-t/release'
+
+    render(ReleaseTab, {
+      props: {
+        activeProjectId: 't-minus-t',
+        onReleaseCreated,
+        projectDetail: {
+          actionModel: {
+            primaryAction: {
+              label: 'Name this release',
+              detail: 'This completed scope is ready to ship. Name the release to record it.',
+              buttonLabel: 'Name release',
+              href: '/release',
+              tone: 'accent',
+              code: 'release_setup',
+              ownerHeading: 'Name this release',
+            },
+          },
+        },
+      },
+    })
+
+    await screen.findByRole('button', { name: 'Name release' })
+    await userEvent.click(screen.getByRole('button', { name: 'Name release' }))
+    await userEvent.type(screen.getByLabelText('Release name'), '0.0.1')
+    await userEvent.click(screen.getByRole('button', { name: 'Create release' }))
+    await waitFor(() => expect(onReleaseCreated).toHaveBeenCalledTimes(1))
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/project/release/create?projectId=t-minus-t',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('uses the shared project action instead of turning release readiness into a dead end', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes('/api/project/spine')) return json({ spine: null })

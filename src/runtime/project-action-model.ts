@@ -178,6 +178,7 @@ export type ProjectActionOwnerHeading =
   | 'Branch is ready to share'
   | 'Pull request is ready to open'
   | 'Release is ready'
+  | 'Name this release'
 
 export interface ProjectAction {
   source: ProjectActionSource
@@ -207,6 +208,7 @@ function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): Pro
     case 'running': return 'Work is underway'
     case 'ready_work': return 'Ready to start'
     case 'release_ready': return 'Release is ready'
+    case 'release_setup': return 'Name this release'
     default: return 'What needs your attention'
   }
 }
@@ -861,15 +863,22 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     task.id === taskAction.taskId && taskBlockedReason(task) !== null,
   ))
 
-  if (startReadiness?.code === 'all_terminal' && startReadiness.executionScope) {
+  if (
+    startReadiness?.code === 'all_terminal' &&
+    startReadiness.executionScope &&
+    (startReadiness.executionScope.kind === 'release' || startReadiness.executionScope.kind === 'proposed_feature_set')
+  ) {
+    const namedRelease = startReadiness.executionScope.kind === 'release'
     candidates.push({
       source: 'start_readiness',
-      label: 'Release is ready',
-      detail: startReadiness.message ?? 'All scoped work is complete. Review the release evidence before shipping.',
-      buttonLabel: 'Open Release',
+      label: namedRelease ? 'Release is ready' : 'Name this release',
+      detail: namedRelease
+        ? startReadiness.message ?? 'All scoped work is complete. Review the release evidence before shipping.'
+        : 'This completed scope is ready to ship. Name the release to record it.',
+      buttonLabel: namedRelease ? 'Open Release' : 'Name release',
       href: '/release',
       tone: 'accent',
-      code: 'release_ready',
+      code: namedRelease ? 'release_ready' : 'release_setup',
     })
   }
   if (startReadiness && !startReadiness.canStart && startReadiness.code !== 'all_terminal') {
