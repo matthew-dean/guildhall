@@ -2950,6 +2950,77 @@ describe('POST /api/project/task/:id/start', () => {
     }
   })
 
+  it('runs a focused task\'s declared command proof before reviewer dispatch', async () => {
+    const now = '2026-08-31T22:00:00.000Z'
+    await seedTask('task-focused-proof', {
+      title: 'Verify the focused command contract',
+      status: 'review',
+      spec: '## Completion Boundary\nThe declared command is recorded before remaining review criteria continue.',
+      acceptanceCriteria: [{
+        id: 'ac-command',
+        description: 'The focused command exits successfully.',
+        verifiedBy: 'automated',
+        command: 'pnpm test',
+        expectedExit: 'zero',
+        met: false,
+      }, {
+        id: 'ac-review',
+        description: 'The remaining behavior is reviewed after command proof.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'task-focused-proof-ac-command-proof',
+        kind: 'command',
+        command: 'pnpm test',
+        status: 'planned',
+        createdAt: now,
+        updatedAt: now,
+        expectedEvidence: [{
+          id: 'ac-command',
+          kind: 'automated',
+          description: 'The focused command exits successfully.',
+          required: true,
+        }],
+        verificationRecords: [],
+      }],
+    })
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const response = await app.fetch(new Request(projectUrl('/api/project/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', taskId: 'task-focused-proof', scope: 'work_item' }),
+      }))
+      expect(response.status, await response.text()).toBe(200)
+      await vi.waitFor(() => {
+        expect(starts.at(-1)).toMatchObject({
+          preferredTaskId: 'task-focused-proof',
+          stopAfterOneTask: true,
+        })
+      })
+
+      const task = (await readTaskQueue()).tasks.find((candidate: Record<string, any>) => candidate.id === 'task-focused-proof')
+      expect(task).toMatchObject({
+        status: 'gate_check',
+        runtime: {
+          assignedTo: 'gate-checker-agent',
+          proofRecovery: {
+            kind: 'proof',
+            reason: 'The owner requested fresh command verification before automated review continues.',
+          },
+        },
+      })
+      expect(task?.notes?.at(-1)?.content).toContain('running the declared command checks')
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
   it('lets a specifically requested shaping task start inside the selected scope', async () => {
     const now = new Date().toISOString()
     await seedTasks([

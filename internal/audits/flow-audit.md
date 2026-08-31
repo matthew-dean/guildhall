@@ -64928,3 +64928,59 @@ reverting restores the misleading mixed identity.
   and `Run verification`. Browser proof on the Release route found `Current
   work`, one visible `Run verification` action, and no `0.0.1 has work
   remaining` text.
+
+### Finding: Focused verification must run the declared checks before review
+
+- [ ] User job: when an owner presses `Run verification` for one task that
+  already names executable checks, Guildhall moves that task into its command
+  gate, records the observed results, and then either continues review or
+  presents the concrete failed check. It must not silently return to the same
+  `Run verification` action.
+- Live finding, 2026-08-31: T-minus-T task `task-006` (`Ship a small 0.0.2`)
+  exposed `Run verification` with three planned command proofs. Starting its
+  focused action briefly showed running, then attempted unavailable reviewer
+  fan-out and returned to the identical owner action. No command proof record
+  or gate result was written. The focused start path skipped the existing
+  proof-recovery materialization that project-wide release start uses. A
+  follow-up installed replay also showed why: focused recovery was incorrectly
+  conditional on readiness computed from the old `review` record, letting the
+  coordinator send the task back to a generic worker turn.
+
+#### Contract Touch Decision
+
+Work id: `focused-proof-recovery-command-gate-2026-08-31`. Touched contract:
+the shared Start recovery boundary for a focused task with missing current
+proof. A task that already has explicit command acceptance criteria must enter
+the existing proof-recovery command-gate lane before reviewer dispatch.
+Considered but not touched: acceptance-criterion schema, proof-record schema,
+reviewer verdict schema, release membership, and route-local action ranking.
+Required proof: focused Start moves the requested task into the existing
+command-gate lane, records command-gate results, and never performs reviewer
+fan-out before those commands run. Apply/revert: applying reuses the existing
+command-gate lifecycle; reverting restores the focused-start dead-end without
+modifying stored evidence.
+
+#### Schema Migration Decision
+
+No persisted schema changes. This repair writes existing task state and gate/
+proof evidence through their current authoritative boundaries.
+
+#### Evidence
+
+- Targeted Start regression verifies the selected review task is transitioned
+  to `gate_check`, assigned to the command-gate lane, and marked with the
+  typed proof-recovery record before the supervisor can dispatch a reviewer.
+- Targeted orchestrator regression verifies a current owner-requested proof
+  recovery bypasses stale worker self-critique remediation and records the
+  declared command gate before any gate-checker narration.
+
+### Finding: Stopping work must not leave a task claiming it is active
+
+- [ ] User job: after an owner stops project processing, the next screen must
+  say the work is paused or stopped, identify what can resume, and never leave
+  an orphaned `in_progress` worker claim.
+- Live finding, 2026-08-31: stopping the installed service while isolating the
+  T-minus-T proof-route bug left `task-006` persisted as `in_progress` and
+  assigned to `worker-agent`, despite no service or worker remaining. This is
+  a lifecycle-summary defect, not an invitation for a stale worker recovery to
+  start silently.

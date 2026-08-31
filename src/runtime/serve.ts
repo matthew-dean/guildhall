@@ -41,7 +41,7 @@ import {
 } from '@guildhall/sessions'
 import { readTaskRuntimeStore, readTaskWorkspaceStore, writeTaskRuntimeStore } from './task-state-store.js'
 import { classifyCompletionProof, latestRecordedCompletionProofAt, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
-import { normalizeAcceptanceCriteriaForCurrentProof, reviewProofMissingApprovalIds, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasNonReviewCommandBackedProof, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
+import { normalizeAcceptanceCriteriaForCurrentProof, reviewProofMissingApprovalIds, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
 import { closeReleaseIfReady } from './release-lifecycle.js'
 import { comparableCommand, ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand } from './proof-paths.js'
 import { normalizeReviewPlanForTask } from './review-planner.js'
@@ -165,6 +165,7 @@ import {
   type FailureClassification,
 } from './policy.js'
 import { resolveEffectiveTaskProjectPath } from './task-gates.js'
+import { transitionTaskStatus } from './task-transition.js'
 import {
   buildSelectApiClientOptions,
   getRuntimeProviderConfig,
@@ -12271,6 +12272,74 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
   }
 
+  /**
+   * Focused Start must honor explicit command proof before it asks a reviewer
+   * to judge the remaining criteria. This is shared Start behavior, so both
+   * the project action and task-start endpoint use the same state boundary.
+   */
+  async function advanceFocusedTaskToCommandGates(input: {
+    taskId: string
+    state: ProjectCanonicalCurrentState
+  }): Promise<boolean> {
+    const richQueue = {
+      ...input.state.rawQueue,
+      tasks: input.state.tasks as unknown as Array<Record<string, unknown>>,
+    }
+    const queue = preserveRuntimeOverlayOnTaskQueueParse(richQueue, TaskQueue.parse(richQueue))
+    const task = queue.tasks.find(candidate => candidate.id === input.taskId)
+    if (!task || task.status !== 'review') return false
+
+    const hasUnverifiedCommandCriterion = task.acceptanceCriteria.some(criterion =>
+      typeof criterion.command === 'string' &&
+      criterion.command.trim().length > 0 &&
+      criterion.met !== true,
+    )
+    if (!hasUnverifiedCommandCriterion) return false
+
+    const now = new Date().toISOString()
+    transitionTaskStatus({
+      task,
+      event: 'start_gate_check',
+      actor: 'focused-proof-recovery',
+      evidenceRefs: ['task:focused-proof-recovery'],
+      now,
+    })
+    task.proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(task, now)
+    ;(task as Task & { proofRecovery?: Record<string, unknown> }).proofRecovery = {
+      reopenedAt: now,
+      kind: 'proof',
+      reason: 'The owner requested fresh command verification before automated review continues.',
+    }
+    task.assignedTo = 'gate-checker-agent'
+    task.updatedAt = now
+    task.notes.push({
+      agentId: 'focused-proof-recovery',
+      role: 'gate-checker',
+      content: 'Guildhall is running the declared command checks before automated review resumes.',
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await writeProjectTaskQueueAtCurrentStateBoundary(projectTasksPath(project.path), {
+      ...queue,
+      tasks: queue.tasks as unknown as Array<Record<string, unknown>>,
+    }, {
+      projectId: project.id,
+      projectRoot: project.path,
+      expectedQueueRevision: input.state.queueRevision,
+      expectedProjectRevision: input.state.projectRevision,
+    })
+    await upsertTaskRuntimeState(project.path, task.id, {
+      assignedTo: 'gate-checker-agent',
+      proofRecovery: {
+        reopenedAt: now,
+        kind: 'proof',
+        reason: 'The owner requested fresh command verification before automated review continues.',
+      },
+      updatedAt: now,
+    })
+    return true
+  }
+
   async function clearPromotedTaskShelveReason(taskId: string, updatedAt: string): Promise<void> {
     const store = await readTaskRuntimeStore(project.path)
     const current = store.tasks[taskId]
@@ -12408,6 +12477,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
             actionHref: `/task/${encodeURIComponent(requestedTask.id)}`,
           },
           400,
+        )
+      }
+      if (
+        body.taskId &&
+        canonicalState &&
+        await advanceFocusedTaskToCommandGates({ taskId: body.taskId, state: canonicalState })
+      ) {
+        const restartUrl = new URL(c.req.url)
+        restartUrl.pathname = '/api/project/start'
+        return app.fetch(
+          new Request(restartUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ ...body, mode: body.mode ?? 'continuous' }),
+          }),
+          c.env,
         )
       }
       const startReadiness = await projectStartReadiness({

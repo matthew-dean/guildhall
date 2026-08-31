@@ -7887,6 +7887,76 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(task.notes.at(-1)?.content).toContain('Acceptance command gates failed')
   })
 
+  it('runs owner-requested proof recovery before stale self-critique remediation', async () => {
+    const projectPath = path.join(tmpDir, 'focused-proof-recovery')
+    await fs.mkdir(projectPath, { recursive: true })
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+    await fs.writeFile(path.join(projectPath, 'RELEASE_NOTES.md'), 'benchmark artifact evidence\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'focused-proof-recovery',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        projectPath,
+        proofRecovery: {
+          reopenedAt: '2026-08-31T22:00:00.000Z',
+          kind: 'proof',
+          reason: 'The owner requested fresh command verification before automated review continues.',
+        },
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+          verifiedBy: 'automated',
+          command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+          met: false,
+        }],
+        proofPaths: [{
+          id: 'focused-proof-recovery-command',
+          kind: 'command',
+          command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md",
+          status: 'planned',
+          expectedEvidence: [{
+            id: 'AC-1',
+            kind: 'automated',
+            description: 'RELEASE_NOTES.md contains benchmark artifact evidence.',
+            required: true,
+          }],
+          verificationRecords: [],
+        }],
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          ...withMachineSelfCritique('Old worker claim without a current file change.', {
+            changedFiles: ['RELEASE_NOTES.md'],
+            verificationCommands: [{ command: "grep -q 'benchmark artifact evidence' RELEASE_NOTES.md", status: 'passed' }],
+          }),
+          timestamp: '2026-08-30T00:00:00.000Z',
+        }],
+      } as TestTaskPatch),
+    ])
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker narration should not run before current command proof')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gateChecker.calls).toHaveLength(0)
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'focused-proof-recovery',
+      beforeStatus: 'gate_check',
+      afterStatus: 'done',
+    })
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'focused-proof-recovery')!
+    expect(task.gateResults.at(-1)).toMatchObject({ gateId: 'AC-1', passed: true })
+    expect(task.notes.some(note => note.role === 'worker-progress-review')).toBe(false)
+  })
+
   it('treats an explicitly expected non-zero command as passing proof', async () => {
     const projectPath = path.join(tmpDir, 'expected-negative-proof')
     await fs.mkdir(projectPath, { recursive: true })

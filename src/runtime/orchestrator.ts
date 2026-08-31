@@ -13688,6 +13688,14 @@ export class Orchestrator {
     beforeStatus: TaskStatus,
   ): Promise<TickOutcome | null> {
     if (beforeStatus !== 'in_progress' && beforeStatus !== 'review' && beforeStatus !== 'gate_check') return null
+    // A focused owner verification request has already selected the typed
+    // command-gate lane. Historical self-critique cannot demote that explicit
+    // proof run back to implementation before the declared commands execute.
+    if (
+      beforeStatus === 'gate_check' &&
+      hasActiveProofRecovery(task) &&
+      task.acceptanceCriteria.some(criterion => typeof criterion.command === 'string' && criterion.command.trim().length > 0)
+    ) return null
     // A complete command-backed proof task is already at its authoritative
     // review/gate boundary. Old worker narration must not steal it before the
     // command gets a chance to replace stale gate evidence.
