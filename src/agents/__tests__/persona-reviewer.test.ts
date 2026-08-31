@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { BUILTIN_GUILDS } from '@guildhall/guilds'
-import { PERSONA_REVIEWER_MAX_TURNS, personaReviewerSystemPrompt } from '../persona-reviewer.js'
+import {
+  PERSONA_REVIEWER_MAX_TOKENS,
+  PERSONA_REVIEWER_MAX_TURNS,
+  personaReviewerSystemPrompt,
+} from '../persona-reviewer.js'
 
 describe('personaReviewerSystemPrompt', () => {
   it('leaves enough bounded turns to inspect referenced review evidence', () => {
     expect(PERSONA_REVIEWER_MAX_TURNS).toBe(12)
+  })
+
+  it('keeps verdict output compact enough for interactive review', () => {
+    expect(PERSONA_REVIEWER_MAX_TOKENS).toBe(1536)
   })
 
   it('tells reviewers to block only on task-local regressions or unmet work', () => {

@@ -62046,6 +62046,55 @@ stored data change.
 
 No persisted-schema change.
 
+### Finding: Automated review recovery must complete quickly and clear its old warning
+
+- [x] User job: an owner resumes a review after Guildhall reports that its
+  automated reviewer could not finish. The owner sees one clear retry action;
+  the retry reaches a real decision promptly, records its proof, and never
+  leaves a completed task carrying the old infrastructure warning.
+- Live t-minus-t finding, 2026-08-31: `TMI-005` had a valid DeepInfra
+  credential and reachable `zai-org/GLM-5.3-Flash` reviewer, but the generic
+  4,096-token agent budget let the small docs review exceed the fixed 60-second
+  persona deadline. The shared action correctly said `Retry review`, but the
+  completed retry still exposed its earlier provider-timeout note as
+  `latestReviewerSummary`.
+
+#### Contract Touch Decision
+
+Work id: `t-minus-t-review-recovery-2026-08-31`. Touched contracts: persona
+reviewer execution budget and server-derived reviewer-summary projection.
+Considered but not touched: provider credentials, model assignment, task
+status schema, review-verdict schema, retry action routing, proof-path schema,
+and route-local UI ranking. Required proof: the same live reviewer model
+returns a compact review within the existing deadline; a later typed approval
+supersedes an earlier reviewer note across task detail and project rows.
+Provided proof: the t-minus-t review completed in about 20 seconds, recorded
+three passed hard gates plus a typed approval, and ended `done`. Apply/revert:
+the reviewer-specific cap affects only persona verdict output; server views
+derive their summary from current review evidence rather than a stale scalar.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing review evidence and verdict records are
+read to determine whether an old reviewer note has been superseded.
+
+#### Validation
+
+- `pnpm vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t
+  'hides a superseded reviewer infrastructure failure'` passed.
+- `pnpm vitest run src/agents/__tests__/persona-reviewer.test.ts
+  src/runtime/__tests__/reviewer-fanout-wiring.test.ts
+  src/runtime/__tests__/project-scope-projection.test.ts` passed 64/64.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` passed.
+- Live provider probes confirmed the configured DeepInfra provider and
+  `zai-org/GLM-5.3-Flash` both return `OK`; the prior failure was response
+  budget/deadline interaction, not missing credentials.
+- Installed-app proof: rebuilt and reinstalled 0.13.3-dev, restarted
+  Guildhall, and confirmed `/api/stale-server` returned `stale:false`. The
+  real t-minus-t Work route rendered `TMI-005` as `Done` with no runnable-work
+  banner and no stale reviewer warning; its task-detail API returned
+  `latestReviewerSummary: null` and no owner action.
+
 ### Finding: A failed automated review must name the failure, not impersonate ordinary work
 
 - [x] User job: after starting a saved review, an owner can immediately tell

@@ -47,7 +47,11 @@ import { comparableCommand, ensureCommandProofPathsFromAcceptanceCriteria, isCon
 import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { requestSpecReview } from './spec-review-ownership.js'
-import { readPersistedStructuredSelfCritique, reviewVerdictHasStructuredApproval } from './review-contract.js'
+import {
+  readPersistedStructuredSelfCritique,
+  reviewVerdictHasStructuredApproval,
+  reviewVerdictIsNonSubstantiveFailure,
+} from './review-contract.js'
 import { validateProductBriefGrounding } from './spec-quality.js'
 import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, synchronizeProjectSummaryDecision, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { applyProjectActionModelPrimaryAction, applyRuntimeExecutionToProjectDecision, projectDecisionInFlight, projectDecisionStartReadiness, reconcileRegisteredProjectStateObservation, type ProjectDecisionProjection } from './project-decision-projection.js'
@@ -4365,6 +4369,34 @@ function latestTaskNote(
     }) ?? null
 }
 
+function reviewerNoteWasSupersededByApproval(
+  task: Record<string, unknown>,
+  note: Record<string, unknown> | null,
+): boolean {
+  if (!note) return false
+  const noteAt = typeof note.timestamp === 'string' ? Date.parse(note.timestamp) : Number.NaN
+  if (!Number.isFinite(noteAt)) return false
+  const projectedVerdicts = Array.isArray(task.reviewVerdicts) ? task.reviewVerdicts : []
+  const evidenceVerdicts = Array.isArray(task.evidence)
+    ? task.evidence.flatMap((event) => {
+      if (!isRecord(event) || event.kind !== 'review_verdict' || !isRecord(event.payload)) return []
+      return [{
+        ...(typeof event.recordedAt === 'string' ? { recordedAt: event.recordedAt } : {}),
+        ...event.payload,
+      }]
+    })
+    : []
+  const verdicts = evidenceVerdicts.length > 0 ? evidenceVerdicts : projectedVerdicts
+  return verdicts.some((verdict) => {
+    if (!verdict || typeof verdict !== 'object' || Array.isArray(verdict)) return false
+    if (reviewVerdictIsNonSubstantiveFailure(verdict)) return false
+    const record = verdict as { verdict?: unknown; recordedAt?: unknown }
+    if (record.verdict !== 'approve') return false
+    const recordedAt = typeof record.recordedAt === 'string' ? Date.parse(record.recordedAt) : Number.NaN
+    return Number.isFinite(recordedAt) && recordedAt >= noteAt
+  })
+}
+
 function isWorkerSelfCritiqueNote(note: Record<string, unknown>): boolean {
   const agentId = typeof note.agentId === 'string' ? note.agentId.trim().toLowerCase() : ''
   const content = typeof note.content === 'string' ? note.content : ''
@@ -4931,6 +4963,10 @@ async function enrichTaskForServe(
 ): Promise<Record<string, unknown>> {
   const effective = effectiveOverride ?? await buildEffectiveTask(projectPath, task as Task)
   const normalized = normalizeTaskForDrawer(effective)
+  // These are derived below from current evidence. Never retain a stale
+  // database snapshot when the evidence has moved on.
+  delete normalized.latestReviewerSummary
+  delete normalized.latestSelfCritique
   if (importedContractWorkIsStructurallyIncomplete(normalized)) {
     normalized.taskReadiness = importedContractStructuralRepairReadiness(normalized)
     normalized.structuralIntegrity = {
@@ -4950,19 +4986,6 @@ async function enrichTaskForServe(
     const parsed = cutoff ? Date.parse(cutoff) : Number.NaN
     return Number.isFinite(parsed) ? parsed : null
   })()
-  const latestReviewerSummary = latestTaskNoteContent(
-    normalized,
-    (note) => {
-      const agentId = typeof note.agentId === 'string' ? note.agentId : ''
-      const role = typeof note.role === 'string' ? note.role : ''
-      if (!(agentId === 'reviewer-fanout' || agentId === 'reviewer-agent' || role === 'reviewer')) {
-        return false
-      }
-      if (reviewerFeedbackCutoffMs === null) return true
-      const timestamp = typeof note.timestamp === 'string' ? Date.parse(note.timestamp) : Number.NaN
-      return Number.isFinite(timestamp) && timestamp > reviewerFeedbackCutoffMs
-    },
-  )
   const latestReviewerNote = latestTaskNote(
     normalized,
     (note) => {
@@ -4976,6 +4999,11 @@ async function enrichTaskForServe(
       return Number.isFinite(timestamp) && timestamp > reviewerFeedbackCutoffMs
     },
   )
+  const latestReviewerSummary = reviewerNoteWasSupersededByApproval(normalized, latestReviewerNote)
+    ? null
+    : typeof latestReviewerNote?.content === 'string'
+      ? latestReviewerNote.content.trim() || null
+      : null
   const latestSelfCritiqueNote = latestTaskNote(
     normalized,
     (note) => isWorkerSelfCritiqueNote(note),

@@ -1343,6 +1343,46 @@ describe('GET /api/project/task/:id', () => {
     expect(task?.latestReviewerSummary).toBeUndefined()
   })
 
+  it('hides a superseded reviewer infrastructure failure after a later typed approval', async () => {
+    await seedTask('task-1', {
+      status: 'done',
+      notes: [
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          timestamp: '2026-05-09T01:00:00.000Z',
+          content: 'Reviewer fan-out did not produce a usable structured result.',
+          structured: {
+            kind: 'reviewer_contract_failure',
+            failureCodes: ['provider_timeout'],
+          },
+        },
+      ],
+      reviewVerdicts: [
+        {
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          failureCode: 'provider_timeout',
+          recordedAt: '2026-05-09T01:00:00.000Z',
+        },
+        {
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          recordedAt: '2026-05-09T01:01:00.000Z',
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    const detailBody = (await detailRes.json()) as Record<string, any>
+    expect(detailBody.task?.latestReviewerSummary).toBeUndefined()
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = (await projectRes.json()) as Record<string, any>
+    const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
+    expect(task?.latestReviewerSummary).toBeUndefined()
+  })
+
   it('includes derived reviewer/self-critique/checkpoint summaries on /api/project task rows too', async () => {
     await seedTask('task-1', {
       status: 'review',

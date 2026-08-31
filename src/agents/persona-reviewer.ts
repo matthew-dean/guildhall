@@ -5,6 +5,10 @@ import type { AgentLLM } from './llm.js'
 import type { AnyTool, Compactor, HookExecutor } from '@guildhall/engine'
 
 export const PERSONA_REVIEWER_MAX_TURNS = 12
+// Reviewers return a compact, typed verdict. Giving them the worker's 4k-token
+// ceiling makes reasoning-heavy hosted models spend the entire review timeout
+// on a tiny task instead of returning the decision packet.
+export const PERSONA_REVIEWER_MAX_TOKENS = 1536
 
 /**
  * Build the system prompt for a single persona reviewer. This is the
@@ -101,5 +105,6 @@ export function createPersonaReviewerAgent(
     // the persona's voice.
     engineeringDefaults: [],
     maxTurns: PERSONA_REVIEWER_MAX_TURNS,
+    maxTokens: PERSONA_REVIEWER_MAX_TOKENS,
   })
 }
