@@ -62141,6 +62141,12 @@ existing action model and release-close endpoint.
 - Rendered installed Overview and Release at 900px and 390px had no horizontal
   overflow. Overview showed one calm `Start next release` invitation; Release
   showed no superfluous next action.
+- Secondary-project proof: Narrative Harness's active Stage 2 release presents
+  the same shared `Resume review` action for `NAR-091` on both Overview and
+  Release at 1440px, 900px, and 390px, with no horizontal overflow. Its root
+  checkout has five uncommitted documentation files and one new draft, so the
+  review was deliberately not launched against that unrelated in-progress
+  work.
 
 ### Finding: A failed automated review must name the failure, not impersonate ordinary work
 
