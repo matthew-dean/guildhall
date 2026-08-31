@@ -18357,22 +18357,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     state: ProjectReleaseReadModel,
     scope: ProjectScope | null,
   ): OrientationRelease | null {
-    // Release identity is a queue fact. The summary may project derived state,
-    // but it must not select or rename a release during a read.
-    const selectedReleaseId = state.rawQueue.selectedReleaseId
-    if (!selectedReleaseId) return null
-    const definition = state.rawQueue.releases.find(release => release.id === selectedReleaseId)
-    if (!definition) return null
-    // The queue definition owns release lifecycle state. Readiness is a
-    // separate projection (`releaseReadiness.ready` / `verdict`) and must not
-    // rewrite the release record during a request-time diagnostic read.
-    return {
-      ...definition,
-      ...(scope ? {
-        nodeIds: [...scope.nodeIds],
-        deferredNodeIds: [...scope.deferredNodeIds],
-      } : {}),
-    } as OrientationRelease
+    // A historical selected release may remain in the queue after the owner
+    // starts a new proposed scope. Reuse the scope-aware resolver so Release
+    // never borrows that old label for current work.
+    return releaseReadinessReleaseFromScope({
+      rawQueue: state.rawQueue,
+      scope,
+      selectedReleaseId: state.rawQueue.selectedReleaseId,
+    })
   }
 
   function releaseReadinessCountsFromSavedScope(

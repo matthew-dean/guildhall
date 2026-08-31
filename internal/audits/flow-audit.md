@@ -64892,3 +64892,39 @@ or rollback data rewrite is needed.
   action instead of `ready_work`; browser proof at 1280px confirmed exactly
   one visible `Run bootstrap` action and that it opens Settings > Readiness,
   where the executable `Run bootstrap` control is present.
+
+### Finding: Current work must not be attributed to a shipped release
+
+- [ ] User job: after shipping one release and beginning a new proposed scope,
+  an owner opening Release can immediately tell that the current work is not
+  part of the shipped release. The screen must never say a shipped version has
+  unfinished work from the next release.
+- Live finding, 2026-08-31: T-minus-T's current scope is the proposed
+  `current-work` boundary containing `task-006` (`Ship a small 0.0.2`), while
+  the queue's historical selected release is shipped `0.0.1`. Release
+  readiness combined the current-work counts with the selected release label,
+  producing the false verdict `0.0.1 has work remaining`.
+
+#### Contract Touch Decision
+
+Work id: `current-work-release-identity-2026-08-31`. Touched contract: shared
+release-readiness identity selection used by Release and compact project
+responses. A persisted release is shown only when the current execution scope
+is that release; a proposed current-work scope remains unnamed. Considered but
+not touched: task membership, selected-release persistence, release lifecycle,
+task/review proof, and route-local release copy. Required proof: a shipped
+historical selected release cannot label proposed current work, while a named
+current release still retains its identity and counts. Apply/revert: applying
+removes a false release attribution without changing task or release records;
+reverting restores the misleading mixed identity.
+
+#### Evidence
+
+- Focused release-readiness integration regression covers a shipped selected
+  release with a fresh owner-approved `current-work` scope and asserts the
+  response has no release identity or inherited verdict title.
+- Installed T-minus-T proof, 2026-08-31: `/api/project/release-readiness`
+  reports `release:null`, `scope: Current work`, one unfinished `0.0.2` task,
+  and `Run verification`. Browser proof on the Release route found `Current
+  work`, one visible `Run verification` action, and no `0.0.1 has work
+  remaining` text.

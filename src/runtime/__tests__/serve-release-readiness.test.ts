@@ -277,6 +277,48 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
     expect(body.unapprovedSpecs).toEqual([])
   }, 15_000)
 
+  it('does not attribute proposed current work to a shipped historical release', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: '0.0.1',
+      releases: [{
+        id: '0.0.1',
+        label: '0.0.1',
+        kind: 'release',
+        state: 'shipped',
+        source: 'owner_approved',
+        nodeIds: ['work:task-shipped'],
+        deferredNodeIds: [],
+        proofStyle: 'mixed',
+      }],
+      tasks: [
+        makeTask({ id: 'task-shipped', title: 'Shipped work', status: 'done', releaseIds: ['0.0.1'] }),
+        makeTask({ id: 'task-next', title: 'Current work', status: 'review' }),
+      ],
+    })
+    updateProjectStateDatabaseSummary(projectStatePath(tmpDir, 'TASKS.json'), summary => ({
+      ...summary,
+      scope: {
+        id: 'current-work',
+        label: 'Current work',
+        kind: 'proposed_feature_set',
+        source: 'owner_approved',
+        nodeIds: ['work:task-next'],
+        deferredNodeIds: [],
+      },
+    }))
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/release-readiness/summary')))
+    expect(response.status).toBe(200)
+    const body = await response.json() as any
+
+    expect(body.scope).toMatchObject({ id: 'current-work', label: 'Current work' })
+    expect(body.release).toBeNull()
+    expect(body.verdict.title).toBeUndefined()
+  })
+
   it('serves the saved release summary without task expansion or repository inspection', async () => {
     await seedQueue({
       version: 1,
