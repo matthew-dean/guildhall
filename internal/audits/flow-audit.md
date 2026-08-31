@@ -62095,6 +62095,53 @@ read to determine whether an old reviewer note has been superseded.
   banner and no stale reviewer warning; its task-detail API returned
   `latestReviewerSummary: null` and no owner action.
 
+### Finding: Release must expose shipping, not link back to itself
+
+- [x] User job: after the completed, selected release is ready, the owner opens
+  Release and can ship it immediately from the one visible decision card. A
+  `release_ready` handoff must never render an `Open Release` button on the
+  Release route itself, because that is a self-link that hides the actual
+  lifecycle decision.
+- Live t-minus-t finding, 2026-08-31: after owner-created `0.0.1` selected
+  release correctly reported 2/2 done and no blockers, Overview exposed one
+  `Open Release` action. The Release route repeated the same action on its
+  decision card instead of its existing `Ship release` operation, leaving the
+  owner on a dead end.
+
+#### Contract Touch Decision
+
+Work id: `release-ready-in-place-ship-2026-08-31`. Touched contracts: the
+Release route's presentation of the existing shared `release_ready` action
+and its already-established release-close operation. Considered but not
+touched: action ranking, release lifecycle persistence, release readiness
+rules, ship endpoint authorization, task evidence, and route-local release
+state derivation. Required proof: a `release_ready` primary action cannot
+render an `Open Release` self-link on Release; a ready named release renders
+and invokes `Ship release` for the active project. Apply/revert: the action
+model continues to own cross-route navigation; only its destination route
+substitutes the typed lifecycle operation it owns.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This is a route presentation correction over the
+existing action model and release-close endpoint.
+
+#### Validation
+
+- `pnpm vitest run src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts`
+  passed 35/35, including a release-ready action whose only visible command is
+  `Ship release` and whose request targets the active project.
+- `pnpm typecheck`, `pnpm lint:contracts`, `git diff --check`, `pnpm build`,
+  and `pnpm dev:install` passed.
+- Live owner proof: created t-minus-t's named `0.0.1` release from proven
+  `TMI-004` and `TMI-005`. Installed Release showed `Ship release` and no
+  `Open Release`; clicking it settled the same route on `Release shipped`.
+  API returned selected release `state: shipped`, no primary action, and
+  `runControl.label: Release shipped`.
+- Rendered installed Overview and Release at 900px and 390px had no horizontal
+  overflow. Overview showed one calm `Start next release` invitation; Release
+  showed no superfluous next action.
+
 ### Finding: A failed automated review must name the failure, not impersonate ordinary work
 
 - [x] User job: after starting a saved review, an owner can immediately tell

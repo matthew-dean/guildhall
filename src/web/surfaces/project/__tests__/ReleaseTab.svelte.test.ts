@@ -90,6 +90,57 @@ describe('ReleaseTab', () => {
     expect(screen.getByRole('button', { name: 'Inspect release details' })).toBeTruthy()
   })
 
+  it('replaces the release-ready self-link with the visible ship decision', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/project/release/close')) {
+        return json({ ok: true, release: { id: '0.0.1', label: '0.0.1', state: 'shipped' } })
+      }
+      return json({
+        ...readyPayload,
+        ready: true,
+        release: { id: '0.0.1', label: '0.0.1', state: 'active' },
+        verdict: {
+          state: 'ready',
+          label: 'Ready',
+          title: '0.0.1 is ready',
+          tone: 'ok',
+          detail: '2/2 tasks done · no open release blockers.',
+        },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.replaceState({}, '', '/projects/t-minus-t/release')
+    path.value = '/projects/t-minus-t/release'
+
+    render(ReleaseTab, {
+      props: {
+        activeProjectId: 't-minus-t',
+        projectDetail: {
+          actionModel: {
+            primaryAction: {
+              label: 'Release is ready',
+              detail: '0.0.1 has no runnable work remaining.',
+              buttonLabel: 'Open Release',
+              href: '/release',
+              tone: 'accent',
+              code: 'release_ready',
+              ownerHeading: 'Release is ready',
+            },
+          },
+        },
+      },
+    })
+
+    expect(await screen.findByText('0.0.1 is ready')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Open Release' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Ship release' }))
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/project/release/close?projectId=t-minus-t',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('uses the shared project action instead of turning release readiness into a dead end', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes('/api/project/spine')) return json({ spine: null })

@@ -391,7 +391,11 @@
   const canShipRelease = $derived(Boolean(data?.release?.id) && !releaseShipped && verdict.state === 'ready')
   const ownerAction = $derived(projectDetail?.actionModel?.primaryAction ?? null)
   const ownerActionTaskKey = $derived(ownerAction?.taskId ? taskDisplayKey(ownerAction.taskId, [], activeProjectId) : null)
-  const hasOwnerAction = $derived(Boolean(ownerAction?.href && ownerAction?.buttonLabel))
+  // `release_ready` is the handoff that brought the owner to this route. Once
+  // here, its destination would be this exact page; the concrete lifecycle
+  // decision is the existing ship operation below.
+  const ownerActionTargetsCurrentRelease = $derived(ownerAction?.code === 'release_ready')
+  const hasOwnerAction = $derived(Boolean(ownerAction?.href && ownerAction?.buttonLabel) && !ownerActionTargetsCurrentRelease)
   const ownerActionHeading = $derived(ownerAction?.ownerHeading ?? 'What needs your attention')
   const ownerActionLabelRepeatsHeading = $derived(ownerAction?.label === ownerActionHeading)
 
