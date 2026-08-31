@@ -16002,7 +16002,7 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
-  it('sends externally landed active work to review instead of rerunning a worker', async () => {
+  it('replaces stale landing evidence with externally landed active work instead of rerunning a worker', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-external-landing')
     await writeQueue([
       mkTask({
@@ -16012,6 +16012,15 @@ describe('Orchestrator.run — full loops', () => {
         worktreePath,
         branchName: 'guildhall/task-external-landing',
         baseBranch: 'main',
+        mergeRecord: {
+          fromBranch: 'guildhall/task-external-landing',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'merged',
+          commitSha: 'stale-docs-commit',
+          mergedAt: '2026-08-31T19:10:00.000Z',
+          detail: 'An older reconciliation recorded an unrelated docs commit.',
+        },
         acceptanceCriteria: [{
           id: 'ac-review',
           description: 'A reviewer approves the landed implementation.',
@@ -16040,6 +16049,7 @@ describe('Orchestrator.run — full loops', () => {
     })
     gitDriver.setHeadSha(worktreePath, 'landed-commit')
     gitDriver.setAncestor(tmpDir, 'landed-commit', 'main', true)
+    gitDriver.setChangedFilesInCommit(tmpDir, 'stale-docs-commit', ['README.md'])
     gitDriver.setChangedFilesInCommit(tmpDir, 'landed-commit', ['packages/extension/package.json'])
     const worker = stubAgent('worker-agent')
     const reviewer = stubAgent('reviewer-agent')
@@ -16059,6 +16069,7 @@ describe('Orchestrator.run — full loops', () => {
       fromBranch: 'guildhall/task-external-landing',
       toBranch: 'main',
       commitSha: 'landed-commit',
+      changedFiles: ['packages/extension/package.json'],
     })
     expect(task.notes.some(note => note.content.includes('moved the task to review'))).toBe(true)
     expect(worker.calls).toHaveLength(0)

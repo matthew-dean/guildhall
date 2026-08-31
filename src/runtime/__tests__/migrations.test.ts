@@ -3111,6 +3111,64 @@ describe('applyProjectMigrations', () => {
     })).applied).toEqual([])
   })
 
+  it('restores a large structured worker handoff that was compacted out of current evidence', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: '2026-08-31T21:00:00.000Z',
+      tasks: [{ id: 'task-structured-handoff', title: 'Structured handoff', status: 'in_progress' }],
+      releases: [],
+    }, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const machineContract = {
+      acceptanceCriteria: Array.from({ length: 8 }, (_, index) => ({ id: `ac-${index + 1}`, status: 'met' as const })),
+      changedFiles: ['packages/extension/package.json', 'packages/extension/test/extension.test.ts'],
+      verificationCommands: Array.from({ length: 6 }, (_, index) => ({
+        command: `pnpm --filter @t-minus-t/extension test -- --scenario=context-menu-${index + 1}`,
+        status: 'passed' as const,
+      })),
+      proofEvidenceIds: Array.from({ length: 8 }, (_, index) => `ac-${index + 1}`),
+    }
+    await appendTaskEvidence(projectRoot, 'task-structured-handoff', {
+      id: 'worker-handoff',
+      kind: 'note',
+      recordedAt: '2026-08-31T21:01:00.000Z',
+      payload: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        structured: machineContract,
+        content: 'Audit-only worker prose '.repeat(400),
+        timestamp: '2026-08-31T21:01:00.000Z',
+      },
+    })
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare('UPDATE task_evidence_current SET payload_json = ? WHERE task_id = ?').run(
+      JSON.stringify({ taskId: 'task-structured-handoff', updatedAt: '2026-08-31T21:01:00.000Z', version: 1, byKind: { note: [{ id: 'note:agentId:worker-agent', recordedAt: '2026-08-31T21:01:00.000Z', payload: {} }] } }),
+      'task-structured-handoff',
+    )
+    database.close()
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.106/structured-self-critique-current-evidence'],
+    })
+
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.106/structured-self-critique-current-evidence'])
+    expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-structured-handoff')?.byKind.note).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          structured: expect.objectContaining(machineContract),
+        }),
+      }),
+    ]))
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.106/structured-self-critique-current-evidence'],
+    })).applied).toEqual([])
+  })
+
   it('realigns promoted summary and scope from current evidence without reading compatibility files', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     const now = '2026-07-15T12:00:00.000Z'

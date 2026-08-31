@@ -245,6 +245,7 @@ const RELEASE_MEMBERSHIP_SNAPSHOT_MIGRATION_ID = '0.13.66/release-membership-sna
 const SPEC_REVIEW_GATE_MIGRATION_ID = '0.13.67/explicit-spec-review-gates'
 const DURABLE_SPEC_HANDOFF_MIGRATION_ID = '0.13.68/settle-durable-spec-handoffs'
 const COMPACT_SPEC_REVIEW_AUTHORITY_MIGRATION_ID = '0.13.69/compact-spec-review-authority'
+const STRUCTURED_SELF_CRITIQUE_CURRENT_EVIDENCE_MIGRATION_ID = '0.13.106/structured-self-critique-current-evidence'
 const COMPACT_SPEC_REVIEW_READINESS_MIGRATION_ID = '0.13.100/compact-spec-review-readiness'
 const ACTIVE_RELEASE_PROGRESS_REPROJECTION_MIGRATION_ID = '0.13.101/active-release-progress-reprojection'
 const SPEC_REPAIR_ACTION_REPROJECTION_MIGRATION_ID = '0.13.102/spec-repair-action-reprojection'
@@ -4971,6 +4972,39 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: STRUCTURED_SELF_CRITIQUE_CURRENT_EVIDENCE_MIGRATION_ID,
+    title: 'Restore structured worker handoffs in current evidence',
+    introducedIn: '0.13.106',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Reprojects retained structured worker handoffs into bounded current evidence so landing reconciliation retains typed changed-file and proof facts.',
+    async detect(projectRoot) {
+      const metadata = readProjectStateDatabaseMetadata(projectRoot)
+      if (metadata === null) return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === STRUCTURED_SELF_CRITIQUE_CURRENT_EVIDENCE_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'retained task evidence history']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const detail = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = detail?.tasks
+        .flatMap(task => typeof task.id === 'string' ? [task.id] : [])
+        ?? []
+      const result = await backfillTaskEvidenceCurrent(projectRoot, taskIds)
+      return {
+        summary: `Reprojected bounded current evidence for ${result.tasks} task${result.tasks === 1 ? '' : 's'} from ${result.events} retained historical event${result.events === 1 ? '' : 's'}; structured worker handoffs remain machine-readable while prose stays out of routing.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: RELEASE_LOCAL_PROOF_SCOPE_MIGRATION_ID,
     title: 'Reproject release-local proof children',
     introducedIn: '0.13.33',
@@ -6180,6 +6214,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: promotes the normalized owner-input queue and removes its duplicate summary copy',
   [RELEASE_MEMBERSHIP_CURRENT_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: retires release membership JSON mirrors after the normalized relation cutover',
   [MODEL_INDEPENDENT_MACHINE_BOUNDARY_MIGRATION_ID]: 'migrations.test.ts: reprojects retained task evidence into structured current records without changing historical prose',
+  [STRUCTURED_SELF_CRITIQUE_CURRENT_EVIDENCE_MIGRATION_ID]: 'migrations.test.ts: restores bounded structured worker handoffs from retained evidence without treating prose as operational state',
   [RELEASE_LOCAL_PROOF_SCOPE_MIGRATION_ID]: 'migrations.test.ts: reprojects release readiness without letting a shipped proof child block a later release',
   [INDEXED_SEMANTIC_KIND_MIGRATION_ID]: 'migrations.test.ts: backfills typed semantic task kinds into compact points before release-local proof projection',
   [PROOF_SETUP_EXECUTION_BLUEPRINT_MIGRATION_ID]: 'migrations.test.ts: restores cleared proof-setup execution blueprints without returning them to generic spec intake',

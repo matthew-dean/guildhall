@@ -64649,7 +64649,8 @@ not infer task completion from it without the matching runtime guard.
 
 - Focused regressions pass: fresh merge dispatch records landed paths; a
   matching legacy commit is revalidated into review; an explicit docs-only
-  landing reopens implementation; and a legacy record with no matching task
+  landing reopens implementation; a newer matching external commit replaces
+  stale docs-only landing evidence; and a legacy record with no matching task
   files fails closed into the worker lane.
 - `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence` pass.
 - Installed replay, 2026-08-31: after build/install/restart,
@@ -64657,6 +64658,69 @@ not infer task completion from it without the matching runtime guard.
   the false `c42a34d` README-only landing for `TMI-006` from `review` to
   `in_progress`; its shared action model and focused Work view now show the
   honest `Resume work` action instead of `Capture proof`.
+
+### Finding: Stale landing evidence cannot hide a newer owner-landed commit
+
+- [x] User job: after an owner lands the committed task branch directly, the
+  project should move to the appropriate review/proof state. It must not tell
+  the owner to resume already-landed implementation because an earlier,
+  unrelated merge record still exists.
+- Live finding, 2026-08-31: after `TMI-006` was committed and landed as
+  `c739870`, Guildhall still showed `Resume work`. The task retained an older
+  `c42a34d` README-only merge record, and external-landing reconciliation only
+  ran when no merge record existed at all.
+
+#### Contract Touch Decision
+
+Work id: `stale-landing-replacement-2026-08-31`. Touched contracts: external
+landing reconciliation and merge-record changed-path identity. A recorded
+landing remains authoritative only while it still matches the claimed task
+implementation; otherwise Guildhall inspects the clean task branch's current
+landed commit and replaces stale evidence if its changed paths match. Considered
+but not touched: task statuses, acceptance proof schema, worker prompts,
+reviewer prose, route-local action ranking, and release membership. Required
+proof: a stale docs-only record cannot prevent a newer matching landed commit
+from reaching review. Apply/revert: applying prevents pointless worker resumes
+after owner-landed work; reverting restores the stale-record blind spot.
+
+#### Schema Migration Decision
+
+Persisted state touched: the bounded `task_evidence_current.payload_json`
+projection. Change class: reproject structured worker self-critiques that were
+previously compacted down to an empty payload. Existing-data impact: an active
+task can have a clean, matching landed commit while its current read loses the
+typed changed-file contract, which makes the owner-facing runtime resume a
+worker unnecessarily. Migration:
+`0.13.106/structured-self-critique-current-evidence`; it is automatic and
+required before the runtime trusts current evidence for a task run. The
+compatibility reader remains safe before repair because missing typed evidence
+cannot authorize a landing. Fixtures and tests must prove that a large
+structured self-critique retains acceptance IDs, changed files, verification
+statuses, and proof IDs within the bounded current projection; that retained
+history is reprojected; and that a stale docs-only merge record is replaced by
+a newer matching owner-landed commit. Apply rebuilds only the current SQLite
+projection from retained evidence; revert restores the prior compact reader but
+does not delete the retained evidence ledger.
+
+#### Evidence
+
+- Focused persistence, migration, and orchestrator regressions pass: a large
+  structured worker handoff retains its typed routing fields, the migration
+  restores a previously compacted current record from retained history, and a
+  stale docs-only merge record is replaced by the newer matching owner landing.
+- Focused shared-action regressions pass: verification recovery has one direct
+  action, and project chrome does not render a competing generic run control.
+  `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`, and
+  `pnpm build` pass.
+- Installed replay, 2026-08-31: migration
+  `0.13.106/structured-self-critique-current-evidence` applied to T-minus-T.
+  A bounded run reconciled owner-landed `TMI-006` from `in_progress` to
+  `review` without launching a worker. After install/restart,
+  `/api/stale-server` reported `stale:false`; the focused Work route showed
+  `Verification needs recovery`, `TMI-006`, its declared-check explanation,
+  and one enabled `Run verification` action. The top bar showed no competing
+  `Resume` action. At 1280x720, 1024x800, and 390x844,
+  `scrollWidth === clientWidth`.
 
 ### Finding: A timed-out worker cannot leave an unproven review state behind
 

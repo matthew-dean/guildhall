@@ -11416,13 +11416,16 @@ export class Orchestrator {
       // proves that a commit reached the base branch; its changed paths still
       // have to overlap this task's claimed implementation before review can
       // trust the landing.
+      const hasVerifiedRecordedLanding = task.mergeRecord
+        ? await this.hasVerifiedLandedTaskChange(task)
+        : false
       const externallyLandedButUnverified =
         task.status === 'in_progress' &&
         taskDoneButProofMissing({ ...task, status: 'done' }) &&
         task.worktreePath?.trim() &&
         task.branchName?.trim() &&
         task.baseBranch?.trim() &&
-        !task.mergeRecord
+        !hasVerifiedRecordedLanding
       if (externallyLandedButUnverified) {
         const worktreePath = resolveRuntimePath(task.worktreePath!)
         const branchName = task.branchName!

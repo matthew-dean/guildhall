@@ -1920,6 +1920,50 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'Retry review' })).toBeInTheDocument()
   })
 
+  it('keeps the generic project run control out of chrome when verification recovery owns the next action', async () => {
+    const proofRecovery = detail({
+      startReadiness: {
+        canStart: true,
+        code: 'proof_evidence_missing',
+        message: 'Run the declared checks and record their results before automated review continues.',
+        actionHref: '/work?task=task-link-editor',
+        focusTaskId: 'task-link-editor',
+        focusTaskTitle: 'Knit: add link editor controls',
+        focusKind: 'proof',
+      },
+      actionModel: {
+        primaryAction: {
+          source: 'start_readiness',
+          code: 'proof_evidence_missing',
+          taskId: 'task-link-editor',
+          label: 'Verification needs recovery',
+          taskLabel: 'Knit: add link editor controls',
+          buttonLabel: 'Run verification',
+          href: '/work?task=task-link-editor',
+          tone: 'warn',
+          operation: 'start_focused',
+        },
+        secondaryActions: [],
+        runControl: {
+          label: 'Run verification',
+          startEnabled: true,
+          pauseEnabled: false,
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    })
+    installFetchFakes(proofRecovery)
+
+    await renderProjectView('overview', null, 'looma-knit', proofRecovery)
+
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+    expect(topbar).not.toHaveTextContent('Resume')
+    expect(topbar).not.toHaveTextContent('Run verification')
+    expect(screen.getByRole('button', { name: 'Run verification' })).toBeInTheDocument()
+  })
+
   it('keeps generic Resume out of project chrome when blocked task recovery owns the next action', async () => {
     const blockedTask = detail({
       startReadiness: {

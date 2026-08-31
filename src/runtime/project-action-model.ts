@@ -175,7 +175,7 @@ export type ProjectActionOwnerHeading =
   | 'Ready to start'
   | 'Review ready to continue'
   | 'Automated review needs retry'
-  | 'Proof needs recovery'
+  | 'Verification needs recovery'
   | 'Branch is ready to share'
   | 'Pull request is ready to open'
   | 'Release is ready'
@@ -206,7 +206,7 @@ function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): Pro
     case 'paused_live_work': return 'Work paused'
     case 'worker_recovery': return 'Worker needs a fresh pass'
     case 'review_retry': return 'Automated review needs retry'
-    case 'proof_evidence_missing': return 'Proof needs recovery'
+    case 'proof_evidence_missing': return 'Verification needs recovery'
     case 'running': return 'Work is underway'
     case 'ready_work': return 'Ready to start'
     case 'release_ready': return 'Release is ready'
@@ -369,7 +369,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Shape first task'
   if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
-  if (readiness.code === 'proof_evidence_missing') return 'Capture proof'
+  if (readiness.code === 'proof_evidence_missing') return 'Run verification'
   if (readiness.code === 'scope_source_conflict') return 'Open map'
   if (readiness.code === 'repository_followup_required') return 'Open release'
   if (readiness.code === 'ready_work') return 'Start work'
@@ -388,7 +388,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (running) return 'Pause'
   if (readiness?.focusKind === 'review_retry' || readiness?.code === 'review_retry') return 'Retry review'
   if (readiness?.focusKind === 'review_work') return 'Resume review'
-  if (readiness?.code === 'proof_evidence_missing') return 'Capture proof'
+  if (readiness?.code === 'proof_evidence_missing') return 'Run verification'
   if (readiness?.code === 'ready_work') return 'Start'
   if (readiness?.progressState === 'worker_retry_recommended' || readiness?.progressState === 'worker_edit_loss') return 'Retry worker'
   if (!readiness || readiness.canStart) return 'Resume'
@@ -689,7 +689,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     : reviewRetry
     ? 'Automated review needs retry'
     : proofRecovery
-    ? 'Proof needs recovery'
+    ? 'Verification needs recovery'
     : specRepair
     ? 'Repair this spec'
     : ownerReview
@@ -713,7 +713,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     : reviewRetry
     ? 'Guildhall could not complete its automated review. The saved change is intact; retry review starts that check again.'
     : proofRecovery
-    ? 'The review needs current evidence. Capture that proof before Guildhall retries the automated review.'
+    ? 'Guildhall will run this task\'s declared checks and record the results before it retries automated review.'
     : readiness.progressState === 'partial_work_saved'
     ? pausedSavedWorkDetail
     : pausedWork

@@ -441,14 +441,14 @@ describe('buildProjectActionModel', () => {
 
     expect(model.primaryAction).toMatchObject({
       code: 'proof_evidence_missing',
-      ownerHeading: 'Proof needs recovery',
+      ownerHeading: 'Verification needs recovery',
       taskId: 'task-review-proof',
-      buttonLabel: 'Capture proof',
-      detail: 'The review needs current evidence. Capture that proof before Guildhall retries the automated review.',
+      buttonLabel: 'Run verification',
+      detail: 'Guildhall will run this task\'s declared checks and record the results before it retries automated review.',
       operation: 'start_focused',
       tone: 'warn',
     })
-    expect(model.runControl).toMatchObject({ label: 'Capture proof', startEnabled: true })
+    expect(model.runControl).toMatchObject({ label: 'Run verification', startEnabled: true })
   })
 
   it('retains setup state without reopening setup urgency after a release shipped', () => {
@@ -813,12 +813,12 @@ describe('buildProjectActionModel', () => {
     })
     expect(proofRecovery.primaryAction).toMatchObject({
       source: 'start_readiness',
-      buttonLabel: 'Capture proof',
+      buttonLabel: 'Run verification',
       href: '/work?task=current-done',
       tone: 'warn',
     })
     expect(proofRecovery.runControl).toMatchObject({
-      label: 'Capture proof',
+      label: 'Run verification',
       startEnabled: true,
     })
 

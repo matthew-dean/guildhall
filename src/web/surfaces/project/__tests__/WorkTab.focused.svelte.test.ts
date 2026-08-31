@@ -231,7 +231,7 @@ describe('focused Work flow', () => {
     )
   })
 
-  it('captures missing review evidence before starting another automated review', async () => {
+  it('runs missing verification before starting another automated review', async () => {
     const user = userEvent.setup()
     const review = reviewTask({ id: 'task-review-proof', displayKey: 'NAR-091', title: 'Capture desktop review proof', status: 'review' })
     setRoute(`/projects/narrative-harness/work?task=${review.id}`)
@@ -241,16 +241,17 @@ describe('focused Work flow', () => {
         primaryAction: {
           taskId: review.id,
           code: 'proof_evidence_missing',
-          ownerHeading: 'Proof needs recovery',
+          ownerHeading: 'Verification needs recovery',
           operation: 'start_focused',
-          detail: 'The review needs current evidence. Capture that proof before Guildhall retries the automated review.',
-          buttonLabel: 'Capture proof',
+          detail: 'Guildhall will run this task\'s declared checks and record the results before it retries automated review.',
+          buttonLabel: 'Run verification',
           href: `/work?task=${review.id}`,
         },
       },
     }) } })
 
-    await user.click(await screen.findByRole('button', { name: 'Capture proof' }))
+    expect(screen.getByText('Verification needed')).toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: 'Run verification' }))
     expect(await screen.findByRole('heading', { name: 'Starting work' })).toBeInTheDocument()
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       expect.stringContaining(`/api/project/task/${review.id}/retry-work`),

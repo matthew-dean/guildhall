@@ -8789,6 +8789,49 @@ function currentEvidenceEventsForTask(
   })))
 }
 
+function compactStructuredSelfCritiqueForCurrentEvidence(value: unknown): JsonRecord | null {
+  if (!isRecord(value)) return null
+  const acceptanceCriteria = Array.isArray(value.acceptanceCriteria)
+    ? value.acceptanceCriteria.flatMap(entry => {
+      if (!isRecord(entry)) return []
+      const id = stringValue(entry.id)
+      const status = stringValue(entry.status)
+      return id && (status === 'met' || status === 'not_met') ? [{ id, status }] : []
+    }).slice(0, 24)
+    : null
+  const changedFiles = Array.isArray(value.changedFiles)
+    ? value.changedFiles.flatMap(entry => {
+      const path = stringValue(entry)
+      return path ? [path] : []
+    }).slice(0, 24)
+    : null
+  const verificationCommands = Array.isArray(value.verificationCommands)
+    ? value.verificationCommands.flatMap(entry => {
+      if (!isRecord(entry)) return []
+      const command = stringValue(entry.command)
+      const status = stringValue(entry.status)
+      return command && (status === 'passed' || status === 'failed')
+        ? [{ command: command.length > 320 ? `${command.slice(0, 300)} [detail omitted]` : command, status }]
+        : []
+    }).slice(0, 12)
+    : null
+  const proofEvidenceIds = Array.isArray(value.proofEvidenceIds)
+    ? value.proofEvidenceIds.flatMap(entry => {
+      const id = stringValue(entry)
+      return id ? [id] : []
+    }).slice(0, 24)
+    : null
+  if (acceptanceCriteria === null || changedFiles === null || verificationCommands === null || proofEvidenceIds === null) return null
+
+  return {
+    ...(typeof value.kind === 'string' ? { kind: value.kind } : {}),
+    acceptanceCriteria,
+    changedFiles,
+    verificationCommands,
+    proofEvidenceIds,
+  }
+}
+
 /**
  * Keep the indexed task point's bounded proof answer in step with the
  * evidence transaction. The evidence table remains the source for current
@@ -8828,6 +8871,18 @@ function refreshIndexedTaskProofSummary(
 
 function compactCurrentEvidencePayload(kind: string, payload: JsonRecord): JsonRecord {
   const source = compactTaskEvidencePayload('event', payload)
+  const structuredSelfCritique = kind === 'note'
+    ? compactStructuredSelfCritiqueForCurrentEvidence(source.structured)
+    : null
+  if (structuredSelfCritique) {
+    const machinePayload: JsonRecord = {
+      ...(typeof source.agentId === 'string' ? { agentId: source.agentId } : {}),
+      ...(typeof source.role === 'string' ? { role: source.role } : {}),
+      ...(typeof source.timestamp === 'string' ? { timestamp: source.timestamp } : {}),
+      structured: structuredSelfCritique,
+    }
+    if (serializedBytes(machinePayload) <= CURRENT_EVIDENCE_PAYLOAD_MAX_BYTES) return machinePayload
+  }
   const keys = new Set([
     'id', 'taskId', 'kind', 'type', 'gateId', 'command', 'name', 'checkedAt',
     'reviewerId', 'reviewer', 'reviewerPath', 'decision', 'verdict', 'passed',

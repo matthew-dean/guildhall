@@ -564,7 +564,7 @@ describe('buildProjectScopeProjection', () => {
       canStart: true,
       code: 'proof_evidence_missing',
       focusKind: 'proof',
-      label: 'Capture proof',
+      label: 'Run verification',
       focusTaskId: 'task-review-proof',
     })
   })

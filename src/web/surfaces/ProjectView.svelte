@@ -793,6 +793,7 @@ import type { AgentQuestion, ProjectActionOperation, ProjectDetail, ProjectMigra
       primaryAction?.code === 'paused_live_work' ||
       primaryAction?.code === 'review_retry' ||
       primaryAction?.code === 'worker_recovery' ||
+      primaryAction?.code === 'proof_evidence_missing' ||
       primaryAction?.code === 'blocked_work' ||
       primaryAction?.code === 'repository_followup_required') &&
       Boolean(primaryAction.taskId),

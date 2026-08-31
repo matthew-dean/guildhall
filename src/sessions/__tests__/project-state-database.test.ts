@@ -2671,10 +2671,13 @@ describe('project-state database', () => {
       summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
     })
     const machineSelfCritique = {
-      acceptanceCriteria: [{ id: 'ac-1', status: 'met' }],
-      changedFiles: ['src/index.ts'],
-      verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
-      proofEvidenceIds: [],
+      acceptanceCriteria: Array.from({ length: 8 }, (_, index) => ({ id: `ac-${index + 1}`, status: 'met' })),
+      changedFiles: Array.from({ length: 12 }, (_, index) => `packages/extension/src/feature-${index + 1}.ts`),
+      verificationCommands: Array.from({ length: 6 }, (_, index) => ({
+        command: `pnpm --filter @t-minus-t/extension test -- --runInBand --scenario=context-menu-${index + 1}`,
+        status: 'passed',
+      })),
+      proofEvidenceIds: Array.from({ length: 8 }, (_, index) => `ac-${index + 1}`),
     }
     upsertProjectStateDatabaseTaskProof(projectRoot, {
       taskId: 'task-1',
@@ -2699,7 +2702,7 @@ describe('project-state database', () => {
         ...machineSelfCritique,
       },
     })
-    expect(String(current?.byKind.note?.[0]?.payload.content)).toContain('[current evidence detail omitted]')
+    expect(current?.byKind.note?.[0]?.payload).not.toHaveProperty('content')
 
     upsertProjectStateDatabaseTaskProof(projectRoot, {
       taskId: 'task-1',

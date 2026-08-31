@@ -146,7 +146,7 @@ export interface ProjectScopeProjection {
   start: {
     canStart: boolean
     code?: string
-    label: 'Start' | 'Resume' | 'Review' | 'Retry review' | 'Capture proof' | 'Configure' | 'Answer in Thread'
+    label: 'Start' | 'Resume' | 'Review' | 'Retry review' | 'Run verification' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: 'paused_work' | 'ready_work' | 'review_work' | 'review_retry' | 'spec_repair' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
@@ -1129,11 +1129,11 @@ export function summarizeProjectScopeStart(
     return {
       canStart: true,
       code: 'proof_evidence_missing',
-      label: 'Capture proof',
+      label: 'Run verification',
       focusTaskId: proofRecovery.taskId,
       focusTaskTitle: proofRecovery.title,
       focusKind: 'proof',
-      message: `"${proofRecovery.title}" needs current review evidence before automated review can continue. Capture that proof now.`,
+      message: `"${proofRecovery.title}" needs current verification before automated review can continue. Run the declared checks and record their results.`,
       actionHref: `/work?task=${encodeURIComponent(proofRecovery.taskId)}`,
     }
   }

@@ -433,7 +433,7 @@
       return detail.actionModel.primaryAction.ownerHeading ?? 'Automated review needs retry'
     }
     if (focusedWork && detail.actionModel?.primaryAction?.code === 'proof_evidence_missing' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
-      return detail.actionModel.primaryAction.ownerHeading ?? 'Proof needs recovery'
+      return detail.actionModel.primaryAction.ownerHeading ?? 'Verification needs recovery'
     }
     if (focusedWork && detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === focusedWork.id) {
       return detail.actionModel?.primaryAction?.ownerHeading ?? 'Review ready to continue'
@@ -477,7 +477,7 @@
       if (task && isProofMissingTask(task)) {
         const retryRes = await postTaskAction(taskId, 'retry-work', {
           projectId: detail.id,
-          instruction: 'Capture the required current proof evidence for this task. Do not retry review until the evidence is recorded.',
+          instruction: 'Run this task\'s declared verification checks and record current proof evidence. Do not retry review until the results are recorded.',
         })
         if (!retryRes.ok) {
           const body = await retryRes.json().catch(() => ({})) as { error?: string }
@@ -838,7 +838,7 @@
     if (isFocusedWorkStarting(task)) return 'Starting'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'Needs retry'
     if (detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === task.id) return 'Review retry'
-    if (detail.actionModel?.primaryAction?.code === 'proof_evidence_missing' && detail.actionModel.primaryAction.taskId === task.id) return 'Proof needed'
+    if (detail.actionModel?.primaryAction?.code === 'proof_evidence_missing' && detail.actionModel.primaryAction.taskId === task.id) return 'Verification needed'
     if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'Review ready'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'Paused'
     return isFocusedRunnableWork(task) ? 'Ready' : effectiveStatusLabel(task)
