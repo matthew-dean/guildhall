@@ -64782,7 +64782,7 @@ post-turn ordering.
 
 ### Finding: A release action must resolve the release blocker it explains
 
-- [ ] User job: on a project overview, a user should see the current release,
+- [x] User job: on a project overview, a user should see the current release,
   its concise progress, what prevents it from finishing, and one action that
   directly advances that blocker. The next action must not quietly target a
   different task while the release remains blocked elsewhere.
@@ -64795,19 +64795,48 @@ post-turn ordering.
   place, nor does it offer the blocker-resolving action. A user can act
   correctly on the only button and still make no progress toward release.
 
-#### Next Work
-
-- Reconcile release blockers and primary action in the shared decision/action
-  projection from one blocker sequence, not scope ranking alone. Live replay
-  also found `NAR-092` as a genuine blocked task while release readiness lists
-  only `NAR-087` through `NAR-090` proof blockers; that disagreement is the
-  source-model defect to resolve before choosing an action rank.
-- Re-run the same comparison across API, overview, Work, Release, and top
-  chrome at desktop and mobile before changing route-local copy.
-
 #### Root-Cause Boundary
 
-No contract was changed. A narrow ranking experiment was reverted after the
-installed replay showed that the scope projection and release readiness expose
-different blocker sets. The next repair must first give both surfaces the same
-typed blocker sequence, then select an action from that shared sequence.
+The scope projection correctly identified `NAR-087` through `NAR-090` as the
+release proof blockers, but the decision projection gave a separate
+proof-recovery task (`NAR-091`) precedence just because it was the first
+runnable recovery row. The action-model cache then reinforced that incorrect
+focus. `NAR-092` is downstream work blocked on this proof sequence, not a
+competing root release blocker.
+
+#### Contract Touch Decision
+
+Work id: `release-blocker-action-authority-2026-08-31`. Touched contract: the
+shared project decision/action projection that selects the owner-visible
+primary action from selected-release readiness. When the current execution
+recommendation is itself proof recovery and the selected release has typed
+proof blockers, the decision must target the first release proof blocker; a
+dependent review recovery must not replace that root blocker. Considered but
+not touched: task status, dependency graph, completion-proof schema, release
+membership, route-local overview/release copy, and provider output. Required
+proof: the decision, start readiness, action model, and release blocker list
+identify the same root task; normal runnable work remains distinct from proof
+debt. Apply/revert: applying makes the visible verification command advance
+the release blocker it names; reverting permits a separate proof-recovery task
+to masquerade as the release action.
+
+#### Schema Migration Decision
+
+No persisted-schema change. The repair uses existing typed release blocker IDs,
+execution readiness, and action fields; only their shared precedence changes.
+
+#### Evidence
+
+- Focused decision projection and summary projection regressions pass. The
+  decision keeps ordinary runnable work distinct from proof debt, while a
+  proof-recovery recommendation now selects the first typed release proof
+  blocker and rejects a stale action cache for another task.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`,
+  `git diff --check`, and `pnpm build` pass.
+- Installed replay, 2026-08-31: `/api/project` for Narrative Harness returned
+  the same `task-087` primary action, readiness focus, and decision target on
+  Overview, Work, and Release; the release blocker list begins with that task
+  and continues through `task-090`. After `pnpm dev:install`,
+  `/api/stale-server` reported `stale:false`. At 1280x720 and 390x844, the
+  real Overview rendered one enabled `Run verification` button for `NAR-087`
+  with `scrollWidth === clientWidth`.

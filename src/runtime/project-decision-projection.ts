@@ -852,7 +852,10 @@ function executionState(input: ProjectDecisionProjectionInput): ProjectDecisionE
  * Presentation layers receive readiness only from the shared decision packet.
  * This intentionally contains no task detail, inbox ranking, or prose parser.
  */
-export function projectDecisionStartReadiness(decision: ProjectDecisionProjection): {
+export function projectDecisionStartReadiness(
+  decision: ProjectDecisionProjection,
+  canonicalTaskRefs: readonly ProjectDecisionTaskRef[] = [],
+): {
   canStart: boolean
   code: string
   message?: string
@@ -863,20 +866,34 @@ export function projectDecisionStartReadiness(decision: ProjectDecisionProjectio
   count?: number
   progressState?: 'partial_work_saved' | 'worker_retry_recommended' | 'worker_edit_loss'
 } {
+  const releaseProofTaskId = decision.primaryAction.kind === 'review_proof'
+    ? decision.primaryAction.targetId
+    : undefined
   const focus = decision.execution.focus
-  const code = decision.execution.focusKind === 'brief_cleanup' &&
+  const focusTaskId = releaseProofTaskId ?? focus?.taskId ?? decision.execution.focusTaskId
+  const focusMatchesExecution = focusTaskId === (focus?.taskId ?? decision.execution.focusTaskId)
+  const releaseProofTitle = releaseProofTaskId
+    ? canonicalTaskRefs.find(task => task.taskId === releaseProofTaskId)?.displayTitle
+    : undefined
+  const code = releaseProofTaskId
+    ? 'proof_evidence_missing'
+    : decision.execution.focusKind === 'brief_cleanup' &&
     decision.execution.code === 'no_unattended_progress'
     ? 'owner_input_required'
     : decision.execution.code
   return {
-    canStart: decision.execution.state === 'runnable' ||
+    canStart: Boolean(releaseProofTaskId) || decision.execution.state === 'runnable' ||
       decision.execution.state === 'running' ||
       decision.execution.state === 'paused',
     code,
-    ...(decision.execution.message ? { message: decision.execution.message } : {}),
-    ...(focus?.taskId ?? decision.execution.focusTaskId ? { focusTaskId: focus?.taskId ?? decision.execution.focusTaskId } : {}),
-    ...(focus?.displayTitle ?? decision.execution.focusTaskTitle ? { focusTaskTitle: focus?.displayTitle ?? decision.execution.focusTaskTitle } : {}),
-    ...(decision.execution.focusKind ? { focusKind: decision.execution.focusKind } : {}),
+    ...(releaseProofTaskId
+      ? { message: 'Run this completed task\'s declared verification to clear its release proof gap.' }
+      : decision.execution.message ? { message: decision.execution.message } : {}),
+    ...(focusTaskId ? { focusTaskId } : {}),
+    ...(releaseProofTitle || (focusMatchesExecution && (focus?.displayTitle ?? decision.execution.focusTaskTitle))
+      ? { focusTaskTitle: releaseProofTitle ?? focus?.displayTitle ?? decision.execution.focusTaskTitle }
+      : {}),
+    ...(releaseProofTaskId ? { focusKind: 'proof' } : decision.execution.focusKind ? { focusKind: decision.execution.focusKind } : {}),
     ...(decision.execution.reviewTaskIds?.length ? { reviewTaskIds: [...decision.execution.reviewTaskIds] } : {}),
     ...(typeof decision.execution.count === 'number' ? { count: decision.execution.count } : {}),
     ...(decision.execution.progressState ? { progressState: decision.execution.progressState } : {}),
@@ -942,6 +959,12 @@ function primaryActionForDecision(input: {
             ? { kind: 'answer_owner_input' as const, targetId: execution.focusTaskId, reasonCode: 'owner_input_required' }
             : execution.state === 'blocked' && execution.code === 'no_unattended_progress' && execution.focusKind === 'spec_review'
               ? { kind: 'review_spec' as const, targetId: execution.focusTaskId, reasonCode: 'owner_review_required' }
+      // A proof-recovery task can be part of the current release without
+      // clearing the release's recorded proof debt. When recovery itself is
+      // next, keep the owner on the root release blocker rather than a
+      // dependent task.
+      : execution.state === 'runnable' && execution.code === 'proof_evidence_missing' && release.proofBlockerTaskIds.length > 0
+        ? { kind: 'review_proof' as const, targetId: release.proofBlockerTaskIds[0], reasonCode: 'proof_evidence_missing' }
       : execution.state === 'runnable'
         ? { kind: 'open_work' as const, targetId: execution.focusTaskId, reasonCode: execution.code }
         : execution.state === 'paused'
@@ -975,6 +998,14 @@ export function applyProjectActionModelPrimaryAction(
 ): ProjectDecisionProjection {
   if (!action || decision.conflicts.length > 0 || decision.ownerInput.state === 'required' || decision.ownerReview.state === 'required') return decision
   if (decision.release.lifecycleState === 'shipped') return decision
+  // A cached action model can lag the selected release decision. Do not let a
+  // separate proof-recovery task replace the root release proof action.
+  if (
+    decision.primaryAction.kind === 'review_proof' &&
+    decision.primaryAction.targetId &&
+    action.code === 'proof_evidence_missing' &&
+    action.taskId !== decision.primaryAction.targetId
+  ) return decision
   if (
     decision.execution.state === 'complete' &&
     decision.release.state === 'ready'

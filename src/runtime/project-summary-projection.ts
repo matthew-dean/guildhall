@@ -895,7 +895,7 @@ export function buildProjectSummaryProjection(
     start.code === 'all_terminal' &&
     Boolean(releaseSummary.release?.id) &&
     releaseSummary.release?.state !== 'shipped'
-  const decisionStart = projectDecisionStartReadiness(initialDecision)
+  const decisionStart = projectDecisionStartReadiness(initialDecision, canonicalDecisionTaskRefs(tasks))
   const nextAction: ProjectSummaryProjection['nextAction'] = releaseReadyForReview
     ? {
         code: 'release_ready',
@@ -1552,7 +1552,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     runtimeExecution: base.execution,
     canonicalTaskRefs: canonicalDecisionTaskRefs(tasks, current.projectRevision),
   })
-  const decisionStart = projectDecisionStartReadiness(initialDecision)
+  const decisionStart = projectDecisionStartReadiness(initialDecision, canonicalDecisionTaskRefs(tasks, current.projectRevision))
   nextAction = {
     ...nextAction,
     ...(decisionStart.code ? { code: decisionStart.code } : {}),

@@ -738,6 +738,51 @@ describe('project decision projection', () => {
     })
   })
 
+  it('keeps a proof-recovery action on the release proof blocker it clears', () => {
+    const decision = buildProjectDecisionProjection({
+      projectRevision: 42,
+      generatedAt: '2026-08-31T21:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'proof_evidence_missing',
+        focusTaskId: 'task-review-recovery',
+        focusTaskTitle: 'Recover review packet',
+        focusKind: 'proof',
+        message: 'Recover the review packet.',
+      },
+      release: {
+        scopeMode: 'named_release',
+        release: { id: 'release-1' },
+        state: 'blocked',
+        blockers: [{ owningTaskId: 'task-root-proof', code: 'proof_evidence_missing' }],
+      },
+      canonicalTaskRefs: [
+        { taskId: 'task-root-proof', displayTitle: 'Verify the packaged desktop adapter', taskRevision: 42 },
+        { taskId: 'task-review-recovery', displayTitle: 'Recover review packet', taskRevision: 42 },
+      ],
+    })
+
+    expect(decision.primaryAction).toEqual({
+      kind: 'review_proof',
+      targetId: 'task-root-proof',
+      reasonCode: 'proof_evidence_missing',
+    })
+    expect(projectDecisionStartReadiness(decision, [
+      { taskId: 'task-root-proof', displayTitle: 'Verify the packaged desktop adapter', taskRevision: 42 },
+    ])).toMatchObject({
+      canStart: true,
+      code: 'proof_evidence_missing',
+      focusTaskId: 'task-root-proof',
+      focusTaskTitle: 'Verify the packaged desktop adapter',
+      focusKind: 'proof',
+    })
+    expect(applyProjectActionModelPrimaryAction(decision, {
+      source: 'start_readiness',
+      taskId: 'task-review-recovery',
+      code: 'proof_evidence_missing',
+    })).toBe(decision)
+  })
+
   it('turns equally authoritative incompatible claims into an explicit conflict', () => {
     const resolved = resolveProjectStateClaims({ projectRevision: 42, claims: [
       {
