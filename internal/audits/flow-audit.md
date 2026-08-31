@@ -64334,3 +64334,34 @@ summary writer.
   start` with that button, Work listed only `TMI-006`, and Thread showed the
   same button rather than `Nothing current`; all were inspected at the
   desktop viewport with no clipped visible content.
+
+### Finding: Active work must say whether it is actually running or waiting
+
+- [ ] User job: when the owner starts a task, each subsequent surface should
+  immediately say whether Guildhall is actively doing work or waiting for a
+  decision, name the one action available to the owner, and open that action
+  directly from the first focused Work view.
+- Live finding, 2026-08-31: starting t-minus-t `TMI-006` initially rendered
+  `Work is underway` with `Open Work`, then the focused Work card retained the
+  `WORKING` badge while saying `Review the brief before Guildhall starts this
+  work.` The route did offer Pause, but the owner had to choose `Browse work`,
+  select the only task, then choose `Open task` before reaching its detail.
+  That is both contradictory state and three avoidable navigation decisions
+  before an owner can see whether there is a spec to approve.
+
+#### Contract Touch Decision
+
+Work id: `active-work-owner-handoff-2026-08-31`. No code change in this unit.
+The suspected shared contracts are runtime execution state, task handoff
+state, and the action model's focused owner action. Considered but not
+touched: task persistence, task identifiers, spec persistence, release
+lifecycle, route-local copy, and scheduler behavior. Required proof for the
+follow-up: one shared typed state distinguishes active shaping from an owner
+review gate; focused Work opens the selected task's relevant action in one
+click; Overview, Work, Thread, and the task drawer agree. Apply/revert:
+diagnostic finding only.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Diagnose whether existing runtime and handoff
+facts are mis-projected before adding any state.
