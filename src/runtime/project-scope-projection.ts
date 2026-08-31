@@ -7,6 +7,7 @@ import { effectiveTaskStatus } from './effective-task.js'
 import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
+import { reviewVerdictIsNonSubstantiveFailure } from './review-contract.js'
 
 export type ProjectScopeKind = 'release' | 'milestone' | 'proposed_feature_set'
 export type ProjectScopeSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
@@ -776,7 +777,7 @@ function handoffStateForTask(
   if (status === 'done' || status === 'pending_pr') return 'done'
   if (status === 'in_progress') return 'paused'
   if (status === 'review') {
-    return (task.reviewVerdicts ?? []).at(-1)?.failureCode === 'invalid_review_contract'
+    return reviewVerdictIsNonSubstantiveFailure((task.reviewVerdicts ?? []).at(-1))
       ? 'review_retry'
       : 'review'
   }

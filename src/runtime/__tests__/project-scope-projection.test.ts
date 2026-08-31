@@ -429,7 +429,9 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
-  it('distinguishes an exhausted reviewer contract retry from ordinary review work', () => {
+  it.each(['provider_unavailable', 'provider_timeout', 'invalid_review_contract'] as const)(
+    'distinguishes a %s reviewer retry from ordinary review work',
+    (failureCode) => {
     const projection = buildProjectScopeProjection({
       version: 1,
       lastUpdated: now,
@@ -454,9 +456,9 @@ describe('buildProjectScopeProjection', () => {
           reviewerPath: 'llm',
           reviewerId: 'visual-designer',
           reviewerName: 'Visual designer',
-          reason: 'Invalid review contract.',
+          reason: 'Review infrastructure did not return a usable result.',
           reasoning: '',
-          failureCode: 'invalid_review_contract',
+          failureCode,
           recordedAt: now,
         }],
       })],
@@ -471,7 +473,8 @@ describe('buildProjectScopeProjection', () => {
       focusKind: 'review_retry',
       label: 'Retry review',
     })
-  })
+    },
+  )
 
   it('lets project Start advance an exploring source-backed shaping task', () => {
     const projection = buildProjectScopeProjection({

@@ -62046,6 +62046,58 @@ stored data change.
 
 No persisted-schema change.
 
+### Finding: A failed automated review must name the failure, not impersonate ordinary work
+
+- [x] User job: after starting a saved review, an owner can immediately tell
+  whether Guildhall is reviewing, the review passed, a product revision is
+  needed, or the review service failed. A failed reviewer run must preserve
+  the saved change and offer one explicit `Retry review` action; it must never
+  return the owner to generic `Resume review` copy that conceals the reason.
+- Live finding, 2026-08-31: t-minus-t task `TMI-005` started its automated
+  review, stopped after about one minute, then returned to the same `Resume
+  review` card. Thread recorded a typed reviewer-fanout/provider failure, but
+  the shared scope projection recognized only `invalid_review_contract` and
+  treated provider unavailability and timeouts as normal review work.
+- [x] Shared repair: scope handoff state now delegates all reviewer
+  infrastructure and contract failure classification to
+  `reviewVerdictIsNonSubstantiveFailure`. Every owner surface consumes the
+  resulting `review_retry` action packet, which names the preserved work and
+  presents `Retry review` rather than a misleading generic resume.
+
+#### Contract Touch Decision
+
+Work id: `reviewer-infrastructure-owner-handoff-2026-08-31`. Touched
+contracts: the shared project-scope handoff state and start-readiness/action
+projection for review tasks. Considered but not touched: reviewer output
+prose, task lifecycle enum, provider configuration, task persistence, review
+dispatch, and owner-review criteria. Required proof: each typed
+non-substantive reviewer failure produces `review_retry`, and the installed
+t-minus-t Work route renders that shared action. Apply/revert: applies only
+to the derived read model; reverting restores prior projection behavior
+without mutating saved tasks or review evidence.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing persisted reviewer failure codes are
+already typed and readable; this correction changes only their shared owner
+handoff classification.
+
+#### Validation
+
+- Focused scope/action tests passed 90/90, including provider unavailable,
+  provider timeout, and invalid review-contract failure cases; typecheck and
+  `pnpm lint:contracts` passed.
+- Installed proof: rebuilt and reinstalled local Guildhall `0.13.3`, restarted
+  the service, and confirmed `/api/stale-server` reported `stale:false`.
+  The same persisted t-minus-t `TMI-005` provider/fan-out failure now renders
+  one `Automated review needs retry` card and one visible `Retry review`
+  action at desktop (1280px), narrow desktop (960px), and mobile (Pixel 5)
+  with no clipped controls.
+- Cross-surface proof: installed Overview, Work, Thread, and Release each
+  reported the same task, failure explanation, and executable `Retry review`
+  action from the shared action model.
+- Calibration: `internal/calibration/cases/ux/reviewer-infrastructure-retry-handoff.yaml`.
+
 ### Finding: Release verification must read and write one project-scoped design-system state
 
 - [x] User job: after Guildhall writes design-system guidance, release readiness

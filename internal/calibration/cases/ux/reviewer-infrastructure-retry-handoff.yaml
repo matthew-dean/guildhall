@@ -1,0 +1,43 @@
+id: reviewer-infrastructure-retry-handoff
+title: Reviewer infrastructure failure needs an explicit retry handoff
+domain: ux
+productType: project-management
+surfaceType: web-app
+userGoal: Understand what happened after automated review stops and take the one safe next action.
+scenario: A task with saved changes enters automated review, but every reviewer fails with a typed provider or contract failure. The task remains reviewable; the owner must not be told that normal work is ready to resume.
+artifacts:
+  - id: misleading-work-card
+    kind: copy_snippet
+    description: Incorrect owner handoff after review infrastructure fails.
+    content: "Review ready to continue. The implementation is saved. Resume review to have Guildhall check the current change."
+reviewLanes:
+  - ux_comprehension
+  - copy_clarity
+knownFindings:
+  - id: infrastructure-failure-impersonates-work
+    lane: ux_comprehension
+    severity: high
+    summary: The owner cannot distinguish a failed review service from ordinary pending review work.
+    impact: Retrying appears to be the expected normal workflow, hiding whether the saved change is safe and why progress stopped.
+    minimumUsefulFix: Preserve the typed failure, state that automated review could not complete and saved work remains intact, then present one Retry review action.
+    matchHints:
+      - automated review needs retry
+      - saved change is intact
+      - retry review
+falsePositiveTraps:
+  - id: dont-invent-product-defect
+    summary: Provider, timeout, and review-contract failures are infrastructure events, not evidence of a product defect or owner review requirement.
+  - id: dont-hide-retry
+    summary: It is not enough to preserve a diagnostic record; the retry must be the visible action on the landing surface.
+source:
+  kind: internal_dogfood
+  citation: t-minus-t TMI-005 automated-review run, 2026-08-31.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-08-31T17:10:00.000Z
+  reviewStatus: seed
+privacyClassification: internal
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2027-02-28
+  reason: Review infrastructure semantics and owner handoff policy may evolve.
