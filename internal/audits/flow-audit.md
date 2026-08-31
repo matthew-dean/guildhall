@@ -64365,3 +64365,55 @@ diagnostic finding only.
 
 No persisted-schema change. Diagnose whether existing runtime and handoff
 facts are mis-projected before adding any state.
+
+### Finding: Review must mean reviewable implementation exists
+
+- [x] User job: when Guildhall says a task is ready for review, the owner can
+  trust that the scoped task worktree or task branch contains the implementation
+  and that the recorded proof belongs to that implementation. If the work was
+  lost during recovery, the task stays in implementation with a truthful
+  `Resume implementation` action; the owner is never sent to review a claim.
+- Live finding, 2026-08-31: t-minus-t `TMI-006` briefly made
+  `packages/extension/package.json` dirty, then workspace recovery rebuilt a
+  clean task worktree. The worker subsequently persisted a structurally valid
+  self-critique claiming the menu change and passing `pnpm build`, `pnpm test`,
+  and `pnpm lint`. It transitioned the task to `review`, and the shared start
+  model told the owner: “The implementation is saved. Resume review.” The
+  managed worktree was clean, its branch equaled `main`, and the generated
+  review packet listed no changed files or command results. This is a
+  source-of-truth breach, not a copy or routing issue.
+
+#### Contract Touch Decision
+
+Work id: `durable-review-admission-2026-08-31`. Touched contracts: worker
+handoff admission at the shared `update-task` mutation boundary and the
+persisted task-workspace/base-branch metadata it consumes. A typed worker
+self-critique remains required audit material, but it is insufficient to
+enter `review` unless the current task worktree has a reviewable diff or its
+task branch has a commit ahead of the base. Considered but not touched:
+self-critique schema, model prose, acceptance-criterion schema, release
+selection, route-local copy, task identifiers, and owner-action presentation.
+Required proof: a worker can use `update-task` to write a well-formed
+self-critique and request review after its worktree is cleaned; that dispatch
+must leave the task in `in_progress` rather than create a reviewer or
+owner-facing review action. A clean committed task branch must still be
+admitted. Proof provided: the focused task-queue test exercises both cases;
+the complete task-queue suite, typecheck, contract detector, and
+model-independence gate pass. Apply/revert: applying prevents false handoffs
+without discarding their audit notes; reverting restores the unsafe
+claim-based transition.
+
+#### Schema Migration Decision
+
+No persisted-schema change. Existing worktree metadata, branch/base metadata,
+task evidence, and lifecycle statuses are sufficient; this repairs their
+admission ordering.
+
+#### Remaining Regression Work
+
+- [ ] `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts` is currently
+  red with 18 failures in older recovery, review-packet, progress-checkpoint,
+  and scoped-run fixtures. This repair's focused task-queue suite passes and
+  it was proven against the installed T-minus-T project, but the broader
+  suite is not release proof. Diagnose each failing fixture against the
+  current managed-worktree contract before treating this branch as green.

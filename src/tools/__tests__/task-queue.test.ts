@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { execFileSync } from 'node:child_process'
 import {
   readTasks,
   updateTask,
@@ -23,6 +24,7 @@ import {
   readProjectStateDatabaseTaskPointWithRevision,
   readProjectTaskQueueSync as readProjectTaskQueueSyncRaw,
   readTaskEvidence,
+  upsertTaskWorkspaceState,
   TASK_EVIDENCE_RETENTION,
 } from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
@@ -522,6 +524,78 @@ describe('updateTask', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('requires one durable self-critique')
+  })
+
+  it('rejects a typed worker review handoff when its managed worktree has no implementation diff or commit', async () => {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Test'], { cwd: tmpDir })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], { cwd: tmpDir })
+    await fs.writeFile(path.join(tmpDir, '.gitignore'), 'TASKS.json\n.guildhall/\nproject-state.db\n', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'README.md'), '# Fixture\n', 'utf8')
+    execFileSync('git', ['add', '.gitignore', 'README.md'], { cwd: tmpDir, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'Initial fixture'], { cwd: tmpDir, stdio: 'ignore' })
+    const task = seedQueue.tasks[0]! as unknown as TaskQueue['tasks'][number]
+    task.status = 'in_progress'
+    task.worktreePath = tmpDir
+    task.branchName = 'guildhall/task-task-001'
+    task.baseBranch = 'main'
+    task.acceptanceCriteria = [{
+      id: 'AC-1',
+      description: 'The focused behavior is implemented.',
+      verifiedBy: 'automated',
+      met: false,
+    }]
+    writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskWorkspaceState(tmpDir, 'task-001', {
+      worktreePath: tmpDir,
+      branchName: 'guildhall/task-task-001',
+      baseBranch: 'main',
+      mode: 'per_task',
+      createdAt: '2026-08-31T00:00:00.000Z',
+      updatedAt: '2026-08-31T00:00:00.000Z',
+    })
+    expect(execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+      cwd: tmpDir,
+      encoding: 'utf8',
+    })).toBe('')
+    expect(execFileSync('git', ['diff', '--name-only', 'main...HEAD'], {
+      cwd: tmpDir,
+      encoding: 'utf8',
+    })).toBe('')
+
+    const reviewHandoff = {
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: 'The explanation is arbitrary; source state decides this handoff.',
+        structured: {
+          acceptanceCriteria: [{ id: 'AC-1', status: 'met' }],
+          changedFiles: ['src/index.ts'],
+          verificationCommands: [{ command: 'pnpm test', status: 'passed' }],
+          proofEvidenceIds: [],
+        },
+      },
+    } as const
+    const metadata = { current_agent_id: 'worker-agent', current_task_project_path: tmpDir }
+
+    const result = await updateTask(reviewHandoff, metadata)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('no project-file diff or commit ahead of the task base')
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]).toMatchObject({ status: 'in_progress' })
+
+    await fs.mkdir(path.join(tmpDir, 'src'))
+    await fs.writeFile(path.join(tmpDir, 'src', 'index.ts'), 'export const fixture = true\n', 'utf8')
+    execFileSync('git', ['switch', '-c', 'guildhall/task-task-001'], { cwd: tmpDir, stdio: 'ignore' })
+    execFileSync('git', ['add', 'src/index.ts'], { cwd: tmpDir, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'Implement fixture'], { cwd: tmpDir, stdio: 'ignore' })
+
+    const admitted = await updateTask(reviewHandoff, metadata)
+    expect(admitted.success).toBe(true)
   })
 
   it('admits review from a previously persisted typed worker self-critique', async () => {

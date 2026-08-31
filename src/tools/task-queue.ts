@@ -2,8 +2,10 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, st
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { createHash } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import {
   applyTaskTransition,
   type TaskTransitionEvent,
@@ -40,6 +42,7 @@ import {
   readProjectStateDatabaseTaskEvidenceAuthorityFromTasksPath,
   readProjectStateDatabaseTaskEvidenceCurrent,
   readProjectStateDatabaseTaskPointWithRevision,
+  readTaskWorkspaceStore,
   TASK_EVIDENCE_RETENTION,
   upsertTaskRuntimeState,
   withProjectStateWriteLock,
@@ -55,6 +58,8 @@ import { ownerSpecRevisionRequirements, validateSpecGrounding } from '@guildhall
 import { taskDoneButProofMissing } from '@guildhall/runtime/proof-health'
 import { buildEffectiveTaskFromDatabaseOverlay } from '@guildhall/runtime/effective-task'
 import { ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand, proofIdentityMarkerForTask, proofSetupHasTaskIdentity } from '@guildhall/runtime/proof-paths'
+
+const execFileAsync = promisify(execFile)
 
 const TASKS_PATH_SCHEMA = z.string().describe(
   'Injected project task-state handle. Pass it only to task tools; do not inspect or edit it with filesystem tools.',
@@ -231,6 +236,68 @@ function persistedWorkerSelfCritique(
     if (structured !== null) return structured
   }
   return null
+}
+
+function isProjectImplementationPath(file: string): boolean {
+  const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
+  return normalized.length > 0 &&
+    normalized !== 'project-state.db' &&
+    normalized !== '.guildhall' &&
+    !normalized.startsWith('.guildhall/')
+}
+
+type ManagedWorktreeReviewSurface =
+  | { kind: 'reviewable' }
+  | { kind: 'missing' }
+  | { kind: 'unavailable'; detail: string }
+  | null
+
+/**
+ * A worker handoff packet records what the worker claims. The managed task
+ * worktree is the implementation authority: review can begin only when it
+ * still has a real diff or a commit ahead of the task base.
+ */
+async function managedWorktreeReviewSurface(
+  task: z.infer<typeof Task>,
+  projectRoot: string,
+): Promise<ManagedWorktreeReviewSurface> {
+  const workspace = await readTaskWorkspaceStore(projectRoot)
+    .then(store => store.workspaces[task.id] ?? null)
+    .catch(() => null)
+  const worktreePath = workspace?.worktreePath?.trim()
+  if (!worktreePath) return null
+  try {
+    const status = await execFileAsync(
+      'git',
+      ['status', '--porcelain=v1', '--untracked-files=all'],
+      { cwd: worktreePath },
+    )
+    const dirtyFiles = String(status.stdout)
+      .split('\n')
+      .map(line => line.slice(3).trim())
+      .filter(isProjectImplementationPath)
+    if (dirtyFiles.length > 0) return { kind: 'reviewable' }
+
+    const baseBranch = workspace?.baseBranch?.trim()
+    if (!baseBranch) {
+      return { kind: 'unavailable', detail: 'the managed task worktree has no base branch' }
+    }
+    const committed = await execFileAsync(
+      'git',
+      ['diff', '--name-only', `${baseBranch}...HEAD`],
+      { cwd: worktreePath },
+    )
+    const committedFiles = String(committed.stdout)
+      .split('\n')
+      .map(file => file.trim())
+      .filter(isProjectImplementationPath)
+    return committedFiles.length > 0 ? { kind: 'reviewable' } : { kind: 'missing' }
+  } catch (error) {
+    return {
+      kind: 'unavailable',
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  }
 }
 
 function normalizeStructuredSpecDisplayField(value: unknown): unknown {
@@ -650,6 +717,26 @@ async function updateTaskUnlocked(
           taskId,
           error:
             'This task has another specialist step. Worker self-critique requires structured.handoff with completed, knownGaps, and optional nextFocus fields; Guildhall never extracts handoff state from prose or Markdown headings.',
+        }
+      }
+      const implementationSurface = await managedWorktreeReviewSurface(
+        task,
+        projectRootForTaskState(input.tasksPath, task, metadata),
+      )
+      if (implementationSurface?.kind === 'missing') {
+        return {
+          success: false,
+          taskId,
+          error:
+            'Worker review handoff requires reviewable implementation in the managed task worktree or task branch. Guildhall found no project-file diff or commit ahead of the task base, so resume implementation before requesting review.',
+        }
+      }
+      if (implementationSurface?.kind === 'unavailable') {
+        return {
+          success: false,
+          taskId,
+          error:
+            `Worker review handoff could not verify the managed task worktree. Restore the task workspace or its base branch before requesting review. (${implementationSurface.detail})`,
         }
       }
     }
