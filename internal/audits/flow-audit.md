@@ -64779,3 +64779,27 @@ post-turn ordering.
   it was proven against the installed T-minus-T project, but the broader
   suite is not release proof. Diagnose each failing fixture against the
   current managed-worktree contract before treating this branch as green.
+
+### Finding: A release action must resolve the release blocker it explains
+
+- [ ] User job: on a project overview, a user should see the current release,
+  its concise progress, what prevents it from finishing, and one action that
+  directly advances that blocker. The next action must not quietly target a
+  different task while the release remains blocked elsewhere.
+- Live finding, 2026-08-31: Narrative Harness overview shows `5 of 9
+  complete`, then one action for `NAR-091 Present draft review evaluation and
+  provenance`: `Run verification`. The shared release state says the release
+  is blocked by missing review evidence on already-done `NAR-087` through
+  `NAR-090`, while `NAR-091` is a separate proof-recovery task. The overview
+  does not say that the visible action leaves the stated release blockers in
+  place, nor does it offer the blocker-resolving action. A user can act
+  correctly on the only button and still make no progress toward release.
+
+#### Next Work
+
+- Reconcile release blockers and primary action in the shared decision/action
+  projection. Either the action must advance the first true release blocker,
+  or the overview must explicitly distinguish the current task from the
+  remaining release blockers and give the user a direct way to address them.
+- Re-run the same comparison across API, overview, Work, Release, and top
+  chrome at desktop and mobile before changing route-local copy.
