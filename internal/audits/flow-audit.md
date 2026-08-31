@@ -64406,6 +64406,37 @@ already-landed work to run through the worker lane again.
 No persisted-schema change. Existing merge-record, status, proof, and runtime
 assignee facts are sufficient; the repair reconciles them before dispatch.
 
+### Finding: A review retry must lead to evidence, not another blind review
+
+- [ ] User job: when a task needs review evidence, the owner can tell what
+  evidence is missing and has one action that can produce it. Guildhall must
+  not offer `Retry review` when no reviewable source target or required proof
+  is available to that reviewer.
+- Live finding, 2026-08-31: Narrative Harness `NAR-091` was presented as
+  `REVIEW RETRY` with a lone `Retry review` button. Its current state has no
+  task-branch diff, while the evidence contract says the missing blocker is
+  visual proof for `ac-6`. The latest reviewer fan-out correctly recorded an
+  `invalid_review_contract`, but the shared next action still proposes another
+  automated review, which cannot create the absent visual evidence. At 1280px
+  the focused Work page is unclipped and sparse, but its only choice sends the
+  owner into a known non-progress loop.
+
+#### Contract Touch Decision
+
+Work id: `review-retry-actionability-2026-08-31`. No contract is changed in
+this audit entry. The next repair must decide whether review-target receipts,
+visual-evidence production, or proof-recovery routing owns the missing fact.
+It must prove that a retry action is offered only when the selected lane can
+produce or evaluate the required evidence; otherwise the owner sees a specific
+evidence-producing action or a truthful blocked state. Considered but not
+touched: reviewer prose parsing, task-definition schema, release selection,
+route-local action copy, and task-card layout.
+
+#### Schema Migration Decision
+
+No persisted-schema change proposed. Assess whether existing proof paths and
+review packets can carry a stable evidence-producing target before adding one.
+
 ### Finding: Review must mean reviewable implementation exists
 
 - [x] User job: when Guildhall says a task is ready for review, the owner can
