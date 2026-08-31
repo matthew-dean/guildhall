@@ -175,6 +175,7 @@ export type ProjectActionOwnerHeading =
   | 'Ready to start'
   | 'Review ready to continue'
   | 'Automated review needs retry'
+  | 'Proof needs recovery'
   | 'Branch is ready to share'
   | 'Pull request is ready to open'
   | 'Release is ready'
@@ -205,6 +206,7 @@ function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): Pro
     case 'paused_live_work': return 'Work paused'
     case 'worker_recovery': return 'Worker needs a fresh pass'
     case 'review_retry': return 'Automated review needs retry'
+    case 'proof_evidence_missing': return 'Proof needs recovery'
     case 'running': return 'Work is underway'
     case 'ready_work': return 'Ready to start'
     case 'release_ready': return 'Release is ready'
@@ -367,7 +369,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Shape first task'
   if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
-  if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
+  if (readiness.code === 'proof_evidence_missing') return 'Capture proof'
   if (readiness.code === 'scope_source_conflict') return 'Open map'
   if (readiness.code === 'repository_followup_required') return 'Open release'
   if (readiness.code === 'ready_work') return 'Start work'
@@ -386,6 +388,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (running) return 'Pause'
   if (readiness?.focusKind === 'review_retry' || readiness?.code === 'review_retry') return 'Retry review'
   if (readiness?.focusKind === 'review_work') return 'Resume review'
+  if (readiness?.code === 'proof_evidence_missing') return 'Capture proof'
   if (readiness?.code === 'ready_work') return 'Start'
   if (readiness?.progressState === 'worker_retry_recommended' || readiness?.progressState === 'worker_edit_loss') return 'Retry worker'
   if (!readiness || readiness.canStart) return 'Resume'
@@ -396,7 +399,6 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Needs shaping'
   if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
-  if (readiness.code === 'proof_evidence_missing') return 'Resume'
   if (readiness.code === 'scope_source_conflict') return 'Review conflict'
   if (readiness.code === 'repository_followup_required') return 'Repo follow-up'
   if (readiness.code === 'paused_live_work') return 'Resume'
@@ -662,6 +664,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const specRepair = readiness.focusKind === 'spec_repair'
   const reviewWork = readiness.focusKind === 'review_work'
   const reviewRetry = readiness.focusKind === 'review_retry' || readiness.code === 'review_retry'
+  const proofRecovery = readiness.focusKind === 'proof' && readiness.code === 'proof_evidence_missing'
   const repositoryOperation = readiness.repositoryOperation
   const repositoryFollowup = readiness.code === 'repository_followup_required'
   const blockedWork = readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work'
@@ -670,7 +673,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
   const pausedSavedWorkDetail = readiness.focusTaskTitle?.trim()
     ? `"${readiness.focusTaskTitle.trim()}" is paused with saved work. Resume continues the same task.`
     : 'Work is paused with saved progress. Resume continues the same task.'
-  const operation = repositoryOperation ?? (readiness.canStart && readiness.focusTaskId && (runnableWork || reviewRetry)
+  const operation = repositoryOperation ?? (readiness.canStart && readiness.focusTaskId && (runnableWork || reviewRetry || proofRecovery)
     ? (specRepair ? 'repair_spec' : 'start_focused')
     : undefined)
   const label = repositoryOperation === 'push_branch'
@@ -685,6 +688,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ? 'Review ready to continue'
     : reviewRetry
     ? 'Automated review needs retry'
+    : proofRecovery
+    ? 'Proof needs recovery'
     : specRepair
     ? 'Repair this spec'
     : ownerReview
@@ -692,7 +697,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     : runnableWork
       ? (readiness.code === 'paused_live_work' ? 'Work paused' : 'Work ready to start')
       : startReadinessActionLabel(readiness)
-  const taskLabel = ownerReview || runnableWork || reviewRetry || repositoryFollowup ? readiness.focusTaskTitle?.trim() : undefined
+  const taskLabel = ownerReview || runnableWork || reviewRetry || proofRecovery || repositoryFollowup ? readiness.focusTaskTitle?.trim() : undefined
   // The selected task is the decision. A review-queue count is operational
   // context, not an explanation that competes with that task on every surface.
   const detail = repositoryOperation === 'push_branch'
@@ -707,6 +712,8 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
     ? 'The implementation is saved. Resume review to have Guildhall check the current change.'
     : reviewRetry
     ? 'Guildhall could not complete its automated review. The saved change is intact; retry review starts that check again.'
+    : proofRecovery
+    ? 'The review needs current evidence. Capture that proof before Guildhall retries the automated review.'
     : readiness.progressState === 'partial_work_saved'
     ? pausedSavedWorkDetail
     : pausedWork
@@ -731,7 +738,7 @@ function startReadinessAction(readiness: ProjectActionStartReadiness): ProjectAc
       : readiness.actionHref ?? (readiness.code === 'ready_work' ? workHrefForTask(readiness.focusTaskId) : '/overview'),
     tone: readiness.code === 'required_migration_pending'
       ? 'danger'
-      : workerRetryRecommended || workerEditLoss || reviewRetry
+      : workerRetryRecommended || workerEditLoss || reviewRetry || proofRecovery
         ? 'warn'
       : readiness.code === 'ready_work' || readiness.code === 'paused_live_work'
         ? 'accent'
@@ -906,7 +913,8 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       startReadiness.code === 'ready_work' ||
       startReadiness.code === 'paused_live_work' ||
       startReadiness.code === 'worker_recovery' ||
-      startReadiness.code === 'review_retry'
+      startReadiness.code === 'review_retry' ||
+      startReadiness.code === 'proof_evidence_missing'
     )
   ) {
     candidates.push(startReadinessAction(startReadiness))

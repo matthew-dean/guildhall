@@ -513,6 +513,62 @@ describe('buildProjectScopeProjection', () => {
     },
   )
 
+  it('routes a failed review with missing required review proof to proof recovery', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-review-proof'],
+        deferredNodeIds: [],
+        proofStyle: 'manual',
+      }],
+      tasks: [task({
+        id: 'task-review-proof',
+        title: 'Capture desktop review proof',
+        status: 'review',
+        releaseIds: ['stage-1'],
+        reviewVerdicts: [{
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reviewerId: 'visual-designer',
+          reviewerName: 'Visual designer',
+          reason: 'Review evidence was not recorded.',
+          reasoning: '',
+          failureCode: 'invalid_review_contract',
+          recordedAt: now,
+        }],
+        proofPaths: [{
+          id: 'task-review-proof-ac-1',
+          kind: 'review',
+          expectedEvidence: [{
+            id: 'ac-desktop-review',
+            kind: 'manual',
+            description: 'Review the desktop view at the supported sizes.',
+            required: true,
+          }],
+          verificationRecords: [],
+        }],
+      })],
+    })
+
+    expect(projection.rows.find(row => row.taskId === 'task-review-proof')).toMatchObject({
+      handoffState: 'proof_recovery',
+    })
+    expect(projection.start).toMatchObject({
+      canStart: true,
+      code: 'proof_evidence_missing',
+      focusKind: 'proof',
+      label: 'Capture proof',
+      focusTaskId: 'task-review-proof',
+    })
+  })
+
   it('lets project Start advance an exploring source-backed shaping task', () => {
     const projection = buildProjectScopeProjection({
       version: 1,

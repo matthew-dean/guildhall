@@ -4,7 +4,7 @@ import { deriveTaskWorkVisibility } from './work-visibility.js'
 import { META_INTAKE_TASK_ID, WORKSPACE_IMPORT_TASK_ID } from './project-reserved-task-ids.js'
 import { specReviewIsReadyForOwnerApproval, specReviewNeedsRepair } from './spec-review-ownership.js'
 import { effectiveTaskStatus } from './effective-task.js'
-import { taskDoneButProofMissingForScope } from './proof-health.js'
+import { reviewProofMissingApprovalIds, taskDoneButProofMissingForScope } from './proof-health.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
 import { reviewVerdictIsNonSubstantiveFailure } from './review-contract.js'
@@ -22,6 +22,7 @@ export type ProjectScopeHandoffState =
   | 'paused'
   | 'review'
   | 'review_retry'
+  | 'proof_recovery'
   | 'deferred'
   | 'done'
   | 'blocked'
@@ -145,7 +146,7 @@ export interface ProjectScopeProjection {
   start: {
     canStart: boolean
     code?: string
-    label: 'Start' | 'Resume' | 'Review' | 'Retry review' | 'Configure' | 'Answer in Thread'
+    label: 'Start' | 'Resume' | 'Review' | 'Retry review' | 'Capture proof' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: 'paused_work' | 'ready_work' | 'review_work' | 'review_retry' | 'spec_repair' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input' | 'owner_review'
@@ -797,9 +798,10 @@ function handoffStateForTask(
   if (status === 'done' || status === 'pending_pr') return 'done'
   if (status === 'in_progress') return 'paused'
   if (status === 'review') {
-    return reviewVerdictIsNonSubstantiveFailure((task.reviewVerdicts ?? []).at(-1))
-      ? 'review_retry'
-      : 'review'
+    if (reviewVerdictIsNonSubstantiveFailure((task.reviewVerdicts ?? []).at(-1))) {
+      return reviewProofMissingApprovalIds(task).length > 0 ? 'proof_recovery' : 'review_retry'
+    }
+    return 'review'
   }
   if (status === 'gate_check') return 'review'
   if (status === 'spec_review') {
@@ -989,7 +991,11 @@ export function summarizeExecutionScopeRows(rows: readonly ProjectScopeRow[]): P
     deferred: counted.filter(row => row.scope === 'deferred').length,
     ready: included.filter(row => row.handoffState === 'ready').length,
     paused: included.filter(row => row.handoffState === 'paused').length,
-    active: included.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
+    active: included.filter(row =>
+      row.handoffState === 'paused' ||
+      row.handoffState === 'review' ||
+      row.handoffState === 'proof_recovery',
+    ).length,
     done: included.filter(row => row.handoffState === 'done').length,
     ownerBlocked: included.filter(projectScopeRowNeedsOwnerInput).length,
     proofBlocked: included.filter(row => row.proofBlocked).length,
@@ -1116,6 +1122,19 @@ export function summarizeProjectScopeStart(
       focusKind: 'ready_work',
       message: `"${specWork.title}" is ready for spec work.`,
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
+    }
+  }
+  const proofRecovery = included.find(row => !row.dependencyBlocked && row.handoffState === 'proof_recovery')
+  if (proofRecovery) {
+    return {
+      canStart: true,
+      code: 'proof_evidence_missing',
+      label: 'Capture proof',
+      focusTaskId: proofRecovery.taskId,
+      focusTaskTitle: proofRecovery.title,
+      focusKind: 'proof',
+      message: `"${proofRecovery.title}" needs current review evidence before automated review can continue. Capture that proof now.`,
+      actionHref: `/work?task=${encodeURIComponent(proofRecovery.taskId)}`,
     }
   }
   // An exhausted automatic review retry is not ordinary review work. The

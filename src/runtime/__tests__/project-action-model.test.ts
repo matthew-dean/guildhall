@@ -426,6 +426,31 @@ describe('buildProjectActionModel', () => {
     expect(model.runControl).toMatchObject({ label: 'Retry review', startEnabled: true })
   })
 
+  it('makes missing review evidence a direct proof action instead of a blind retry', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'proof_evidence_missing',
+        focusTaskId: 'task-review-proof',
+        focusTaskTitle: 'Capture desktop review proof',
+        focusKind: 'proof',
+        actionHref: '/work?task=task-review-proof',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      code: 'proof_evidence_missing',
+      ownerHeading: 'Proof needs recovery',
+      taskId: 'task-review-proof',
+      buttonLabel: 'Capture proof',
+      detail: 'The review needs current evidence. Capture that proof before Guildhall retries the automated review.',
+      operation: 'start_focused',
+      tone: 'warn',
+    })
+    expect(model.runControl).toMatchObject({ label: 'Capture proof', startEnabled: true })
+  })
+
   it('retains setup state without reopening setup urgency after a release shipped', () => {
     const model = buildProjectActionModel({
       startReadiness: {
@@ -788,12 +813,12 @@ describe('buildProjectActionModel', () => {
     })
     expect(proofRecovery.primaryAction).toMatchObject({
       source: 'start_readiness',
-      buttonLabel: 'Attach proof',
+      buttonLabel: 'Capture proof',
       href: '/work?task=current-done',
       tone: 'warn',
     })
     expect(proofRecovery.runControl).toMatchObject({
-      label: 'Resume',
+      label: 'Capture proof',
       startEnabled: true,
     })
 

@@ -432,6 +432,9 @@
     if (focusedWork && detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
       return detail.actionModel.primaryAction.ownerHeading ?? 'Automated review needs retry'
     }
+    if (focusedWork && detail.actionModel?.primaryAction?.code === 'proof_evidence_missing' && detail.actionModel.primaryAction.taskId === focusedWork.id) {
+      return detail.actionModel.primaryAction.ownerHeading ?? 'Proof needs recovery'
+    }
     if (focusedWork && detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === focusedWork.id) {
       return detail.actionModel?.primaryAction?.ownerHeading ?? 'Review ready to continue'
     }
@@ -474,7 +477,7 @@
       if (task && isProofMissingTask(task)) {
         const retryRes = await postTaskAction(taskId, 'retry-work', {
           projectId: detail.id,
-          instruction: 'Recover the missing release proof for this completed work item. Do not treat the task as complete again until the expected proof evidence is recorded.',
+          instruction: 'Capture the required current proof evidence for this task. Do not retry review until the evidence is recorded.',
         })
         if (!retryRes.ok) {
           const body = await retryRes.json().catch(() => ({})) as { error?: string }
@@ -663,7 +666,11 @@
   }
 
   function isProofMissingTask(task: Task): boolean {
-    return proofMissingTaskIds.has(task.id)
+    return proofMissingTaskIds.has(task.id) || (
+      detail.startReadiness?.code === 'proof_evidence_missing' &&
+      detail.startReadiness.focusKind === 'proof' &&
+      detail.startReadiness.focusTaskId === task.id
+    )
   }
 
   function workAreaForTask(task: Task) {
@@ -806,7 +813,7 @@
     // Older saved ready-work actions predate the explicit operation field;
     // their typed code remains a safe executable compatibility contract.
     return action.code === 'ready_work' ||
-      ((action.code === 'paused_live_work' || action.code === 'worker_recovery' || action.code === 'review_retry') && action.operation === 'start_focused')
+      ((action.code === 'paused_live_work' || action.code === 'worker_recovery' || action.code === 'review_retry' || action.code === 'proof_evidence_missing') && action.operation === 'start_focused')
   }
 
   function isOwnerSpecReview(task: Task): boolean {
@@ -831,6 +838,7 @@
     if (isFocusedWorkStarting(task)) return 'Starting'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'Needs retry'
     if (detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === task.id) return 'Review retry'
+    if (detail.actionModel?.primaryAction?.code === 'proof_evidence_missing' && detail.actionModel.primaryAction.taskId === task.id) return 'Proof needed'
     if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'Review ready'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'Paused'
     return isFocusedRunnableWork(task) ? 'Ready' : effectiveStatusLabel(task)
@@ -841,6 +849,7 @@
     if (isFocusedWorkStarting(task)) return 'accent'
     if (detail.actionModel?.primaryAction?.code === 'worker_recovery' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
     if (detail.actionModel?.primaryAction?.code === 'review_retry' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
+    if (detail.actionModel?.primaryAction?.code === 'proof_evidence_missing' && detail.actionModel.primaryAction.taskId === task.id) return 'warn'
     if (detail.startReadiness?.focusKind === 'review_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     if (detail.startReadiness?.code === 'paused_live_work' && detail.startReadiness.focusTaskId === task.id) return 'accent'
     return isFocusedRunnableWork(task) ? 'ok' : effectiveStatusTone(task)

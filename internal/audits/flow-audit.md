@@ -64408,7 +64408,7 @@ assignee facts are sufficient; the repair reconciles them before dispatch.
 
 ### Finding: A review retry must lead to evidence, not another blind review
 
-- [ ] User job: when a task needs review evidence, the owner can tell what
+- [x] User job: when a task needs review evidence, the owner can tell what
   evidence is missing and has one action that can produce it. Guildhall must
   not offer `Retry review` when no reviewable source target or required proof
   is available to that reviewer.
@@ -64423,19 +64423,40 @@ assignee facts are sufficient; the repair reconciles them before dispatch.
 
 #### Contract Touch Decision
 
-Work id: `review-retry-actionability-2026-08-31`. No contract is changed in
-this audit entry. The next repair must decide whether review-target receipts,
-visual-evidence production, or proof-recovery routing owns the missing fact.
-It must prove that a retry action is offered only when the selected lane can
-produce or evaluate the required evidence; otherwise the owner sees a specific
-evidence-producing action or a truthful blocked state. Considered but not
-touched: reviewer prose parsing, task-definition schema, release selection,
-route-local action copy, and task-card layout.
+Work id: `review-retry-actionability-2026-08-31`. Touched contracts: the
+shared project-scope handoff state, start-readiness/action model, and
+`retry-work` proof-recovery admission. A non-substantive review failure with
+unmet required review-proof IDs enters `proof_recovery`; the owner action must
+start that recovery instead of dispatching the reviewer again. Required proof:
+the shared state identifies the missing proof from structured IDs, every owner
+surface presents `Capture proof`, and the endpoint persists typed
+`proofRecovery` before worker dispatch. Considered but not touched: reviewer
+prose parsing, task-definition schema, release selection, route-local action
+ranking, and task-card layout. Apply/revert: applying turns an impossible
+review retry into proof production; reverting restores the invalid retry loop.
 
 #### Schema Migration Decision
 
-No persisted-schema change proposed. Assess whether existing proof paths and
-review packets can carry a stable evidence-producing target before adding one.
+Persisted schema touched: `work_scope.handoff_state` gains the compatible
+enumerated value `proof_recovery`. Existing rows remain readable because the
+column is text and the shared reader handles all prior values. No data rewrite
+is required. The writer derives this value from existing review-proof paths and
+review verdict records; rollback maps future rows back to `review_retry`.
+
+#### Evidence
+
+- Focused projection, action-model, Work UI, and `retry-work` endpoint
+  regressions pass. The endpoint regression proves a failed review with a
+  missing required manual review-proof ID becomes `in_progress` with a typed
+  `proofRecovery` marker before any worker can dispatch.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence` pass.
+- Installed-app replay, 2026-08-31: after `pnpm build`, `pnpm dev:install`,
+  `guildhall stop`, and `guildhall start`, `/api/stale-server` reported
+  `stale:false`. Narrative Harness `NAR-091` showed one `Proof needs recovery`
+  handoff with `NAR-091`, `PROOF NEEDED`, a concrete explanation, and one
+  visible `Capture proof` command at 1280x800, 1024x800, and 390x844. Each
+  viewport had `scrollWidth === clientWidth`. The action was not launched
+  during this visual replay, so no provider work or project state changed.
 
 ### Finding: Review must mean reviewable implementation exists
 

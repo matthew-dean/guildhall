@@ -4323,6 +4323,54 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(noteText).not.toContain('missing release proof')
   })
 
+  it('reopens a failed review to capture its missing required review evidence', async () => {
+    await seedTask('task-1', {
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      notes: [],
+      reviewVerdicts: [{
+        verdict: 'revise',
+        reviewerPath: 'llm',
+        reviewerId: 'visual-designer',
+        reviewerName: 'Visual designer',
+        reason: 'Review evidence was not recorded.',
+        reasoning: '',
+        failureCode: 'invalid_review_contract',
+        recordedAt: '2026-07-06T20:01:00.000Z',
+      }],
+      proofPaths: [{
+        id: 'task-1-desktop-review',
+        kind: 'review',
+        expectedEvidence: [{
+          id: 'ac-desktop-review',
+          kind: 'manual',
+          description: 'Review the desktop view at supported sizes.',
+          required: true,
+        }],
+        verificationRecords: [],
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Capture the desktop review screenshots and record the result.' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+    const queue = await readTaskQueue()
+    expect(queue.tasks[0]).toMatchObject({ status: 'in_progress', assignedTo: null })
+    expect(queue.tasks[0]?.notes.at(-1)?.content).toContain('missing required proof')
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.runtime?.proofRecovery).toMatchObject({
+      kind: 'proof',
+      reason: 'Capture the desktop review screenshots and record the result.',
+    })
+  })
+
   it('reopens in-progress work for blueprint shaping instead of resuming a worker', async () => {
     await seedTask('task-1', {
       status: 'in_progress',

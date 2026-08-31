@@ -231,6 +231,37 @@ describe('focused Work flow', () => {
     )
   })
 
+  it('captures missing review evidence before starting another automated review', async () => {
+    const user = userEvent.setup()
+    const review = reviewTask({ id: 'task-review-proof', displayKey: 'NAR-091', title: 'Capture desktop review proof', status: 'review' })
+    setRoute(`/projects/narrative-harness/work?task=${review.id}`)
+    render(WorkTab, { props: { detail: projectDetail([review], {
+      startReadiness: { canStart: true, code: 'proof_evidence_missing', focusTaskId: review.id, focusTaskTitle: review.title, focusKind: 'proof' },
+      actionModel: {
+        primaryAction: {
+          taskId: review.id,
+          code: 'proof_evidence_missing',
+          ownerHeading: 'Proof needs recovery',
+          operation: 'start_focused',
+          detail: 'The review needs current evidence. Capture that proof before Guildhall retries the automated review.',
+          buttonLabel: 'Capture proof',
+          href: `/work?task=${review.id}`,
+        },
+      },
+    }) } })
+
+    await user.click(await screen.findByRole('button', { name: 'Capture proof' }))
+    expect(await screen.findByRole('heading', { name: 'Starting work' })).toBeInTheDocument()
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/project/task/${review.id}/retry-work`),
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/project/task/${review.id}/start`),
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('makes repeated worker no-progress a visible retry instead of an ordinary pause', async () => {
     const paused = reviewTask({ id: 'task-retry', displayKey: 'TMT-4', title: 'Open supported documents as TypeScript', status: 'in_progress' })
     setRoute(`/projects/t-minus-t/work?task=${paused.id}`)

@@ -41,7 +41,7 @@ import {
 } from '@guildhall/sessions'
 import { readTaskRuntimeStore, readTaskWorkspaceStore, writeTaskRuntimeStore } from './task-state-store.js'
 import { classifyCompletionProof, latestRecordedCompletionProofAt, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
-import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasNonReviewCommandBackedProof, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
+import { normalizeAcceptanceCriteriaForCurrentProof, reviewProofMissingApprovalIds, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasNonReviewCommandBackedProof, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
 import { closeReleaseIfReady } from './release-lifecycle.js'
 import { comparableCommand, ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand } from './proof-paths.js'
 import { normalizeReviewPlanForTask } from './review-planner.js'
@@ -16216,8 +16216,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         // completed. A ready or partial task naturally has no proof yet; routing
         // it straight to command gates would skip the worker and fabricate
         // completion from unrelated repository checks.
-        const isProofRecovery = (isProofSetupRecovery || effectiveStatus === 'done') &&
-          taskDoneButProofMissingForScope(effectiveTask, selectedProofStyle)
+        const reviewProofRecovery = effectiveStatus === 'review' &&
+          reviewVerdictIsNonSubstantiveFailure((effectiveTask.reviewVerdicts ?? []).at(-1)) &&
+          reviewProofMissingApprovalIds(effectiveTask).length > 0
+        const isProofRecovery = ((isProofSetupRecovery || effectiveStatus === 'done') &&
+          taskDoneButProofMissingForScope(effectiveTask, selectedProofStyle)) || reviewProofRecovery
         const isReviewRecovery = effectiveStatus === 'done' && taskDoneButReviewConflict(effectiveTask)
         if ((effectiveStatus === 'done' && !isProofRecovery && !isReviewRecovery) || effectiveStatus === 'shelved' || effectiveStatus === 'pending_pr') {
           return c.json({ error: `task is ${effectiveStatus}` }, 400)
@@ -16363,8 +16366,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           role: 'human',
           content: isProofRecovery
             ? instruction
-              ? `Reopen completed task for missing release proof: ${instruction}`
-              : 'Reopen completed task for missing release proof.'
+              ? `Reopen task for missing required proof: ${instruction}`
+              : 'Reopen task for missing required proof.'
             : isReviewRecovery
               ? instruction
                 ? `Reopen completed task after reviewer feedback was lost to a provider fallback: ${instruction}`
@@ -16394,7 +16397,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                   proofRecovery: {
                     reopenedAt: now,
                     kind: 'proof',
-                    reason: instruction || 'Missing release proof evidence.',
+                    reason: instruction || 'Missing required proof evidence.',
                   },
                 }
               : {}),
