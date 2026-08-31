@@ -1011,6 +1011,26 @@ export function applyProjectActionModelPrimaryAction(
     decision.release.state === 'ready'
   ) return decision
   const taskId = action.taskId?.trim()
+  // Bootstrap is a project-level admission gate, not a task. Reflect it in
+  // the decision packet even though it has no task target, so compact routes
+  // cannot show a setup CTA beside a stale `ready_work` decision.
+  if (
+    !taskId &&
+    action.source === 'start_readiness' &&
+    (action.code === 'bootstrap_required' || action.code === 'bootstrap_failed')
+  ) {
+    return {
+      ...decision,
+      execution: {
+        ...decision.execution,
+        state: 'blocked',
+        code: action.code,
+        focusKind: 'setup',
+        ...(action.detail?.trim() ? { message: action.detail.trim() } : {}),
+      },
+      primaryAction: { kind: 'none', reasonCode: action.code },
+    }
+  }
   if (!taskId) return decision
   const kind = action.source === 'owner_input'
     ? 'answer_owner_input' as const

@@ -192,6 +192,20 @@ describe('WorkspaceYamlConfig', () => {
     expect(config.ignore).toContain('node_modules')
   })
 
+  it('accepts a configured bootstrap install before verification', () => {
+    const config = WorkspaceYamlConfig.parse({
+      name: 'Setup pending',
+      bootstrap: {
+        commands: ['pnpm install'],
+        successGates: ['pnpm test'],
+        install: { command: 'pnpm install', status: 'configured' },
+      },
+    })
+
+    expect(config.bootstrap?.install?.status).toBe('configured')
+    expect(config.bootstrap?.verifiedAt).toBeUndefined()
+  })
+
   it('rejects empty name', () => {
     expect(() => WorkspaceYamlConfig.parse({ name: '' })).toThrow()
   })

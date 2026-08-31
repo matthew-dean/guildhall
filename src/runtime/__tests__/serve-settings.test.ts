@@ -375,7 +375,8 @@ afterEach(async () => {
 
 describe('GET /api/config/levers', () => {
   it('returns seeded project + default-domain levers with string-rendered positions', async () => {
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
     const res = await app.fetch(new Request(scoped('/api/config/levers')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { levers: Array<Record<string, any>> }
@@ -938,6 +939,52 @@ describe('GET/POST /api/project/local-config', () => {
 })
 
 describe('POST /api/project/start', () => {
+  it('routes configured but unverified bootstrap to the readiness check', async () => {
+    writeWorkspaceConfig(tmpDir, {
+      ...readWorkspaceConfig(tmpDir),
+      id: PROJECT_ID,
+      name: 'Settings Test',
+      bootstrap: {
+        commands: ['pnpm install'],
+        successGates: ['pnpm test'],
+        timeoutMs: 300_000,
+        install: { command: 'pnpm install', status: 'configured' },
+      },
+    })
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+
+    const project = await app.fetch(new Request(scoped('/api/project?surface=overview')))
+    expect(project.status).toBe(200)
+    const projectBody = await project.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string }
+      actionModel?: { primaryAction?: { code?: string; buttonLabel?: string; href?: string } | null }
+      decision?: { primaryAction?: { kind?: string; reasonCode?: string }; execution?: { code?: string; state?: string } }
+    }
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'bootstrap_required',
+      actionHref: '/settings/ready',
+    })
+    expect(projectBody.actionModel?.primaryAction).toMatchObject({
+      code: 'bootstrap_required',
+      buttonLabel: 'Run bootstrap',
+      href: '/settings/ready',
+    })
+    expect(projectBody.decision).toMatchObject({
+      primaryAction: { kind: 'none', reasonCode: 'bootstrap_required' },
+      execution: { state: 'blocked', code: 'bootstrap_required' },
+    })
+
+    const start = await app.fetch(new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }))
+    expect(start.status).toBe(400)
+    expect(await start.json()).toMatchObject({
+      code: 'bootstrap_required',
+      actionHref: '/settings/ready',
+    })
+  })
+
   it('repairs a safe required compact migration before an owner-facing project read', async () => {
     const reviewedAt = '2026-08-29T12:00:00.000Z'
     await writeSystemTasks({

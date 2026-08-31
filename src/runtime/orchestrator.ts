@@ -249,6 +249,7 @@ import {
 } from './fanout-dispatcher.js'
 import { isStopRequested } from './stop-requested.js'
 import { runBootstrap, bootstrapNeeded } from './bootstrap-runner.js'
+import { bootstrapVerificationState } from './bootstrap.js'
 import {
   META_INTAKE_TASK_ID,
   parseCoordinatorDraft,
@@ -10466,16 +10467,11 @@ export class Orchestrator {
    * behaviour — the inbox already surfaces "bootstrap_missing" for them).
    */
   private bootstrapHalt(pendingTaskCount: number): TickOutcome | null {
-    const b = this.opts.config.bootstrap
-    if (!b) return null
-    const hasStructural =
-      b.verifiedAt != null || b.install != null || b.gates != null ||
-      b.commands.length > 0 || b.successGates.length > 0
-    if (!hasStructural) return null
-    if (b.install?.status === 'failed') {
+    const state = bootstrapVerificationState(this.opts.config.bootstrap)
+    if (state === 'failed') {
       return { kind: 'bootstrap-required', reason: 'bootstrap_failed', pendingTaskCount }
     }
-    if (b.verifiedAt == null) {
+    if (state === 'required') {
       return { kind: 'bootstrap-required', reason: 'bootstrap_required', pendingTaskCount }
     }
     return null

@@ -64842,3 +64842,53 @@ execution readiness, and action fields; only their shared precedence changes.
   with `scrollWidth === clientWidth`. The installed focused Work, Release, and
   Thread routes then showed the same task, explanation, and one enabled
   `Run verification` action without a competing owner command.
+
+### Finding: An unverified project must not make the fleet unhealthy
+
+- [x] User job: a project with a configured bootstrap that has not yet run
+  should remain visible as setup-needed. It must not make Guildhall reject the
+  project configuration or leave the local server reporting refresh errors for
+  the entire fleet.
+- Live finding, 2026-08-31: the installed server repeatedly failed to hydrate
+  the registered Quadratly project because its `guildhall.yaml` recorded
+  `bootstrap.install.status: configured`. That is a normal pre-verification
+  setup state, but Guildhall's schema accepted only `ok` or `failed`; the
+  server therefore reported `errorCount:1` even while the owner-facing projects
+  were otherwise fresh.
+
+#### Contract Touch Decision
+
+Work id: `bootstrap-configured-status-compatibility-2026-08-31`. Touched
+contract: the public `guildhall.yaml` bootstrap install-status enum and the
+shared bootstrap-admission policy used by the owner-facing start decision and
+the orchestrator. Add the explicit `configured` state for an install command
+that is known but has not yet been verified, and make that state route the
+owner to the existing readiness check rather than falsely advertising runnable
+work. Considered but not touched: bootstrap execution, verified timestamps,
+gate results, and route-local setup copy. Required proof: the configuration
+parses, the project remains unverified until `verifiedAt` exists, start and
+dispatch both block it with the same reason, compact owner surfaces replace
+stale saved actions with the setup action, and fleet refresh completes without
+an error. Apply/revert: applying preserves setup gating while allowing
+registered projects to appear; reverting rejects the project before it can
+show its setup action.
+
+#### Schema Migration Decision
+
+Persisted schema touched: `guildhall.yaml` bootstrap install status. Change
+class: backwards-compatible enum expansion. Existing `ok` and `failed` values
+retain their meaning; existing `configured` records become readable and remain
+blocked by the existing missing-`verifiedAt` admission rule. No migration write
+or rollback data rewrite is needed.
+
+#### Evidence
+
+- Targeted service regression: a current compact Overview emits
+  `bootstrap_required`, one `Run bootstrap` action to `/settings/ready`, and a
+  matching blocked decision; `POST /api/project/start` returns the same code
+  and target.
+- Installed app, 2026-08-31: `/api/stale-server` reported `stale:false` and
+  `errorCount:0`. The registered Quadratly project returned that same setup
+  action instead of `ready_work`; browser proof at 1280px confirmed exactly
+  one visible `Run bootstrap` action and that it opens Settings > Readiness,
+  where the executable `Run bootstrap` control is present.

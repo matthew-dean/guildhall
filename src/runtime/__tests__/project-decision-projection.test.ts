@@ -253,6 +253,33 @@ describe('project decision projection', () => {
     })
   })
 
+  it('aligns a project-level bootstrap gate without inventing a task target', () => {
+    const decision = buildProjectDecisionProjection({
+      generatedAt: '2026-08-31T22:00:00.000Z',
+      start: {
+        canStart: true,
+        code: 'ready_work',
+        focusTaskId: 'task-next',
+        focusTaskTitle: 'Stale saved task',
+        message: 'Stale saved work.',
+      },
+      release: { scopeMode: 'unreleased', state: 'active', release: null, blockers: [] },
+    })
+
+    const refreshed = applyProjectActionModelPrimaryAction(decision, {
+      source: 'start_readiness',
+      code: 'bootstrap_required',
+      detail: 'Project setup needs verification before work can start.',
+    })
+
+    expect(refreshed.primaryAction).toEqual({ kind: 'none', reasonCode: 'bootstrap_required' })
+    expect(projectDecisionStartReadiness(refreshed)).toMatchObject({
+      canStart: false,
+      code: 'bootstrap_required',
+      focusKind: 'setup',
+    })
+  })
+
   it('attaches a focus title only from the canonical task in the captured snapshot', () => {
     const decision = buildProjectDecisionProjection({
       projectRevision: 43,

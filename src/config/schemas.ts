@@ -106,7 +106,7 @@ const BootstrapConfig = z.object({
   install: z.object({
     command: z.string(),
     lastRunAt: z.string().optional(),
-    status: z.enum(['ok', 'failed']).optional(),
+    status: z.enum(['configured', 'ok', 'failed']).optional(),
   }).optional(),
   gates: z.object({
     lint: z.object({

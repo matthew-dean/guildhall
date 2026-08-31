@@ -311,6 +311,7 @@ import {
   runBootstrap,
 } from './bootstrap-runner.js'
 import {
+  bootstrapVerificationState,
   runBootstrap as runDetectedBootstrap,
   writeBootstrapResult,
 } from './bootstrap.js'
@@ -7946,6 +7947,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       run,
       projection,
     )
+    const bootstrapBlocker = bootstrapStartBlocker(resolveConfig({ workspacePath: project.path }).bootstrap)
     const tasks = rawQueue.tasks as Task[]
     const scopeQueue = rawQueue
     // The boundary already selected this scope from the same SQLite snapshot.
@@ -8233,7 +8235,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       persistedStartReadiness,
       detailResponseTasks as Array<Record<string, unknown>>,
     )
-    const responseStartReadiness = requiredMigrationBlocker ?? repositoryFollowupStartReadinessFromReleaseReadiness(
+    const responseStartReadiness = requiredMigrationBlocker ?? bootstrapBlocker ?? repositoryFollowupStartReadinessFromReleaseReadiness(
       compactReleaseReadiness,
       detailResponseTasks as Array<Record<string, unknown>>,
       canonicalPersistedStartReadiness,
@@ -10396,6 +10398,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const requiredMigrationBlocker = await time('migrations', () => startBlockerForRequiredMigrations(input.projectPath))
     if (requiredMigrationBlocker) return attachExecutionScope(requiredMigrationBlocker)
 
+    const bootstrapBlocker = bootstrapStartBlocker(input.resolvedConfig.bootstrap)
+    if (bootstrapBlocker) return attachExecutionScope(bootstrapBlocker)
+
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath, input.ownerInput)
     if (ownerInputBlocker) return attachExecutionScope(ownerInputBlocker)
 
@@ -10814,6 +10819,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : {}),
       ...(opts.requestedTaskId ? { requestedTaskId: opts.requestedTaskId } : {}),
     })
+  }
+
+  function bootstrapStartBlocker(bootstrap: Parameters<typeof bootstrapVerificationState>[0]): {
+    canStart: false
+    code: 'bootstrap_required' | 'bootstrap_failed'
+    message: string
+    actionHref: '/settings/ready'
+    focusKind: 'setup'
+  } | null {
+    const state = bootstrapVerificationState(bootstrap)
+    if (state !== 'required' && state !== 'failed') return null
+    return {
+      canStart: false,
+      code: state === 'failed' ? 'bootstrap_failed' : 'bootstrap_required',
+      message: state === 'failed'
+        ? 'Project setup last failed. Run bootstrap again before starting work.'
+        : 'Project setup needs verification before work can start.',
+      actionHref: '/settings/ready',
+      focusKind: 'setup',
+    }
   }
 
   function blockedStartStatus(code: string | undefined): 400 | 409 {

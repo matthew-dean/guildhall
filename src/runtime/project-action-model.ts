@@ -167,6 +167,7 @@ export type ProjectActionOperation = 'start_focused' | 'repair_spec' | 'push_bra
 export type ProjectActionOwnerHeading =
   | 'What needs your attention'
   | 'Project update required'
+  | 'Project setup required'
   | 'Spec repair needed'
   | 'Worker needs a fresh pass'
   | 'Worker discarded its edits'
@@ -203,6 +204,8 @@ function ownerHeadingForAction(action: Omit<ProjectAction, 'ownerHeading'>): Pro
   if (action.operation === 'open_pull_request') return 'Pull request is ready to open'
   switch (action.code) {
     case 'required_migration_pending': return 'Project update required'
+    case 'bootstrap_required':
+    case 'bootstrap_failed': return 'Project setup required'
     case 'paused_live_work': return 'Work paused'
     case 'worker_recovery': return 'Worker needs a fresh pass'
     case 'review_retry': return 'Automated review needs retry'
@@ -357,6 +360,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.focusKind === 'review_work') return 'Resume review'
   if (readiness.code === 'blocked_work' || readiness.focusKind === 'blocked_work') return 'Open task'
   if (readiness.code === 'required_migration_pending') return 'Review project update'
+  if (readiness.code === 'bootstrap_required' || readiness.code === 'bootstrap_failed') return 'Run bootstrap'
   if (isProviderReadinessCode(readiness.code)) return 'Choose provider'
   if (readiness.code === 'owner_review_required') {
     return readiness.count && readiness.count > 1 ? 'Review next spec' : 'Review spec'
@@ -432,6 +436,8 @@ function startReadinessActionLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'ready_work') return readiness.focusTaskTitle?.trim() || readiness.message || 'Ready work'
   if (readiness.code === 'review_retry') return readiness.focusTaskTitle?.trim() || 'Automated review needs retry'
   if (readiness.code === 'required_migration_pending') return 'Required migration'
+  if (readiness.code === 'bootstrap_required') return 'Project setup needs verification'
+  if (readiness.code === 'bootstrap_failed') return 'Project setup failed'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
   if (readiness.code === 'workspace_import_refresh_needed') return 'Workspace import needs refresh'

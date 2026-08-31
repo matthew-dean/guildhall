@@ -26,7 +26,8 @@ import { deriveBootstrapHypothesisFromProfiles, detectToolchainProfiles } from '
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'none'
 export type GateName = 'lint' | 'typecheck' | 'build' | 'test'
-export type InstallStatus = 'ok' | 'failed'
+/** `configured` means the command is known but has not yet been verified. */
+export type InstallStatus = 'configured' | 'ok' | 'failed'
 
 export interface GateCommand {
   command: string
@@ -40,6 +41,36 @@ export interface BootstrapInstallBlock {
   command: string
   lastRunAt?: string
   status?: InstallStatus
+}
+
+/** The bootstrap fields shared by configuration, serving, and dispatch. */
+export interface BootstrapVerificationInput {
+  commands?: readonly string[]
+  successGates?: readonly string[]
+  verifiedAt?: string
+  install?: { command?: string; status?: InstallStatus } | null
+  gates?: unknown
+}
+
+export type BootstrapVerificationState = 'unconfigured' | 'required' | 'failed' | 'ready'
+
+/**
+ * One admission policy for structural bootstrap. A configured command is not
+ * evidence that it ran: only `verifiedAt` admits project work.
+ */
+export function bootstrapVerificationState(
+  bootstrap?: BootstrapVerificationInput | null,
+): BootstrapVerificationState {
+  if (!bootstrap) return 'unconfigured'
+  const hasStructuralBootstrap =
+    bootstrap.verifiedAt != null ||
+    bootstrap.install != null ||
+    bootstrap.gates != null ||
+    (bootstrap.commands?.length ?? 0) > 0 ||
+    (bootstrap.successGates?.length ?? 0) > 0
+  if (!hasStructuralBootstrap) return 'unconfigured'
+  if (bootstrap.install?.status === 'failed') return 'failed'
+  return bootstrap.verifiedAt == null ? 'required' : 'ready'
 }
 
 export interface BootstrapBlock {

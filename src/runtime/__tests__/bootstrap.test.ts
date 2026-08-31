@@ -6,6 +6,7 @@ import { parse as parseYaml } from 'yaml'
 import {
   detectPackageManager,
   detectGateCommands,
+  bootstrapVerificationState,
   runBootstrap,
   writeBootstrapResult,
   type Spawner,
@@ -49,6 +50,21 @@ describe('detectPackageManager', () => {
     writeFileSync(join(dir, 'yarn.lock'), '')
     writeFileSync(join(dir, 'package-lock.json'), '{}')
     expect(detectPackageManager(dir)).toBe('pnpm')
+  })
+})
+
+describe('bootstrapVerificationState', () => {
+  it('keeps a configured install blocked until bootstrap records verification', () => {
+    expect(bootstrapVerificationState({
+      commands: ['pnpm install'],
+      successGates: ['pnpm test'],
+      install: { command: 'pnpm install', status: 'configured' },
+    })).toBe('required')
+  })
+
+  it('distinguishes a failed verification from an unconfigured project', () => {
+    expect(bootstrapVerificationState({ install: { status: 'failed' } })).toBe('failed')
+    expect(bootstrapVerificationState()).toBe('unconfigured')
   })
 })
 
