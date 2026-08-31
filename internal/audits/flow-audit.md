@@ -64572,9 +64572,10 @@ admission ordering.
 
 Work id: `landed-review-durability-2026-08-31`. Touched contract: the shared
 review implementation-surface predicate used by scheduler recovery and
-review-handoff restoration. A successful persisted landing (`merged`,
-`pushed`, or degraded push after local landing) is a reviewable implementation
-surface unless typed proof recovery explicitly requires a fresh worktree.
+review-handoff restoration. A persisted landing (`merged`, `pushed`, or
+degraded push after local landing) is reviewable only when its recorded or
+revalidated changed paths match the task's claimed implementation, unless typed
+proof recovery explicitly requires a fresh worktree.
 Considered but not touched: task status enum, merge-record schema, review
 verdict schema, provider prose, task acceptance criteria, owner-action copy,
 and release selection. Required proof: a clean merged task remains in review
@@ -64584,16 +64585,15 @@ landing; reverting recreates the false worker remediation loop.
 
 #### Schema Migration Decision
 
-No persisted-schema change. The existing merge record is already authoritative
-landing evidence and is used elsewhere for completion and checkout-gate
-routing. This repair makes review recovery consume that same fact.
+Superseded by the following landing-identity repair: the merge record now also
+stores optional changed-path evidence. The original result remains useful
+transport history, but it is not sufficient landing authority by itself.
 
 #### Evidence
 
 - Focused stale-review recovery regressions pass: a clean unmerged claimed
-  handoff returns to `in_progress`, while a clean task with
-  `mergeRecord.result: merged` remains in `review` and retains reviewer
-  ownership.
+  handoff returns to `in_progress`, while a clean task whose landed commit
+  matches its handoff files remains in `review` and retains reviewer ownership.
 - `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence` pass.
 - Installed replay, 2026-08-31: after build/install/restart,
   `/api/stale-server` reported `stale:false`. A bounded T-minus-T run first
@@ -64604,6 +64604,108 @@ routing. This repair makes review recovery consume that same fact.
   `Capture proof` action rather than reopening implementation. At 1280px the
   focused Work route showed `Proof needs recovery`, `TMI-006`, `PROOF NEEDED`,
   its concrete reason, and `Capture proof`; `scrollWidth === clientWidth`.
+
+### Finding: A merge record must prove the task change, not merely name a commit
+
+- [x] User job: when Guildhall says a task was landed and sends it to review,
+  the landed commit must contain the task's implementation files. A clean
+  worktree whose HEAD is merely contained in `main` cannot turn unrelated
+  history into completed implementation or a misleading proof-recovery task.
+- Live finding, 2026-08-31: T-minus-T `TMI-006`'s reconciliation recorded
+  `c42a34d` as `merged`, but that commit changes only `README.md` and
+  `packages/extension/README.md`; it does not change the required
+  `packages/extension/package.json` menu contribution. The task's review
+  packet claimed that contribution, and the later `merged` record therefore
+  made the owner see `Capture proof` for an implementation that was never
+  landed. This disproves the earlier shorthand that any successful merge
+  record is by itself a reviewable implementation surface.
+
+#### Contract Touch Decision
+
+Work id: `landed-change-identity-2026-08-31`. Touched contracts: merge-record
+evidence, external-landing reconciliation, and the shared reviewable-surface
+predicate. Landing records now carry the actual changed project paths. Review
+accepts a landed task only when those paths, or a revalidated legacy commit,
+overlap the task's structured handoff files; otherwise the task returns to the
+worker lane and clears false proof recovery. Considered but not touched:
+provider prose, acceptance criteria, release membership, review verdict
+schema, action ranking, and route-local presentation. Required proof: an
+unrelated contained commit cannot enter review; a merged task commit that
+contains its handoff files remains reviewable. Apply/revert: applying prevents
+false landing and impossible proof actions; reverting restores commit-id-only
+authority.
+
+#### Schema Migration Decision
+
+Persisted schema touched: `mergeRecord` gains optional `changedFiles`.
+Existing records remain readable; active legacy records with a commit SHA are
+revalidated from Git before review, and records without verifiable changed-path
+evidence fail closed into implementation recovery. No required bulk migration:
+new landing writes populate the field, and recovery repairs active rows on the
+next scheduler pass. Rollback leaves the optional audit data intact but must
+not infer task completion from it without the matching runtime guard.
+
+#### Evidence
+
+- Focused regressions pass: fresh merge dispatch records landed paths; a
+  matching legacy commit is revalidated into review; an explicit docs-only
+  landing reopens implementation; and a legacy record with no matching task
+  files fails closed into the worker lane.
+- `pnpm typecheck`, `pnpm lint:contracts`, and `pnpm model:independence` pass.
+- Installed replay, 2026-08-31: after build/install/restart,
+  `/api/stale-server` reported `stale:false`. A bounded T-minus-T run changed
+  the false `c42a34d` README-only landing for `TMI-006` from `review` to
+  `in_progress`; its shared action model and focused Work view now show the
+  honest `Resume work` action instead of `Capture proof`.
+
+### Finding: A timed-out worker cannot leave an unproven review state behind
+
+- [x] User job: when a worker runs out of turn budget after editing a task
+  workspace, the owner should see `Resume work`, not a proof-recovery action.
+  The dirty implementation stays intact for the next worker pass until it has
+  a typed review handoff and recorded verification.
+- Live finding, 2026-08-31: after landing-identity recovery returned T-minus-T
+  `TMI-006` to implementation, its worker added the intended
+  `packages/extension/package.json` context-menu diff but exceeded its turn
+  budget. The coordinator correctly logged that partial work was preserved,
+  yet an earlier worker state mutation had left the task in `review` without a
+  current proof packet. The owner therefore saw `Capture proof` again.
+
+#### Contract Touch Decision
+
+Work id: `timed-out-worker-review-admission-2026-08-31`. Touched contract: the
+shared post-worker lifecycle reconciliation that owns status after an agent
+turn. A worker-originated `review` status is accepted only with a current typed
+review proof packet. A recovery boundary or a later dirty-work observation
+invalidates older self-critique/verification evidence even when it names the
+same file; otherwise Guildhall restores `in_progress`, retains the task
+worktree, and assigns the worker lane. Considered but not touched:
+worker prompts, provider prose, proof schema, review verdict schema, merge
+records, and route-local action copy. Required proof: a worker that mutates
+state to `review` without proof remains resumable implementation; a valid
+review handoff newer than the current work boundary still reaches review.
+Apply/revert: applying removes impossible owner proof actions after timed-out
+implementation; reverting permits stale agent state to override the
+coordinator's typed evidence boundary.
+
+#### Schema Migration Decision
+
+No persisted-schema change. This uses the existing structured self-critique,
+verification, task status, and worker ownership fields; it repairs their
+post-turn ordering.
+
+#### Evidence
+
+- Focused lifecycle regressions pass for an unproven worker transition, a
+  proof packet older than a dirty worktree observation, and the promoted
+  database boundary where a raw queue row previously restored stale proof.
+- `pnpm typecheck`, `pnpm lint:contracts`, `pnpm model:independence`,
+  `git diff --check`, and `pnpm build` pass.
+- Installed replay, 2026-08-31: a bounded T-minus-T run repaired the live
+  stale review row as `review -> in_progress via coordinator-remediation`.
+  The API's shared action model exposed `Work paused` with one `Resume work`
+  button, and the 1280px focused Work route rendered the same action with
+  `scrollWidth === clientWidth`.
 
 #### Remaining Regression Work
 

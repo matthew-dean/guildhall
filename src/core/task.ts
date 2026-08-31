@@ -1666,6 +1666,7 @@ export const Task = z.object({
         'skipped',
       ]),
       commitSha: z.string().optional(),
+      changedFiles: z.array(z.string().min(1)).optional(),
       prUrl: z.string().optional(),
       mergedAt: z.string(),
       detail: z.string().optional(),

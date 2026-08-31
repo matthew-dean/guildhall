@@ -50,6 +50,7 @@ function task(overrides: Partial<Task> = {}): Task {
 describe('dispatchMerge — cherry_pick_local', () => {
   it('lands accepted commits locally and marks newStatus=done', async () => {
     const driver = new InMemoryGitDriver()
+    driver.setChangedFilesInCommit('/repo', 'inmem-1', ['src/widget.ts'])
     const r = await dispatchMerge({
       task: task({ status: 'done' }),
       policy: 'cherry_pick_local',
@@ -61,6 +62,7 @@ describe('dispatchMerge — cherry_pick_local', () => {
     expect(r.newStatus).toBe('done')
     expect(r.record.result).toBe('merged')
     expect(r.record.commitSha).toBe('inmem-1')
+    expect(r.record.changedFiles).toEqual(['src/widget.ts'])
     expect(driver.state.cherryPicks).toHaveLength(1)
     expect(driver.state.pushes).toHaveLength(0)
   })
@@ -95,6 +97,7 @@ describe('dispatchMerge — cherry_pick_local', () => {
 describe('dispatchMerge — cherry_pick_with_push', () => {
   it('lands locally, pushes successfully, and records result=pushed', async () => {
     const driver = new InMemoryGitDriver()
+    driver.setChangedFilesInCommit('/repo', 'inmem-1', ['src/widget.ts'])
     const r = await dispatchMerge({
       task: task({ status: 'done' }),
       policy: 'cherry_pick_with_push',
@@ -105,6 +108,7 @@ describe('dispatchMerge — cherry_pick_with_push', () => {
     })
     expect(r.newStatus).toBe('done')
     expect(r.record.result).toBe('pushed')
+    expect(r.record.changedFiles).toEqual(['src/widget.ts'])
     expect(driver.state.pushes).toHaveLength(1)
   })
 

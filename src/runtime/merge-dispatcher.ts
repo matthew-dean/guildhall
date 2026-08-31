@@ -37,6 +37,8 @@ export interface MergeRecord {
     | 'conflict'
     | 'skipped'
   commitSha?: string
+  /** Project-relative paths changed by the commit recorded above. */
+  changedFiles?: string[]
   prUrl?: string
   mergedAt: string
   detail?: string
@@ -203,11 +205,16 @@ export async function dispatchMerge(
 
   if (policy === 'cherry_pick_local') {
     return {
-      record: {
-        ...mergeBase,
-        result: 'merged',
-        ...(merge.commitSha ? { commitSha: merge.commitSha } : {}),
-      },
+      record: await landedMergeRecord({
+        gitDriver,
+        projectPath,
+        commitSha: merge.commitSha,
+        record: {
+          ...mergeBase,
+          result: 'merged',
+          ...(merge.commitSha ? { commitSha: merge.commitSha } : {}),
+        },
+      }),
       newStatus: 'done',
     }
   }
@@ -224,24 +231,48 @@ export async function dispatchMerge(
   )
   if (sync.ok) {
     return {
-      record: {
-        ...mergeBase,
-        result: 'pushed',
-        ...(merge.commitSha ? { commitSha: merge.commitSha } : {}),
-      },
+      record: await landedMergeRecord({
+        gitDriver,
+        projectPath,
+        commitSha: merge.commitSha,
+        record: {
+          ...mergeBase,
+          result: 'pushed',
+          ...(merge.commitSha ? { commitSha: merge.commitSha } : {}),
+        },
+      }),
       newStatus: 'done',
     }
   }
   return {
-    record: {
-      ...mergeBase,
-      result: 'push_failed_degraded',
-      ...(merge.commitSha ? { commitSha: merge.commitSha } : {}),
-      detail: sync.error ?? 'push failed; local-only mode entered',
-    },
+    record: await landedMergeRecord({
+      gitDriver,
+      projectPath,
+      commitSha: merge.commitSha,
+      record: {
+        ...mergeBase,
+        result: 'push_failed_degraded',
+        ...(merge.commitSha ? { commitSha: merge.commitSha } : {}),
+        detail: sync.error ?? 'push failed; local-only mode entered',
+      },
+    }),
     newStatus: 'done',
     degradedToLocal: true,
   }
+}
+
+async function landedMergeRecord(input: {
+  gitDriver: GitDriver
+  projectPath: string
+  commitSha: string | undefined
+  record: MergeRecord
+}): Promise<MergeRecord> {
+  if (!input.commitSha) return input.record
+  const changedFiles = await input.gitDriver.changedFilesInCommit(input.projectPath, input.commitSha)
+    .catch(() => [])
+  return changedFiles.length > 0
+    ? { ...input.record, changedFiles }
+    : input.record
 }
 
 function landingTransitionReceipt(input: {

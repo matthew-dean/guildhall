@@ -6439,7 +6439,7 @@ describe('Orchestrator.tick — routing', () => {
 })
 
 describe('Orchestrator.tick — feedback loop', () => {
-  it('detects status transitions the agent wrote to disk', async () => {
+  it('keeps an unproven worker review mutation in implementation', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent', async () => {
       await mutateTask('a', { status: 'review' })
@@ -6452,11 +6452,18 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {
       expect(out.beforeStatus).toBe('in_progress')
-      expect(out.afterStatus).toBe('review')
-      expect(out.transitioned).toBe(true)
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
     }
     const q = await readQueue()
-    expect(q.tasks[0]!.assignedTo).toBe('reviewer-agent')
+    expect(q.tasks[0]!.status).toBe('in_progress')
+    expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
+    expect(q.tasks[0]!.notes.at(-1)).toMatchObject({
+      structured: {
+        event: 'worker_self_critique_rejected',
+        reason: 'review_proof_packet_missing',
+      },
+    })
   })
 
   it('normalizes stale worker ownership before dispatching a review task', async () => {
@@ -12972,6 +12979,140 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('returns a review row without typed proof to implementation before dispatching reviewers', async () => {
+    const task = mkTask({
+      id: 'unproven-review-handoff',
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      spec: VALID_SPEC,
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await (orch as unknown as {
+      recoverStaleReviewHandoff(task: Task): Promise<unknown>
+    }).recoverStaleReviewHandoff(task)
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-remediation',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+    })
+    const saved = (await readQueue()).tasks.find(candidate => candidate.id === task.id)
+    expect(saved?.assignedTo).toBe('worker-agent')
+    expect(saved?.notes.at(-1)).toMatchObject({
+      structured: {
+        event: 'worker_self_critique_rejected',
+        reason: 'review_proof_packet_missing',
+      },
+    })
+  })
+
+  it('reopens a review row when its proof predates a dirty worktree observation', async () => {
+    const worktreePath = path.join(tmpDir, 'stale-proof-after-dirty-work')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const task = mkTask({
+      id: 'stale-proof-after-dirty-work',
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      worktreePath,
+      branchName: 'guildhall/task-stale-proof-after-dirty-work',
+      baseBranch: 'main',
+      spec: VALID_SPEC,
+      workerRecovery: {
+        worktreeObservation: {
+          state: 'dirty',
+          observedAt: '2026-08-31T20:20:29.075Z',
+          files: ['packages/extension/package.json'],
+        },
+      },
+      notes: [{
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        ...withMachineSelfCritique(
+          '**Self-critique:**\n\nThe implementation is ready for review.',
+          { changedFiles: ['packages/extension/package.json'] },
+        ),
+        timestamp: '2026-08-31T20:03:00.000Z',
+      }],
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await (orch as unknown as {
+      recoverStaleReviewHandoff(task: Task): Promise<unknown>
+    }).recoverStaleReviewHandoff(task)
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+    })
+  })
+
+  it('does not let a promoted raw queue row restore stale review proof during recovery', async () => {
+    const taskId = 'promoted-stale-review-proof'
+    const task = mkTask({
+      id: taskId,
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      spec: VALID_SPEC,
+      notes: [{
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        ...withMachineSelfCritique(
+          '**Self-critique:**\n\nThe implementation is ready for review.',
+          { changedFiles: ['packages/extension/package.json'] },
+        ),
+        timestamp: '2026-08-31T20:03:00.000Z',
+      }],
+    })
+    await writeQueue([task])
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskRuntimeState(tmpDir, taskId, {
+      workerRecovery: {
+        worktreeObservation: {
+          state: 'dirty',
+          observedAt: '2026-08-31T20:20:29.075Z',
+          files: ['packages/extension/package.json'],
+        },
+      },
+      updatedAt: '2026-08-31T20:20:29.075Z',
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+    const effective = await (orch as unknown as {
+      hydrateEffectiveTaskForDispatch(task: Task): Promise<Task>
+    }).hydrateEffectiveTaskForDispatch(task)
+
+    const out = await (orch as unknown as {
+      recoverStaleReviewHandoff(task: Task): Promise<unknown>
+    }).recoverStaleReviewHandoff(effective)
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+    })
+    const saved = await readQueue()
+    expect(saved.tasks.find(candidate => candidate.id === taskId)).toMatchObject({
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+    })
+  })
+
   it('keeps a clean landed review handoff in review', async () => {
     const worktreePath = path.join(tmpDir, 'landed-review-handoff')
     await fs.mkdir(worktreePath, { recursive: true })
@@ -13002,10 +13143,12 @@ describe('Orchestrator.run — full loops', () => {
       }],
     })
     await writeQueue([task])
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setChangedFilesInCommit(tmpDir, 'landed-commit', ['packages/extension/package.json'])
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet(),
-      gitDriver: new InMemoryGitDriver({ clean: true }),
+      gitDriver,
     })
 
     const out = await (orch as unknown as {
@@ -13016,6 +13159,57 @@ describe('Orchestrator.run — full loops', () => {
     const saved = (await readQueue()).tasks.find(candidate => candidate.id === task.id)
     expect(saved?.status).toBe('review')
     expect(saved?.assignedTo).toBe('reviewer-agent')
+  })
+
+  it('reopens a review handoff when its recorded landing changed unrelated files', async () => {
+    const worktreePath = path.join(tmpDir, 'mismatched-landed-review-handoff')
+    await fs.mkdir(worktreePath, { recursive: true })
+    const task = mkTask({
+      id: 'mismatched-landed-review-surface',
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      worktreePath,
+      branchName: 'guildhall/task-mismatched-landed-review-surface',
+      baseBranch: 'main',
+      spec: VALID_SPEC,
+      mergeRecord: {
+        fromBranch: 'guildhall/task-mismatched-landed-review-surface',
+        toBranch: 'main',
+        strategy: 'cherry_pick_local',
+        result: 'merged',
+        commitSha: 'docs-only-commit',
+        changedFiles: ['README.md'],
+        mergedAt: '2026-08-31T19:11:22.483Z',
+      },
+      notes: [{
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        ...withMachineSelfCritique(
+          '**Self-critique:**\n\nThe implementation is ready for review.',
+          { changedFiles: ['packages/extension/package.json'] },
+        ),
+        timestamp: '2026-08-31T19:11:22.483Z',
+      }],
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await (orch as unknown as {
+      recoverStaleReviewHandoff(task: Task): Promise<unknown>
+    }).recoverStaleReviewHandoff(task)
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-remediation',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+    })
+    const saved = (await readQueue()).tasks.find(candidate => candidate.id === task.id)
+    expect(saved?.assignedTo).toBe('worker-agent')
   })
 
   it('reruns every automated command after a task enters a new lifecycle', async () => {
@@ -15824,6 +16018,18 @@ describe('Orchestrator.run — full loops', () => {
           verifiedBy: 'review',
           met: false,
         }],
+        notes: [{
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          ...withMachineSelfCritique(
+            '**Self-critique:**\n\nThe implementation is ready for review.',
+            {
+              acceptanceCriteria: [{ id: 'ac-review', status: 'met' }],
+              changedFiles: ['packages/extension/package.json'],
+            },
+          ),
+          timestamp: '2026-08-31T19:11:22.483Z',
+        }],
       }),
     ])
 
@@ -15834,6 +16040,7 @@ describe('Orchestrator.run — full loops', () => {
     })
     gitDriver.setHeadSha(worktreePath, 'landed-commit')
     gitDriver.setAncestor(tmpDir, 'landed-commit', 'main', true)
+    gitDriver.setChangedFilesInCommit(tmpDir, 'landed-commit', ['packages/extension/package.json'])
     const worker = stubAgent('worker-agent')
     const reviewer = stubAgent('reviewer-agent')
     const orch = new Orchestrator({
@@ -15858,7 +16065,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(reviewer.calls).toHaveLength(0)
   })
 
-  it('keeps recovered merged work with missing proof in review before worker dispatch', async () => {
+  it('does not turn a legacy merged record without claimed implementation files into review', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-merged-proof-pending')
     await writeQueue([
       mkTask({
@@ -15885,6 +16092,7 @@ describe('Orchestrator.run — full loops', () => {
           strategy: 'cherry_pick_local',
           result: 'merged',
           commitSha: 'landed-commit',
+          changedFiles: ['src/landed.ts'],
           mergedAt: '2026-08-31T19:11:22.483Z',
         },
       }),
@@ -15901,11 +16109,9 @@ describe('Orchestrator.run — full loops', () => {
     await orch.tick()
 
     const task = (await readQueue()).tasks[0]!
-    expect(task.status).toBe('review')
-    expect(task.assignedTo).toBe('reviewer-agent')
-    expect((await readManagedQueue()).tasks[0]?.status).toBe('review')
-    expect(task.notes.some((note) => note.content.includes('remaining acceptance proof'))).toBe(true)
-    expect(worker.calls).toHaveLength(0)
+    expect(task.status).toBe('in_progress')
+    expect((await readManagedQueue()).tasks[0]?.status).toBe('in_progress')
+    expect(worker.calls).toHaveLength(1)
     expect(reviewer.calls).toHaveLength(0)
   })
 

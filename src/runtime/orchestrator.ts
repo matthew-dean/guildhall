@@ -429,6 +429,31 @@ function currentVerificationLifecycleReopenedAt(task: Task): number {
   return boundaries.length > 0 ? Math.max(...boundaries) : Number.NaN
 }
 
+function currentReviewEvidenceBoundaryAt(task: Task): number {
+  const state = task as Task & {
+    workerRecovery?: TaskRuntimeState['workerRecovery']
+    runtime?: { workerRecovery?: TaskRuntimeState['workerRecovery'] }
+  }
+  const observedAt = [
+    state.workerRecovery?.worktreeObservation?.observedAt,
+    state.runtime?.workerRecovery?.worktreeObservation?.observedAt,
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => Date.parse(value))
+    .filter(Number.isFinite)
+  const lifecycleBoundary = currentVerificationLifecycleReopenedAt(task)
+  const boundaries = [lifecycleBoundary, ...observedAt].filter(Number.isFinite)
+  return boundaries.length > 0 ? Math.max(...boundaries) : Number.NaN
+}
+
+function reviewProofPacketIsCurrent(task: Task, note: Task['notes'][number] | undefined): boolean {
+  if (!note?.timestamp) return false
+  const boundary = currentReviewEvidenceBoundaryAt(task)
+  if (!Number.isFinite(boundary)) return true
+  const recordedAt = Date.parse(note.timestamp)
+  return Number.isFinite(recordedAt) && recordedAt > boundary
+}
+
 function shouldRunAcceptanceCommandCriterion(
   task: Task,
   criterion: Task['acceptanceCriteria'][number],
@@ -924,7 +949,8 @@ function noteLooksLikeReviewProofPacket(task: Task): boolean {
       selfCritique !== null &&
       structuredSelfCritiqueMatchesTask(task, selfCritique) &&
       selfCritique.changedFiles.length > 0 &&
-      selfCritique.verificationCommands.some(command => command.status === 'passed')
+      selfCritique.verificationCommands.some(command => command.status === 'passed') &&
+      reviewProofPacketIsCurrent(task, note)
     )
   })
 }
@@ -3575,6 +3601,9 @@ export class Orchestrator {
       return await this.advanceLeanCommandBackedReviewInline(task)
     }
 
+    const staleHandoffRecovery = await this.recoverStaleReviewHandoff(task)
+    if (staleHandoffRecovery) return staleHandoffRecovery
+
     const proofRecoveryGateCheck = await this.advanceProofRecoveryToGateCheckInline(task)
     if (proofRecoveryGateCheck) return proofRecoveryGateCheck
 
@@ -5461,6 +5490,38 @@ export class Orchestrator {
           await this.writeQueue(queueAfter)
           afterStatus = 'in_progress'
           transitioned = true
+        }
+
+        // A timed-out worker can leave an earlier status mutation on disk even
+        // when it never produced the typed handoff that makes review safe.
+        // Keep the saved diff in the worker lane rather than asking the owner
+        // to recover proof for a review Guildhall cannot yet perform.
+        if (
+          agent.name === 'worker-agent' &&
+          beforeStatus === 'in_progress' &&
+          afterStatus === 'review' &&
+          !this.hasReviewProofPacket(taskAfter)
+        ) {
+          taskAfter.status = 'in_progress'
+          ensureWorkerOwnership(taskAfter)
+          taskAfter.notes.push({
+            agentId: 'coordinator',
+            role: 'worker-progress-review',
+            structured: {
+              event: 'worker_self_critique_rejected',
+              reason: 'review_proof_packet_missing',
+            },
+            content:
+              'Guildhall kept this task in implementation because the worker requested review without a current typed proof packet. The saved task diff remains available; resume work to run verification and hand off review evidence.',
+            timestamp: this.now(),
+          })
+          taskAfter.updatedAt = this.now()
+          queueAfter.lastUpdated = taskAfter.updatedAt
+          await this.writeQueue(queueAfter)
+          afterStatus = 'in_progress'
+          transitioned = false
+          processedOutcomeNote =
+            'Worker requested review without a typed proof packet; Guildhall preserved the implementation for another worker pass.'
         }
 
         if (
@@ -9317,9 +9378,6 @@ export class Orchestrator {
     const reviewerMode = await this.resolveReviewerMode(task.domain)
     if (reviewerMode === 'deterministic_only') return null
 
-    const staleHandoffRecovery = await this.recoverStaleReviewHandoff(task)
-    if (staleHandoffRecovery) return staleHandoffRecovery
-
     const designSystem = await loadDesignSystem(this.opts.config.memoryDir).catch(
       () => undefined,
     )
@@ -9729,7 +9787,68 @@ export class Orchestrator {
    * reviewable or turn reviewer retry into an owner action.
    */
   private async recoverStaleReviewHandoff(task: Task): Promise<TickOutcome | null> {
-    if (task.status !== 'review' || !this.hasReviewProofPacket(task)) return null
+    if (task.status !== 'review') return null
+
+    if (!this.hasReviewProofPacket(task)) {
+      return await this.withQueueWriteLock(async () => {
+        const queue = await this.readQueue()
+        const current = queue.tasks.find((candidate) => candidate.id === task.id)
+        if (!current || current.status !== 'review') return null
+        // The queue row is deliberately definition-only for promoted
+        // projects. Re-check the authoritative effective task before a
+        // mutation; otherwise a stale legacy note can overturn the runtime
+        // worktree observation that sent us into this recovery path.
+        const currentEffective = await this.hydrateEffectiveTaskForDispatch(current)
+        if (currentEffective.status !== 'review' || this.hasReviewProofPacket(currentEffective)) return null
+
+        const now = this.now()
+        transitionTaskStatus({
+          task: current,
+          event: 'revise',
+          actor: 'review-handoff-proof-recovery',
+          evidenceRefs: ['task:review-handoff:proof-packet-missing'],
+          now,
+        })
+        ensureWorkerOwnership(current)
+        delete (current as Task & { proofRecovery?: unknown }).proofRecovery
+        current.notes.push({
+          agentId: 'coordinator',
+          role: 'worker-progress-review',
+          structured: {
+            event: 'worker_self_critique_rejected',
+            reason: 'review_proof_packet_missing',
+          },
+          content:
+            'Guildhall reopened this review handoff because it has no current typed proof packet. The existing task worktree remains the implementation surface; resume work to run verification and submit a complete review handoff.',
+          timestamp: now,
+        })
+        current.updatedAt = now
+        queue.lastUpdated = now
+        await this.writeQueue(queue)
+        await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
+          assignedTo: 'worker-agent',
+          proofRecovery: undefined,
+          updatedAt: now,
+        })
+        await this.logTickProgress({
+          task: current,
+          agent: 'coordinator-remediation',
+          beforeStatus: 'review',
+          afterStatus: 'in_progress',
+          transitioned: true,
+          note: 'review handoff omitted the typed proof packet required for reviewer dispatch',
+        })
+        return {
+          kind: 'processed',
+          taskId: current.id,
+          agent: 'coordinator-remediation',
+          beforeStatus: 'review',
+          afterStatus: 'in_progress',
+          transitioned: true,
+          revisionCount: current.revisionCount,
+        } as TickOutcome
+      })
+    }
 
     const hasCommittedTaskWork = await this.hasReviewableTaskImplementationSurface(task)
     const worktreePath = task.worktreePath?.trim()
@@ -9741,10 +9860,12 @@ export class Orchestrator {
     return await this.withQueueWriteLock(async () => {
       const queue = await this.readQueue()
       const current = queue.tasks.find((candidate) => candidate.id === task.id)
-      if (!current || current.status !== 'review' || !this.hasReviewProofPacket(current)) return null
+      if (!current || current.status !== 'review') return null
+      const currentEffective = await this.hydrateEffectiveTaskForDispatch(current)
+      if (currentEffective.status !== 'review' || !this.hasReviewProofPacket(currentEffective)) return null
 
-      const currentHasCommittedWork = await this.hasReviewableTaskImplementationSurface(current)
-      const currentWorktreePath = current.worktreePath?.trim()
+      const currentHasCommittedWork = await this.hasReviewableTaskImplementationSurface(currentEffective)
+      const currentWorktreePath = currentEffective.worktreePath?.trim()
       const currentHasWorktreeChanges =
         Boolean(currentWorktreePath) &&
         !(await this.gitDriver.isClean(resolveRuntimePath(currentWorktreePath!)))
@@ -9759,6 +9880,7 @@ export class Orchestrator {
         now,
       })
       ensureWorkerOwnership(current)
+      delete (current as Task & { proofRecovery?: unknown }).proofRecovery
       current.notes.push({
         agentId: 'coordinator',
         role: 'worker-progress-review',
@@ -9775,6 +9897,7 @@ export class Orchestrator {
       await this.writeQueue(queue)
       await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
         assignedTo: 'worker-agent',
+        proofRecovery: undefined,
         updatedAt: now,
       })
       await this.logTickProgress({
@@ -11289,11 +11412,10 @@ export class Orchestrator {
         changed = true
       }
 
-      // A delegated owner may land a finished task directly (for example, by
-      // fast-forwarding and pushing a small docs change). Git containment is
-      // durable evidence that implementation is no longer the next action,
-      // but it is not completion proof. Send the task to the existing review
-      // lane so its recorded commands and review can settle it truthfully.
+      // A delegated owner may land a finished task directly. Containment only
+      // proves that a commit reached the base branch; its changed paths still
+      // have to overlap this task's claimed implementation before review can
+      // trust the landing.
       const externallyLandedButUnverified =
         task.status === 'in_progress' &&
         taskDoneButProofMissing({ ...task, status: 'done' }) &&
@@ -11305,14 +11427,18 @@ export class Orchestrator {
         const worktreePath = resolveRuntimePath(task.worktreePath!)
         const branchName = task.branchName!
         const baseBranch = task.baseBranch!
+        const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
         const worktreeStatus = await this.gitDriver.statusSummary(worktreePath).catch(() => null)
         const taskHead = worktreeStatus && worktreeStatus.clean
           ? await this.gitDriver.headSha(worktreePath).catch(() => null)
           : null
         const landed = taskHead
-          ? await this.gitDriver.isAncestor(projectRoot, taskHead, baseBranch).catch(() => false)
+          ? await this.gitDriver.isAncestor(effectiveTaskProjectPath, taskHead, baseBranch).catch(() => false)
           : false
-        if (landed) {
+        const changedFiles = landed && taskHead
+          ? await this.gitDriver.changedFilesInCommit(effectiveTaskProjectPath, taskHead).catch(() => [])
+          : []
+        if (landed && this.landedFilesMatchTask(task, changedFiles, effectiveTaskProjectPath)) {
           const now = this.now()
           transitionTaskStatus({
             task,
@@ -11328,8 +11454,9 @@ export class Orchestrator {
             strategy: landingStrategy,
             result: 'merged',
             commitSha: taskHead!,
+            changedFiles,
             mergedAt: now,
-            detail: 'Guildhall reconciled a clean task worktree already contained in the landing branch.',
+            detail: 'Guildhall reconciled a clean task worktree whose landed commit matches the task implementation files.',
           }
           delete task.blockReason
           task.notes.push({
@@ -11354,7 +11481,8 @@ export class Orchestrator {
       const landedButProofPending =
         task.status === 'in_progress' &&
         task.mergeRecord?.result === 'merged' &&
-        taskDoneButProofMissing({ ...task, status: 'done' })
+        taskDoneButProofMissing({ ...task, status: 'done' }) &&
+        await this.hasVerifiedLandedTaskChange(task)
       if (landedButProofPending) {
         const now = this.now()
         transitionTaskStatus({
@@ -11383,6 +11511,7 @@ export class Orchestrator {
         task.status === 'in_progress' &&
         task.mergeRecord?.result === 'merged' &&
         !taskDoneButProofMissing({ ...task, status: 'done' }) &&
+        await this.hasVerifiedLandedTaskChange(task) &&
         currentLifecycleForTask(task) === null &&
         !(
           task.doneSummaryBundle?.status === 'reopened' &&
@@ -12446,13 +12575,13 @@ export class Orchestrator {
       structured &&
       structuredSelfCritiqueMatchesTask(task, structured) &&
       structured.changedFiles.length > 0 &&
-      structured.verificationCommands.some(command => command.status === 'passed'),
+      structured.verificationCommands.some(command => command.status === 'passed') &&
+      reviewProofPacketIsCurrent(task, note),
     )
   }
 
   private proofRecoveryIsNewerThanLatestSelfCritique(task: Task): boolean {
-    const proofRecovery = (task as Task & { proofRecovery?: TaskRuntimeState['proofRecovery'] }).proofRecovery
-    const reopenedAt = proofRecovery?.reopenedAt ? Date.parse(proofRecovery.reopenedAt) : NaN
+    const reopenedAt = currentReviewEvidenceBoundaryAt(task)
     if (!Number.isFinite(reopenedAt)) return false
     const selfCritique = this.latestWorkerSelfCritiqueNote(task)
     const selfCritiqueAt = selfCritique?.timestamp ? Date.parse(selfCritique.timestamp) : NaN
@@ -13681,11 +13810,38 @@ export class Orchestrator {
   }
 
   private async hasReviewableTaskImplementationSurface(task: Task): Promise<boolean> {
-    // Once Guildhall has durably landed the task branch, the project checkout
-    // is the review target. A clean disposable worktree is expected after that
-    // landing and must not be mistaken for lost implementation.
-    if (taskHasDurableLocalLanding(task) && !proofRecoveryNeedsFreshWorktree(task)) return true
+    // Once Guildhall has durably landed matching task files, the project
+    // checkout is the review target. A clean disposable worktree is expected
+    // after that landing and must not be mistaken for lost implementation.
+    if (await this.hasVerifiedLandedTaskChange(task) && !proofRecoveryNeedsFreshWorktree(task)) return true
     return this.taskWorktreeHasCommittedProgress(task)
+  }
+
+  private claimedImplementationFiles(task: Task): string[] {
+    const structured = readPersistedStructuredSelfCritique(this.latestWorkerSelfCritiqueNote(task)?.structured)
+    if (structured && structuredSelfCritiqueMatchesTask(task, structured) && structured.changedFiles.length > 0) {
+      return structured.changedFiles
+    }
+    return resolveLikelyTaskFiles(task)
+  }
+
+  private landedFilesMatchTask(task: Task, changedFiles: readonly string[], projectPath: string): boolean {
+    const claimedFiles = this.claimedImplementationFiles(task)
+    return claimedFiles.length > 0 && changedFiles.some((file) =>
+      this.fileMatchesLikelyTarget(file, claimedFiles, projectPath),
+    )
+  }
+
+  private async hasVerifiedLandedTaskChange(task: Task): Promise<boolean> {
+    if (!taskHasDurableLocalLanding(task)) return false
+    const projectPath = this.resolveEffectiveTaskProjectPath(task)
+    const recordedFiles = task.mergeRecord?.changedFiles
+    const changedFiles = recordedFiles && recordedFiles.length > 0
+      ? recordedFiles
+      : task.mergeRecord?.commitSha
+        ? await this.gitDriver.changedFilesInCommit(projectPath, task.mergeRecord.commitSha).catch(() => [])
+        : []
+    return this.landedFilesMatchTask(task, changedFiles, projectPath)
   }
 
   private checkpointTouchedFilesFromMetadata(
@@ -14345,11 +14501,12 @@ export class Orchestrator {
   ): boolean {
     const trimmed = candidate.trim()
     if (!trimmed) return false
-    const resolvedCandidate =
-      repoRoot && !path.isAbsolute(trimmed)
-        ? path.resolve(repoRoot, trimmed)
-        : path.resolve(trimmed)
-    return likelyTargets.some((target) => path.resolve(target) === resolvedCandidate)
+    const resolveProjectPath = (file: string) =>
+      repoRoot && !path.isAbsolute(file)
+        ? path.resolve(repoRoot, file)
+        : path.resolve(file)
+    const resolvedCandidate = resolveProjectPath(trimmed)
+    return likelyTargets.some((target) => resolveProjectPath(target) === resolvedCandidate)
   }
 
   private async persistExploringTranscript(input: {

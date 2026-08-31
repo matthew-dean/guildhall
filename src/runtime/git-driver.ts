@@ -315,6 +315,8 @@ export interface GitDriver {
   localCommits(repoRoot: string, upstream: string): Promise<Array<{ sha: string; subject: string }>>
   /** Read HEAD for a repo or worktree. */
   headSha(repoRoot: string): Promise<string>
+  /** Read the project-relative files changed by a landed commit. */
+  changedFilesInCommit(repoRoot: string, commitSha: string): Promise<string[]>
   /** True when `ancestorSha` is already contained by `descendantRef`. */
   isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean>
   /** Read PR metadata for a branch, if the GitHub CLI can resolve one. */
@@ -445,6 +447,17 @@ export class NodeGitDriver implements GitDriver {
     const gitRoot = await resolveGitTopLevel(repoRoot)
     const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: gitRoot })
     return stdout.trim()
+  }
+
+  async changedFilesInCommit(repoRoot: string, commitSha: string): Promise<string[]> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
+    const { stdout } = await execGit(['show', '--format=', '--name-only', '--first-parent', commitSha], {
+      cwd: gitRoot,
+    })
+    return [...new Set(stdout
+      .split('\n')
+      .map((file) => file.trim())
+      .filter((file) => file.length > 0))]
   }
 
   async isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean> {
@@ -958,6 +971,7 @@ export interface InMemoryGitDriverState {
   statuses: Record<string, GitStatusSummary>
   localCommits: Record<string, Array<{ sha: string; subject: string }>>
   headShas: Record<string, string>
+  changedFilesByCommit: Record<string, string[]>
   ancestors: Record<string, boolean>
   pullRequests: Record<string, PullRequestResult>
   commits: Array<{ repoRoot: string; message: string; result: CheckpointResult }>
@@ -1002,6 +1016,7 @@ export class InMemoryGitDriver implements GitDriver {
       statuses: {},
       localCommits: {},
       headShas: {},
+      changedFilesByCommit: {},
       ancestors: {},
       pullRequests: {},
       commits: [],
@@ -1062,6 +1077,9 @@ export class InMemoryGitDriver implements GitDriver {
   setHeadSha(repoRoot: string, sha: string): void {
     this.state.headShas[repoRoot] = sha
   }
+  setChangedFilesInCommit(repoRoot: string, commitSha: string, files: string[]): void {
+    this.state.changedFilesByCommit[`${repoRoot}\0${commitSha}`] = files
+  }
   setAncestor(repoRoot: string, ancestorSha: string, descendantRef: string, value: boolean): void {
     this.state.ancestors[`${repoRoot}\0${ancestorSha}\0${descendantRef}`] = value
   }
@@ -1097,6 +1115,10 @@ export class InMemoryGitDriver implements GitDriver {
 
   async headSha(repoRoot: string): Promise<string> {
     return this.state.headShas[repoRoot] ?? 'HEAD'
+  }
+
+  async changedFilesInCommit(repoRoot: string, commitSha: string): Promise<string[]> {
+    return this.state.changedFilesByCommit[`${repoRoot}\0${commitSha}`] ?? []
   }
 
   async isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean> {
