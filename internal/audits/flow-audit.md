@@ -64798,8 +64798,16 @@ post-turn ordering.
 #### Next Work
 
 - Reconcile release blockers and primary action in the shared decision/action
-  projection. Either the action must advance the first true release blocker,
-  or the overview must explicitly distinguish the current task from the
-  remaining release blockers and give the user a direct way to address them.
+  projection from one blocker sequence, not scope ranking alone. Live replay
+  also found `NAR-092` as a genuine blocked task while release readiness lists
+  only `NAR-087` through `NAR-090` proof blockers; that disagreement is the
+  source-model defect to resolve before choosing an action rank.
 - Re-run the same comparison across API, overview, Work, Release, and top
   chrome at desktop and mobile before changing route-local copy.
+
+#### Root-Cause Boundary
+
+No contract was changed. A narrow ranking experiment was reverted after the
+installed replay showed that the scope projection and release readiness expose
+different blocker sets. The next repair must first give both surfaces the same
+typed blocker sequence, then select an action from that shared sequence.
