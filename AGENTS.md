@@ -2,19 +2,35 @@
 
 ## Commit Boundaries
 
-- Start independent work on a reviewable `codex/...` branch unless the user explicitly asks to recover an already-mixed worktree.
+- In Conductor, keep the branch it created and do not rename it unless the user explicitly asks.
+- Outside Conductor, start independent work on a reviewable `feature/...` or
+  `fix/...` branch. Never create a `codex/...` branch.
 - Before beginning another independent concern, commit and push the verified current unit or record why it cannot yet be isolated.
 - Keep product behavior, data migrations, documentation, and generated output in separate commits when they can be reviewed independently. If a release-boundary commit must combine them, say why in the commit message or accompanying audit.
 - Before requesting review or publishing, report the branch, commit range, dirty-file count, and validations performed.
+
+## Repository skills
+
+- Use `guildhall-read-project-state` when orienting work, reading current tasks,
+  resolving registered artifacts, or deciding whether this checkout is a fully
+  initialized Guildhall project.
+- Use `guildhall-flow-audit` for UI/runtime flow audits, browser user testing,
+  cross-surface state agreement, viewport proof, or installed-app validation.
+- Use `guildhall-contract-safety` before changing persisted schemas,
+  authoritative project contracts, structured agent outputs, or any code that
+  could let model prose control behavior.
+- Repo skills live under `.agents/skills/` so Codex and other compatible agents
+  can discover the same durable workflows. Keep one-off task details in the
+  current chat or `.context/`, not in a skill.
 
 ## Guildhall MCP when available
 
 - Use Guildhall's MCP bridge as the preferred way to read Guildhall project
   state only when a Guildhall MCP client/tool surface is actually configured in
   the current agent environment.
-- This repository currently has committed `.guildhall/` state but may not have
-  a root `guildhall.yaml`. Do not assume it is a fully initialized Guildhall
-  project unless that config exists or the user says they have registered it.
+- A checkout may have `.guildhall/` state without a root `guildhall.yaml`, or
+  neither may exist. Do not assume it is a fully initialized Guildhall project
+  unless that config exists or the user says they have registered it.
 - For meaningful Guildhall work in an MCP-enabled environment, start by trying
   the Guildhall MCP resources before reconstructing state from raw files:
   - `guildhall://project`
@@ -30,9 +46,8 @@
   - `guildhall.create_capability_request` instead of assuming extra host access.
   - `guildhall.list_capability_requests` before creating a duplicate request.
 - If the current Codex environment has no Guildhall MCP tools configured, or if
-  the repo has `.guildhall/` state without a full project config, say that
-  explicitly and fall back to local files. Do not pretend raw file reads came
-  through MCP.
+  the bridge reports no project config/tasks/artifacts, say that explicitly and
+  fall back to local files. Do not pretend raw file reads came through MCP.
 - To smoke-test the bridge against this repo's current `.guildhall/` state,
   build first, then run a real MCP client against:
 

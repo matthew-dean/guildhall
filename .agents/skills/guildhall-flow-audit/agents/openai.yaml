@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit a Guildhall Flow"
+  short_description: "Prove UI and runtime flows across every surface"
+  default_prompt: "Use $guildhall-flow-audit to audit this Guildhall route and fix verified failures."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Protect Guildhall Contracts"
+  short_description: "Govern contract, schema, and model-boundary changes"
+  default_prompt: "Use $guildhall-contract-safety to evaluate and safely implement this contract-facing change."

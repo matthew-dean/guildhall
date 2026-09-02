@@ -3,6 +3,7 @@
   "version": "0.13.3",
   "description": "A general-purpose multi-agent operating system for software projects.",
   "license": "LicenseRef-FLL-1.2",
+  "packageManager": "pnpm@9.15.9",
   "licenses": [
     {
       "type": "LicenseRef-FLL-1.2",
