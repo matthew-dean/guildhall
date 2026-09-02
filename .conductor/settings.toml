@@ -1,0 +1,36 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+preview_urls = [
+  { name = "Docs preview", url = "http://127.0.0.1:$CONDUCTOR_PORT" },
+]
+
+[scripts]
+setup = "corepack pnpm install --frozen-lockfile"
+run_mode = "concurrent"
+
+[scripts.run.docs]
+available_in = [ "local" ]
+command = "corepack pnpm docs:dev --host 127.0.0.1 --port \"$CONDUCTOR_PORT\""
+default = true
+icon = "globe"
+
+[scripts.run.build-watch]
+command = "corepack pnpm dev"
+icon = "braces"
+
+[scripts.run.unit-tests]
+command = "corepack pnpm test -- --watch"
+icon = "test-tube"
+
+[scripts.run.verify]
+command = "corepack pnpm typecheck && corepack pnpm docs:check-help-sync && corepack pnpm lint:deps && corepack pnpm lint:contracts"
+icon = "shield-check"
+
+[git]
+worktree_push_auto_setup_remote = true
+
+[prompts]
+general = "Read AGENTS.md and any matching .agents/skills before acting. Use origin/main as the review and PR base in Conductor workspaces. Keep task-local notes in .context, and do not initialize this repository as a Guildhall project unless the owner asks."
+code_review = "Review origin/main...HEAD with a quick, evidence-backed single pass. Prioritize correctness, regressions, missing tests, contract safety, model independence, and repository instructions; do not start parallel or cross-model review unless explicitly requested."
+create_pr = "Prepare a PR against main only after the requested work is verified. Report the branch, origin/main...HEAD commit range, dirty-file count, and validations performed; keep independent concerns in separate commits when practical."
+rename_branch = "Use a concise feature/<description> or fix/<description> name when a rename is requested. Never use a codex/ prefix, and never rename a Conductor-created branch unless the owner explicitly asks."

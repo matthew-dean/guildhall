@@ -1,0 +1,4 @@
+interface:
+  display_name: "Read Guildhall Project State"
+  short_description: "Orient work from authoritative Guildhall state"
+  default_prompt: "Use $guildhall-read-project-state to orient this task from the authoritative project state."

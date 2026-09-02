@@ -187,3 +187,4 @@ internal/fixtures/**/runs/
 
 # Local editor/agent launch settings
 .claude/launch.json
+.conductor/settings.local.toml
