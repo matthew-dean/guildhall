@@ -183,17 +183,25 @@ async function seedQueue(queue: TaskQueue): Promise<void> {
   // Migrations are authoritative writes. Re-materialize the compact summary
   // after they finish so this fixture reaches the same current state that the
   // asynchronous project projector publishes in a running service.
-  const migratedQueue = readProjectStateDatabaseQueueDefinition(projectStatePath(tmpDir, 'TASKS.json'))
-  if (migratedQueue) {
-    const projectionTasks = await buildEffectiveTasks(tmpDir, migratedQueue.tasks as Task[], { evidence: 'current' }) as unknown as Task[]
-    writeProjectSummaryProjectionFromUnknownQueue(projectStatePath(tmpDir, 'TASKS.json'), {
-      projectId,
-      projectRoot: tmpDir,
-      queue: migratedQueue,
-      projectionTasks,
-      queueCommit: false,
-    })
-  }
+  await publishCurrentSummary()
+}
+
+/**
+ * Stand in for the asynchronous project projector, which these tests do not
+ * run: every authoritative write (a migration, an evidence append) marks the
+ * saved summary stale until the projector republishes it.
+ */
+async function publishCurrentSummary(): Promise<void> {
+  const queue = readProjectStateDatabaseQueueDefinition(projectStatePath(tmpDir, 'TASKS.json'))
+  if (!queue) return
+  const projectionTasks = await buildEffectiveTasks(tmpDir, queue.tasks as Task[], { evidence: 'current' }) as unknown as Task[]
+  writeProjectSummaryProjectionFromUnknownQueue(projectStatePath(tmpDir, 'TASKS.json'), {
+    projectId,
+    projectRoot: tmpDir,
+    queue,
+    projectionTasks,
+    queueCommit: false,
+  })
 }
 
 function projectUrl(route: string): string {
@@ -2848,8 +2856,10 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
       code: 'proof_evidence_missing',
       focusTaskId: 'task-current',
     })
+    // Missing proof is recovered by running the declared checks, not by a
+    // generic resume (project-action-model.ts runControlLabel).
     expect(project.actionModel?.runControl).toMatchObject({
-      label: 'Resume',
+      label: 'Run verification',
       startEnabled: true,
     })
   })
@@ -4725,6 +4735,7 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
         recordedAt: '2026-07-06T12:01:00.000Z',
       },
     })
+    await publishCurrentSummary()
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('runner proof landed')
@@ -4756,9 +4767,11 @@ describe('GET /api/project/release-readiness', { timeout: 15_000 }, () => {
     ])
     expect(spineBody.summaryFreshness).toBe('current')
     expect(spineBody.requiresRefresh).toBeUndefined()
+    // The saved summary is projected from the same effective proof state, so it
+    // agrees with the detail readiness and Overview above.
     expect(compactReadiness).toMatchObject({
       summaryFreshness: 'current',
-      ready: false,
+      ready: true,
       release: { id: 'headless-mvp' },
       scope: { id: 'headless-mvp' },
     })
