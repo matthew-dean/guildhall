@@ -2,7 +2,7 @@
 
 ## Guildhall role-specific follow-up - 2026-08-30
 
-The initial run below exercised Narrative Harness's structured drafting/review contract. A follow-up used Guildhall's historical live role-by-model harness for the two roles actually under consideration: `reviewer` and `contextIndexer`. The live command exists on the retained `guildhall/task-task-001` benchmark branch, not in the current `0.13.2` CLI; it was built and run from an isolated detached worktree at `/tmp/guildhall-role-bakeoff-20260830`. No implementation from that branch was merged.
+The initial run below exercised Narrative Harness's structured drafting/review contract. A follow-up used Guildhall's historical live role-by-model harness for the two roles actually under consideration: `reviewer` and `contextIndexer`. The live command exists on the retained `guildhall/task-task-001` benchmark branch, not in the current `0.13.2` CLI. That branch, and commit `67c4753e` below, exist only in the owner's local clone and were never pushed, so the rerun commands need that clone. The harness was built and run from an isolated detached worktree at `/tmp/guildhall-role-bakeoff-20260830`. No implementation from that branch was merged.
 
 No Guildhall MCP client/tool surface was configured in this Codex environment. Project state, harness code, configuration, and evidence were therefore inspected through the local CLI and files rather than represented as MCP reads.
 
@@ -278,7 +278,7 @@ The 2026-08-29 Narrative Harness run did not change production code, model defau
 
 ## Raw Evidence
 
-Raw artifacts are local and untracked:
+Raw artifacts were written locally under `/tmp` and were not retained. By 2026-10-09 these paths no longer existed, so the SHA-256 digests below are the only remaining fingerprint of this run. The role-specific evidence above lives under `~/.guildhall` and is still present.
 
 ```text
 /tmp/guildhall-deepinfra-bakeoff-20260829/offline/model-bakeoff.json
